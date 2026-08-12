@@ -1,0 +1,439 @@
+@page "/system/menu-management"
+@rendermode InteractiveServer
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.Interfaces
+@inject IMenuManagementService MenuService
+
+<PageTitle>子選單管理</PageTitle>
+
+<h1>子選單管理</h1>
+<p class="page-subtitle">只維護 Department 區塊底下的子選單，左側正式選單會同步顯示。</p>
+
+<section class="dashboard-card menu-admin-panel">
+    <div class="menu-admin-card-header">
+        <div>
+            <div class="menu-kicker">MENU ITEMS</div>
+            <h2>Department 的子選單</h2>
+        </div>
+        <button class="primary-btn"
+                type="button"
+                @onclick="StartCreateItem"
+                disabled="@(_departmentSection is null)">
+            + 新增子選單
+        </button>
+    </div>
+
+    @if (_departmentSection is null)
+    {
+        <div class="empty-state-card">
+            <div class="empty-state-title">找不到 Department 區塊</div>
+            <div class="empty-state-text">請先確認 menu_sections 有 code = department 的資料。</div>
+        </div>
+    }
+    else
+    {
+        <div class="menu-item-shell">
+            <div class="menu-item-list-panel">
+                @if (!SelectedItems.Any())
+                {
+                    <div class="empty-state-card">
+                        <div class="empty-state-title">目前沒有子選單</div>
+                        <div class="empty-state-text">按上方「新增子選單」建立第一筆。</div>
+                    </div>
+                }
+                else
+                {
+                    <div class="menu-item-list">
+                        @foreach (var item in SelectedItems)
+                        {
+                            <button type="button"
+                                    class="menu-item-list-item @(item.Id == _selectedItemId ? "is-active" : "")"
+                                    @onclick="() => SelectItem(item.Id)">
+                                <div class="menu-item-list-title">@item.Icon @item.Title</div>
+                                <div class="menu-item-list-meta">@item.RoutePath</div>
+                            </button>
+                        }
+                    </div>
+                }
+            </div>
+
+            <div class="menu-item-editor-panel">
+                @if (IsCreatingItem || EditingItem is not null)
+                {
+                    <div class="menu-form-grid">
+                        <div>
+                            <label>子選單名稱</label>
+                            <input @bind="_itemForm.Title" placeholder="例如：驗證申請 / 設備管理" />
+                        </div>
+
+                        <div>
+                            <label>公版功能模板</label>
+                            <select @bind="_itemForm.TemplateType" @bind:after="ApplyTemplateDefaults">
+                                <option value="">不套用</option>
+                                <option value="ThreeLevel">公版三層管理</option>
+                                <option value="Asset">公版資產管理</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label>Code</label>
+                            <input @bind="_itemForm.Code"
+                                   @onblur="ApplyTemplateDefaults"
+                                   placeholder="例如：verification / equipment" />
+                        </div>
+
+                        <div>
+                            <label>Module Code</label>
+                            <input @bind="_itemForm.ModuleCode" placeholder="例如：verification / equipment" />
+                        </div>
+
+                        <div>
+                            <label>路徑</label>
+                            <input @bind="_itemForm.RoutePath" placeholder="例如：/modules/verification 或 /apparatus" />
+                        </div>
+
+                        <div>
+                            <label>Icon</label>
+                            <input @bind="_itemForm.Icon" placeholder="例如：▣" />
+                        </div>
+
+                        <div>
+                            <label>排序</label>
+                            <input type="number" @bind="_itemForm.SortOrder" />
+                        </div>
+
+                        <label class="check-row inline-check compact-check">
+                            <input type="checkbox" @bind="_itemForm.IsEnabled" />
+                            <span>啟用</span>
+                        </label>
+
+                        <label class="check-row inline-check compact-check">
+                            <input type="checkbox" @bind="_itemForm.AdminOnly" />
+                            <span>管理者限定</span>
+                        </label>
+                    </div>
+
+                    <div class="dialog-actions">
+                        <button type="button" class="primary-btn" @onclick="SaveItemAsync">
+                            @(IsCreatingItem ? "建立子選單" : "儲存子選單")
+                        </button>
+
+                        @if (!IsCreatingItem && EditingItem is not null)
+                        {
+                            <button type="button" class="danger-btn" @onclick="DeleteCurrentItemAsync">
+                                刪除子選單
+                            </button>
+                        }
+
+                        <button type="button" class="secondary-btn" @onclick="CancelItemEdit">
+                            取消
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <div class="empty-state-card">
+                        <div class="empty-state-title">請選擇子選單</div>
+                        <div class="empty-state-text">左側點選子選單，或按上方新增。</div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="success-alert">@_message</div>
+    }
+</section>
+
+@code {
+    private MenuSectionDto? _departmentSection;
+    private List<MenuItemDto> _departmentItems = [];
+    private Guid _selectedItemId = Guid.Empty;
+    private string? _message;
+    private bool IsCreatingItem;
+
+    private IEnumerable<MenuItemDto> SelectedItems =>
+        _departmentItems.OrderBy(x => x.SortOrder).ThenBy(x => x.Title);
+
+    private MenuItemDto? EditingItem =>
+        _departmentItems.FirstOrDefault(x => x.Id == _selectedItemId);
+
+    private ItemFormModel _itemForm = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        var sections = await MenuService.GetSectionsAsync();
+
+        _departmentSection = sections.FirstOrDefault(x =>
+            string.Equals(x.Code, "department", StringComparison.OrdinalIgnoreCase));
+
+        if (_departmentSection is null)
+        {
+            _departmentItems = [];
+            _selectedItemId = Guid.Empty;
+            return;
+        }
+
+        _departmentItems = await MenuService.GetItemsBySectionAsync(_departmentSection.Id);
+
+        if (_selectedItemId != Guid.Empty && _departmentItems.All(x => x.Id != _selectedItemId))
+        {
+            _selectedItemId = Guid.Empty;
+        }
+    }
+
+    private void StartCreateItem()
+    {
+        if (_departmentSection is null)
+        {
+            return;
+        }
+
+        IsCreatingItem = true;
+        _selectedItemId = Guid.Empty;
+        _message = null;
+
+        _itemForm = new ItemFormModel
+        {
+            Title = string.Empty,
+            RoutePath = string.Empty,
+            Code = string.Empty,
+            Icon = "▣",
+            SortOrder = (_departmentItems.Max(x => (int?)x.SortOrder) ?? 0) + 1,
+            IsEnabled = true,
+            AdminOnly = false,
+            ModuleCode = null,
+            TemplateType = null
+        };
+
+        Console.WriteLine("[MenuManagement] Start create item.");
+    }
+
+    private void SelectItem(Guid itemId)
+    {
+        _selectedItemId = itemId;
+        IsCreatingItem = false;
+        _message = null;
+
+        var item = EditingItem;
+        if (item is null)
+        {
+            return;
+        }
+
+        _itemForm = new ItemFormModel
+        {
+            Title = item.Title,
+            RoutePath = item.RoutePath,
+            Code = item.Code,
+            Icon = item.Icon,
+            SortOrder = item.SortOrder,
+            IsEnabled = item.IsEnabled,
+            AdminOnly = item.AdminOnly,
+            ModuleCode = item.ModuleCode,
+            TemplateType = NormalizeTemplateType(item.TemplateType, item.UseStandardTemplate, item.RoutePath)
+        };
+
+        Console.WriteLine($"[MenuManagement] Select item. id={item.Id}, title={item.Title}, templateType={_itemForm.TemplateType}");
+    }
+
+    private void CancelItemEdit()
+    {
+        IsCreatingItem = false;
+        _message = null;
+
+        var item = EditingItem;
+        if (item is null)
+        {
+            _itemForm = new ItemFormModel();
+            return;
+        }
+
+        _itemForm = new ItemFormModel
+        {
+            Title = item.Title,
+            RoutePath = item.RoutePath,
+            Code = item.Code,
+            Icon = item.Icon,
+            SortOrder = item.SortOrder,
+            IsEnabled = item.IsEnabled,
+            AdminOnly = item.AdminOnly,
+            ModuleCode = item.ModuleCode,
+            TemplateType = NormalizeTemplateType(item.TemplateType, item.UseStandardTemplate, item.RoutePath)
+        };
+
+        Console.WriteLine("[MenuManagement] Cancel edit.");
+    }
+
+    private async Task SaveItemAsync()
+    {
+        if (_departmentSection is null)
+        {
+            return;
+        }
+
+        ApplyTemplateDefaults();
+
+        if (string.IsNullOrWhiteSpace(_itemForm.Title))
+        {
+            _message = "子選單名稱不可空白。";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_itemForm.RoutePath))
+        {
+            _message = "路徑不可空白。";
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_itemForm.Code))
+        {
+            _message = "Code 不可空白。";
+            return;
+        }
+
+        var request = new MenuItemUpsertRequest
+        {
+            Title = _itemForm.Title.Trim(),
+            RoutePath = _itemForm.RoutePath.Trim(),
+            Code = _itemForm.Code.Trim(),
+            Icon = string.IsNullOrWhiteSpace(_itemForm.Icon) ? "▣" : _itemForm.Icon.Trim(),
+            SortOrder = _itemForm.SortOrder,
+            IsEnabled = _itemForm.IsEnabled,
+            AdminOnly = _itemForm.AdminOnly,
+            ModuleCode = string.IsNullOrWhiteSpace(_itemForm.ModuleCode) ? null : _itemForm.ModuleCode.Trim(),
+            TemplateType = string.IsNullOrWhiteSpace(_itemForm.TemplateType) ? null : _itemForm.TemplateType.Trim()
+        };
+
+        if (IsCreatingItem)
+        {
+            Console.WriteLine($"[MenuManagement] Create item start. title={request.Title}, route={request.RoutePath}, moduleCode={request.ModuleCode}, templateType={request.TemplateType}");
+
+            var newId = await MenuService.CreateItemAsync(_departmentSection.Id, request);
+
+            _message = "已新增子選單";
+            await LoadAsync();
+            _selectedItemId = newId;
+            IsCreatingItem = false;
+            SelectItem(newId);
+
+            Console.WriteLine($"[MenuManagement] Create item done. id={newId}");
+            return;
+        }
+
+        var item = EditingItem;
+        if (item is null)
+        {
+            return;
+        }
+
+        Console.WriteLine($"[MenuManagement] Update item start. id={item.Id}, title={request.Title}, route={request.RoutePath}, moduleCode={request.ModuleCode}, templateType={request.TemplateType}");
+
+        await MenuService.UpdateItemAsync(item.Id, request);
+
+        _message = "已儲存子選單";
+        await LoadAsync();
+        SelectItem(item.Id);
+
+        Console.WriteLine($"[MenuManagement] Update item done. id={item.Id}");
+    }
+
+    private async Task DeleteCurrentItemAsync()
+    {
+        var item = EditingItem;
+        if (item is null)
+        {
+            return;
+        }
+
+        Console.WriteLine($"[MenuManagement] Delete item start. id={item.Id}");
+
+        await MenuService.DeleteItemAsync(item.Id);
+
+        _message = "已刪除子選單";
+        _selectedItemId = Guid.Empty;
+        IsCreatingItem = false;
+        await LoadAsync();
+        _itemForm = new ItemFormModel();
+
+        Console.WriteLine($"[MenuManagement] Delete item done. id={item.Id}");
+    }
+
+    private void ApplyTemplateDefaults()
+    {
+        if (_itemForm.TemplateType == "ThreeLevel")
+        {
+            if (!string.IsNullOrWhiteSpace(_itemForm.Code))
+            {
+                var code = _itemForm.Code.Trim();
+
+                _itemForm.ModuleCode = code;
+                _itemForm.RoutePath = $"/modules/{code}";
+            }
+
+            _itemForm.Icon = string.IsNullOrWhiteSpace(_itemForm.Icon) ? "▣" : _itemForm.Icon;
+
+            Console.WriteLine($"[MenuManagement] Apply ThreeLevel template. code={_itemForm.Code}, route={_itemForm.RoutePath}, moduleCode={_itemForm.ModuleCode}");
+            return;
+        }
+
+        if (_itemForm.TemplateType == "Asset")
+        {
+            _itemForm.Code = string.IsNullOrWhiteSpace(_itemForm.Code) ? "equipment" : _itemForm.Code.Trim();
+            _itemForm.ModuleCode = _itemForm.Code;
+            _itemForm.RoutePath = $"/assets/{_itemForm.Code}";
+            _itemForm.Icon = string.IsNullOrWhiteSpace(_itemForm.Icon) ? "▣" : _itemForm.Icon;
+
+            if (string.IsNullOrWhiteSpace(_itemForm.Title))
+            {
+                _itemForm.Title = _itemForm.Code == "equipment" ? "設備管理" : "資產管理";
+            }
+
+            Console.WriteLine($"[MenuManagement] Apply Asset template. code={_itemForm.Code}, route={_itemForm.RoutePath}, moduleCode={_itemForm.ModuleCode}");
+            return;
+        }
+
+        Console.WriteLine("[MenuManagement] Apply no template.");
+    }
+
+    private static string? NormalizeTemplateType(string? templateType, bool useStandardTemplate, string? routePath)
+    {
+        if (!string.IsNullOrWhiteSpace(templateType))
+        {
+            return templateType;
+        }
+
+        if (useStandardTemplate)
+        {
+            return "ThreeLevel";
+        }
+
+        if (string.Equals(routePath, "/apparatus", StringComparison.OrdinalIgnoreCase) ||
+            (!string.IsNullOrWhiteSpace(routePath) && routePath.StartsWith("/assets/", StringComparison.OrdinalIgnoreCase)))
+        {
+            return "Asset";
+        }
+
+        return null;
+    }
+
+    private sealed class ItemFormModel
+    {
+        public string Title { get; set; } = string.Empty;
+        public string RoutePath { get; set; } = string.Empty;
+        public string Code { get; set; } = string.Empty;
+        public string Icon { get; set; } = "▣";
+        public int SortOrder { get; set; } = 1;
+        public bool IsEnabled { get; set; } = true;
+        public bool AdminOnly { get; set; }
+        public string? ModuleCode { get; set; }
+        public string? TemplateType { get; set; }
+    }
+}

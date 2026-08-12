@@ -1,0 +1,43 @@
+# Visual Studio
+.vs/
+bin/
+obj/
+*.user
+*.suo
+
+# Sensitive local configuration
+appsettings.json
+appsettings.Production.json
+appsettings.*.local.json
+
+# Environment / secrets
+.env
+.env.*
+secrets.json
+
+# Certificates / private keys
+*.pfx
+*.p12
+*.pem
+*.key
+*.cer
+*.crt
+*.der
+*.p7b
+*.p7c
+*.ppk
+*.pk8
+*.jks
+*.keystore
+*.snk
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
+
+# Local application secrets
+local.settings.json
+secrets.*.json
+
+# Publish output
+publish/

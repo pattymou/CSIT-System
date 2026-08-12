@@ -1,0 +1,121 @@
+﻿@page "/system/modules"
+@inject HttpClient Http
+@inject NavigationManager Nav
+
+<h3>系統設定 / 區塊管理</h3>
+
+<div class="surface-card">
+    <h4>新增區塊</h4>
+
+    <div class="form-row">
+        <label>Code</label>
+        <input @bind="_form.Code" />
+    </div>
+
+    <div class="form-row">
+        <label>Name</label>
+        <input @bind="_form.Name" />
+    </div>
+
+    <div class="form-row">
+        <label>Display Name</label>
+        <input @bind="_form.DisplayName" />
+    </div>
+
+    <div class="form-row">
+        <label>Route Prefix</label>
+        <input @bind="_form.RoutePrefix" />
+    </div>
+
+    <div class="form-row">
+        <label>Description</label>
+        <textarea @bind="_form.Description"></textarea>
+    </div>
+
+    <div class="form-row">
+        <label>Sort</label>
+        <input type="number" @bind="_form.SortOrder" />
+    </div>
+
+    <div class="form-row">
+        <label>Enabled</label>
+        <input type="checkbox" @bind="_form.IsEnabled" />
+    </div>
+
+    <button class="btn-primary" @onclick="CreateAsync">新增區塊</button>
+</div>
+
+<div class="surface-card mt-3">
+    <h4>目前區塊</h4>
+
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Code</th>
+                <th>Display Name</th>
+                <th>Route</th>
+                <th>Enabled</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var item in _items)
+            {
+                <tr>
+                    <td>@item.Code</td>
+                    <td>@item.DisplayName</td>
+                    <td>@item.RoutePrefix</td>
+                    <td>@item.IsEnabled</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+</div>
+
+@code {
+    private List<ModuleListItemDto> _items = new();
+    private ModuleUpsertRequest _form = new()
+    {
+        IsEnabled = true
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _items = await Http.GetFromJsonAsync<List<ModuleListItemDto>>("/api/modules") ?? new();
+    }
+
+    private async Task CreateAsync()
+    {
+        var response = await Http.PostAsJsonAsync("/api/modules", _form);
+        if (response.IsSuccessStatusCode)
+        {
+            _form = new ModuleUpsertRequest { IsEnabled = true };
+            await LoadAsync();
+            Nav.NavigateTo("/system/modules", forceLoad: true);
+        }
+    }
+
+    public class ModuleListItemDto
+    {
+        public Guid Id { get; set; }
+        public string Code { get; set; } = "";
+        public string DisplayName { get; set; } = "";
+        public string RoutePrefix { get; set; } = "";
+        public bool IsEnabled { get; set; }
+    }
+
+    public class ModuleUpsertRequest
+    {
+        public string Code { get; set; } = "";
+        public string Name { get; set; } = "";
+        public string DisplayName { get; set; } = "";
+        public string RoutePrefix { get; set; } = "";
+        public string? Description { get; set; }
+        public bool IsEnabled { get; set; }
+        public int SortOrder { get; set; }
+    }
+}

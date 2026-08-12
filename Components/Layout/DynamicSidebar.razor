@@ -1,0 +1,49 @@
+﻿@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.Interfaces
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IMenuManagementService MenuService
+@inject AuthenticationStateProvider AuthProvider
+
+<div class="brand">
+    <div class="brand-title">SIT System</div>
+</div>
+
+<div class="nav-scroll">
+    @foreach (var block in _sections.OrderBy(x => x.SortOrder))
+    {
+        <div class="nav-section">
+            <div class="nav-section-title">@block.Icon @block.Name</div>
+
+            @foreach (var item in _items
+                         .Where(x => x.SectionId == block.Id)
+                         .Where(x => x.IsEnabled)
+                         .OrderBy(x => x.SortOrder)
+                         .ThenBy(x => x.Title))
+            {
+                <NavLink class="nav-link-custom" href="@item.RoutePath" Match="NavLinkMatch.Prefix">
+                    @item.Icon @item.Title
+                </NavLink>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private List<MenuSectionDto> _sections = [];
+    private List<MenuItemDto> _items = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+
+        _sections = (await MenuService.GetSectionsAsync())
+            .Where(x => x.IsEnabled)
+            .OrderBy(x => x.SortOrder)
+            .ToList();
+
+        foreach (var block in _sections)
+        {
+            var items = await MenuService.GetItemsBySectionAsync(block.Id);
+            _items.AddRange(items);
+        }
+    }
+}

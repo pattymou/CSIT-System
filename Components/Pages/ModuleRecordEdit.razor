@@ -1,0 +1,571 @@
+﻿@page "/modules/{moduleCode}/edit/new"
+@page "/modules/{moduleCode}/edit/{id:guid}"
+@rendermode InteractiveServer
+@using global::System.Net.Http.Json
+@inject HttpClient Http
+@inject NavigationManager Nav
+
+<h3 class="page-title">@(_isEdit ? "修改主單" : "新增主單")</h3>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="form-card error-text">@_message</div>
+}
+
+<div class="surface-card record-edit-card">
+    <div class="edit-grid">
+
+        <div class="form-row full-width">
+            <label>專案名稱</label>
+            <input @bind="_form.Name" />
+        </div>
+
+        <div class="form-row">
+            <label>地點</label>
+            <select @bind="_form.Location">
+                <option value="台北">台北</option>
+                <option value="吳江">吳江</option>
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>機種所屬 Sub-PU</label>
+            <select @bind="_form.RequestDepartment">
+                <option value=""></option>
+                @foreach (var option in GetOptions("SubPu", _form.RequestDepartment))
+                {
+                    <option value="@option.Value">@option.Name</option>
+                }
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>Team</label>
+            <select @bind="_form.Team">
+                <option value=""></option>
+                @foreach (var option in GetOptions("Team", _form.Team))
+                {
+                    <option value="@option.Value">@option.Name</option>
+                }
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>實驗室負責人</label>
+            <input @bind="_form.Owner" />
+        </div>
+
+        <div class="form-row">
+            <label>客戶</label>
+            <select @bind="_form.Customer">
+                <option value=""></option>
+                @foreach (var option in GetOptions("Customer", _form.Customer))
+                {
+                    <option value="@option.Value">@option.Name</option>
+                }
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>PM / Sales</label>
+            <input @bind="_form.PmSales" />
+        </div>
+
+        <div class="form-row">
+            <label>S/W Engineer</label>
+            <input @bind="_form.SoftwareEngineer" />
+        </div>
+
+        <div class="form-row">
+            <label>H/W Engineer</label>
+            <input @bind="_form.HardwareEngineer" />
+        </div>
+
+        <div class="form-row">
+            <label>Mechanical Engineer</label>
+            <input @bind="_form.MechanicalEngineer" />
+        </div>
+
+        <div class="form-row">
+            <label>部門</label>
+            <select @bind="_form.Department">
+                <option value=""></option>
+                @foreach (var option in GetOptions("Department", _form.Department))
+                {
+                    <option value="@option.Value">@option.Name</option>
+                }
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>F/W Version</label>
+            <input @bind="_form.FirmwareVersion" />
+        </div>
+
+        <div class="form-row">
+            <label>Wireless Drive</label>
+            <input @bind="_form.WirelessDrive" />
+        </div>
+
+        <div class="form-row">
+            <label>Customer's Product Name</label>
+            <input @bind="_form.CustomerProductName" />
+        </div>
+
+        <div class="form-row">
+            <label>NPI</label>
+            <select @bind="_form.Npi">
+                <option value=""></option>
+                @foreach (var option in GetOptions("NPI", _form.Npi))
+                {
+                    <option value="@option.Value">@option.Name</option>
+                }
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>H/W Version</label>
+            <input @bind="_form.HardwareVersion" />
+        </div>
+
+        <div class="form-row">
+            <label>S/W Version</label>
+            <input @bind="_form.SoftwareVersion" />
+        </div>
+
+        <div class="form-row">
+            <label>Chipset</label>
+            <input @bind="_form.Chipset" />
+        </div>
+
+        <div class="form-row">
+            <label>Sample MAC Address</label>
+            <input @bind="_form.SampleMacAddress" />
+        </div>
+
+        <div class="form-row">
+            <label>Utility Version</label>
+            <input @bind="_form.UtilityVersion" />
+        </div>
+
+        <div class="form-row">
+            <label>DSP Model</label>
+            <input @bind="_form.DspModel" />
+        </div>
+
+        <div class="form-row">
+            <label>PJM</label>
+            <input @bind="_form.Pjm" />
+        </div>
+
+        <div class="form-row">
+            <label>申請人</label>
+            <input @bind="_form.RequestApplicant" />
+        </div>
+
+        <div class="form-row">
+            <label>開始日期</label>
+            <input type="date"
+                   value="@_form.StartDateText"
+                   @onchange="e => _form.StartDateText = e.Value?.ToString() ?? string.Empty" />
+        </div>
+
+        <div class="form-row">
+            <label>預計完成日期</label>
+            <input type="date"
+                   value="@_form.ExpectedEndDateText"
+                   @onchange="e => _form.ExpectedEndDateText = e.Value?.ToString() ?? string.Empty" />
+        </div>
+
+        <div class="form-row">
+            <label>預計 Sample Ready 日期</label>
+            <input type="date"
+                   value="@_form.SampleReadyDateText"
+                   @onchange="e => _form.SampleReadyDateText = e.Value?.ToString() ?? string.Empty" />
+        </div>
+
+        <div class="form-row">
+            <label>DQA 負責人</label>
+            <input @bind="_form.DqaOwner" />
+        </div>
+
+        <div class="form-row">
+            <label>結果判定</label>
+            <select @bind="_form.Result">
+                <option value=""></option>
+                <option value="Pass">Pass</option>
+                <option value="Fail">Fail</option>
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>狀態</label>
+            <select @bind="_form.Status">
+                <option value="Open">Open</option>
+                <option value="Close">Close</option>
+                <option value="Hold">Hold</option>
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>進度</label>
+            <select @bind="_form.Progress">
+                @for (var i = 0; i <= 100; i += 5)
+                {
+                    <option value="@i">@i</option>
+                }
+            </select>
+        </div>
+
+        <div class="form-row full-width">
+            <label>Jira Link</label>
+            <input @bind="_form.JiraLink" />
+        </div>
+
+        <div class="form-row full-width">
+            <label>備註</label>
+            <textarea @bind="_form.Note"></textarea>
+        </div>
+
+        <div class="form-row full-width">
+            <label>Applicant Note</label>
+            <textarea @bind="_form.ApplicantNote"></textarea>
+        </div>
+
+        <div class="form-row full-width">
+            <label>知會人員（先用逗號分隔）</label>
+            <textarea @bind="_form.RelatedMembers"></textarea>
+        </div>
+    </div>
+
+    <div class="form-actions">
+        <button type="button" class="btn-primary" @onclick="SaveAsync">儲存</button>
+        <button type="button" class="btn-secondary" @onclick="BackToList">回上一頁</button>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string moduleCode { get; set; } = string.Empty;
+    [Parameter] public Guid? id { get; set; }
+
+    private bool _isEdit => id.HasValue;
+    private string? _message;
+
+    private Dictionary<string, List<SystemOptionDto>> _options = new();
+
+    private RecordEditForm _form = new()
+    {
+        Status = "Open",
+        Progress = 0,
+        Location = "台北"
+    };
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _message = null;
+
+        await LoadOptionsAsync();
+
+        if (!_isEdit)
+            return;
+
+        var data = await Http.GetFromJsonAsync<RecordDetailDto>($"/api/records/{id}");
+        if (data is null)
+            return;
+
+        _form = new RecordEditForm
+        {
+            Name = data.Name,
+            Customer = data.Customer,
+            Owner = data.Owner,
+            PmSales = data.PmSales,
+            Status = string.IsNullOrWhiteSpace(data.Status) ? "Open" : data.Status,
+            Result = data.Result,
+            Progress = data.Progress,
+            Note = data.Note,
+            ApplicantNote = data.ApplicantNote,
+            Team = data.Team,
+            Npi = data.Npi,
+            HardwareVersion = data.HardwareVersion,
+            SoftwareVersion = data.SoftwareVersion,
+            HardwareEngineer = data.HardwareEngineer,
+            SoftwareEngineer = data.SoftwareEngineer,
+            Pjm = data.Pjm,
+            Location = string.IsNullOrWhiteSpace(data.Location) ? "台北" : data.Location,
+            RequestDepartment = data.RequestDepartment,
+            RequestApplicant = data.RequestApplicant,
+            MechanicalEngineer = data.MechanicalEngineer,
+            Department = data.Department,
+            FirmwareVersion = data.FirmwareVersion,
+            WirelessDrive = data.WirelessDrive,
+            CustomerProductName = data.CustomerProductName,
+            Chipset = data.Chipset,
+            SampleMacAddress = data.SampleMacAddress,
+            UtilityVersion = data.UtilityVersion,
+            DspModel = data.DspModel,
+            JiraLink = data.JiraLink,
+            DqaOwner = data.DqaOwner,
+            RelatedMembers = data.RelatedMembers,
+            StartDateText = ToDateInputValue(data.StartDate),
+            ExpectedEndDateText = ToDateInputValue(data.ExpectedEndDate),
+            SampleReadyDateText = ToDateInputValue(data.SampleReadyDate)
+        };
+    }
+
+    private async Task LoadOptionsAsync()
+    {
+        var categories = new[] { "Customer", "NPI", "Department", "SubPu", "Team" };
+
+        foreach (var category in categories)
+        {
+            try
+            {
+                var result = await Http.GetFromJsonAsync<List<SystemOptionDto>>(
+                    $"/api/system-options/category/{Uri.EscapeDataString(category)}");
+
+                _options[category] = result ?? new();
+
+                Console.WriteLine($"[ModuleRecordEdit] Load options success. category={category}, count={_options[category].Count}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[ModuleRecordEdit] Load options failed. category={category}, error={ex}");
+                _options[category] = new();
+            }
+        }
+    }
+
+    private List<SystemOptionDto> GetOptions(string category, string? currentValue)
+    {
+        var list = _options.TryGetValue(category, out var options)
+            ? options.ToList()
+            : new List<SystemOptionDto>();
+
+        if (!string.IsNullOrWhiteSpace(currentValue) &&
+            !list.Any(x => string.Equals(x.Value, currentValue, StringComparison.OrdinalIgnoreCase)))
+        {
+            list.Insert(0, new SystemOptionDto
+            {
+                Id = Guid.Empty,
+                Category = category,
+                Name = $"{currentValue}（舊值）",
+                Value = currentValue,
+                Sort = -1,
+                IsEnabled = true
+            });
+        }
+
+        return list;
+    }
+
+    private async Task SaveAsync()
+    {
+        var request = new RecordUpsertRequest
+        {
+            Name = _form.Name,
+            Customer = _form.Customer,
+            Owner = _form.Owner,
+            PmSales = _form.PmSales,
+            Status = string.IsNullOrWhiteSpace(_form.Status) ? "Open" : _form.Status,
+            Result = _form.Result,
+            Progress = _form.Progress,
+            StartDate = ParseDateOnly(_form.StartDateText),
+            ExpectedEndDate = ParseDateOnly(_form.ExpectedEndDateText),
+            SampleReadyDate = ParseDateOnly(_form.SampleReadyDateText),
+            Note = _form.Note,
+            ApplicantNote = _form.ApplicantNote,
+            Team = _form.Team,
+            Npi = _form.Npi,
+            HardwareVersion = _form.HardwareVersion,
+            SoftwareVersion = _form.SoftwareVersion,
+            HardwareEngineer = _form.HardwareEngineer,
+            SoftwareEngineer = _form.SoftwareEngineer,
+            Pjm = _form.Pjm,
+            Location = string.IsNullOrWhiteSpace(_form.Location) ? "台北" : _form.Location,
+            RequestDepartment = _form.RequestDepartment,
+            RequestApplicant = _form.RequestApplicant,
+            MechanicalEngineer = _form.MechanicalEngineer,
+            Department = _form.Department,
+            FirmwareVersion = _form.FirmwareVersion,
+            WirelessDrive = _form.WirelessDrive,
+            CustomerProductName = _form.CustomerProductName,
+            Chipset = _form.Chipset,
+            SampleMacAddress = _form.SampleMacAddress,
+            UtilityVersion = _form.UtilityVersion,
+            DspModel = _form.DspModel,
+            JiraLink = _form.JiraLink,
+            DqaOwner = _form.DqaOwner,
+            RelatedMembers = _form.RelatedMembers
+        };
+
+        HttpResponseMessage response;
+
+        if (_isEdit)
+        {
+            response = await Http.PutAsJsonAsync($"/api/records/{id}", request);
+            if (response.IsSuccessStatusCode)
+            {
+                Nav.NavigateTo($"/modules/{moduleCode}");
+                return;
+            }
+        }
+        else
+        {
+            response = await Http.PostAsJsonAsync($"/api/modules/{moduleCode}/records", request);
+            if (response.IsSuccessStatusCode)
+            {
+                Nav.NavigateTo($"/modules/{moduleCode}");
+                return;
+            }
+        }
+
+        var error = await response.Content.ReadAsStringAsync();
+        _message = $"儲存失敗：{response.StatusCode} {error}";
+    }
+
+    private void BackToList()
+    {
+        Nav.NavigateTo($"/modules/{moduleCode}");
+    }
+
+    private static string ToDateInputValue(DateOnly? value)
+    {
+        return value?.ToString("yyyy-MM-dd") ?? string.Empty;
+    }
+
+    private static DateOnly? ParseDateOnly(string? value)
+    {
+        return DateOnly.TryParse(value, out var date) ? date : null;
+    }
+
+    public class SystemOptionDto
+    {
+        public Guid Id { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+        public int Sort { get; set; }
+        public bool IsEnabled { get; set; }
+        public string? Note { get; set; }
+    }
+
+    public class RecordDetailDto
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Customer { get; set; }
+        public string? Owner { get; set; }
+        public string? PmSales { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public string? Result { get; set; }
+        public int Progress { get; set; }
+        public DateOnly? StartDate { get; set; }
+        public DateOnly? ExpectedEndDate { get; set; }
+        public DateOnly? SampleReadyDate { get; set; }
+        public string? Note { get; set; }
+        public string? ApplicantNote { get; set; }
+
+        public string? Team { get; set; }
+        public string? Npi { get; set; }
+        public string? HardwareVersion { get; set; }
+        public string? SoftwareVersion { get; set; }
+        public string? HardwareEngineer { get; set; }
+        public string? SoftwareEngineer { get; set; }
+        public string? Pjm { get; set; }
+        public string? Location { get; set; }
+        public string? RequestDepartment { get; set; }
+        public string? RequestApplicant { get; set; }
+
+        public string? MechanicalEngineer { get; set; }
+        public string? Department { get; set; }
+        public string? FirmwareVersion { get; set; }
+        public string? WirelessDrive { get; set; }
+        public string? CustomerProductName { get; set; }
+        public string? Chipset { get; set; }
+        public string? SampleMacAddress { get; set; }
+        public string? UtilityVersion { get; set; }
+        public string? DspModel { get; set; }
+        public string? JiraLink { get; set; }
+        public string? DqaOwner { get; set; }
+        public string? RelatedMembers { get; set; }
+    }
+
+    public class RecordUpsertRequest
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Customer { get; set; }
+        public string? Owner { get; set; }
+        public string? PmSales { get; set; }
+        public string Status { get; set; } = "Open";
+        public string? Result { get; set; }
+        public int Progress { get; set; }
+        public DateOnly? StartDate { get; set; }
+        public DateOnly? ExpectedEndDate { get; set; }
+        public DateOnly? SampleReadyDate { get; set; }
+        public string? Note { get; set; }
+        public string? ApplicantNote { get; set; }
+
+        public string? Team { get; set; }
+        public string? Npi { get; set; }
+        public string? HardwareVersion { get; set; }
+        public string? SoftwareVersion { get; set; }
+        public string? HardwareEngineer { get; set; }
+        public string? SoftwareEngineer { get; set; }
+        public string? Pjm { get; set; }
+        public string? Location { get; set; }
+        public string? RequestDepartment { get; set; }
+        public string? RequestApplicant { get; set; }
+
+        public string? MechanicalEngineer { get; set; }
+        public string? Department { get; set; }
+        public string? FirmwareVersion { get; set; }
+        public string? WirelessDrive { get; set; }
+        public string? CustomerProductName { get; set; }
+        public string? Chipset { get; set; }
+        public string? SampleMacAddress { get; set; }
+        public string? UtilityVersion { get; set; }
+        public string? DspModel { get; set; }
+        public string? JiraLink { get; set; }
+        public string? DqaOwner { get; set; }
+        public string? RelatedMembers { get; set; }
+    }
+
+    public class RecordEditForm
+    {
+        public string Name { get; set; } = string.Empty;
+        public string? Customer { get; set; }
+        public string? Owner { get; set; }
+        public string? PmSales { get; set; }
+        public string Status { get; set; } = "Open";
+        public string? Result { get; set; }
+        public int Progress { get; set; }
+        public string StartDateText { get; set; } = string.Empty;
+        public string ExpectedEndDateText { get; set; } = string.Empty;
+        public string SampleReadyDateText { get; set; } = string.Empty;
+        public string? Note { get; set; }
+        public string? ApplicantNote { get; set; }
+
+        public string? Team { get; set; }
+        public string? Npi { get; set; }
+        public string? HardwareVersion { get; set; }
+        public string? SoftwareVersion { get; set; }
+        public string? HardwareEngineer { get; set; }
+        public string? SoftwareEngineer { get; set; }
+        public string? Pjm { get; set; }
+        public string? Location { get; set; }
+        public string? RequestDepartment { get; set; }
+        public string? RequestApplicant { get; set; }
+
+        public string? MechanicalEngineer { get; set; }
+        public string? Department { get; set; }
+        public string? FirmwareVersion { get; set; }
+        public string? WirelessDrive { get; set; }
+        public string? CustomerProductName { get; set; }
+        public string? Chipset { get; set; }
+        public string? SampleMacAddress { get; set; }
+        public string? UtilityVersion { get; set; }
+        public string? DspModel { get; set; }
+        public string? JiraLink { get; set; }
+        public string? DqaOwner { get; set; }
+        public string? RelatedMembers { get; set; }
+    }
+}

@@ -1,0 +1,190 @@
+﻿@page "/modules/{moduleCode}"
+@rendermode InteractiveServer
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.Interfaces
+@inject IModuleRecordService ModuleRecordService
+@inject NavigationManager Nav
+
+<PageTitle>專案管理</PageTitle>
+
+<div class="project-view-page">
+    <div class="project-toolbar">
+        <button type="button" class="primary-btn toolbar-add-btn" @onclick="AddNew">
+            新增專案
+        </button>
+
+        <div class="project-toolbar-right">
+            <input class="project-search"
+                   @bind="_search"
+                   @bind:event="oninput"
+                   @bind:after="ReloadAsync"
+                   placeholder="搜尋專案編號 / 專案名稱 / 客戶 / 申請部門 / 申請人" />
+
+            <select class="site-filter" @bind="_site" @bind:after="ReloadAsync">
+                <option value="TP">台北</option>
+                <option value="WJ">吳江</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="status-tabs">
+        <button type="button"
+                class="status-tab @(GetStatusClass("Open"))"
+                @onclick='() => ChangeStatusAsync("Open")'>
+            Open
+        </button>
+
+        <button type="button"
+                class="status-tab @(GetStatusClass("Close"))"
+                @onclick='() => ChangeStatusAsync("Close")'>
+            Close
+        </button>
+
+        <button type="button"
+                class="status-tab @(GetStatusClass("Hold"))"
+                @onclick='() => ChangeStatusAsync("Hold")'>
+            Hold
+        </button>
+    </div>
+
+    <section class="dashboard-card table-card">
+        <div class="project-table-wrap">
+            <table class="project-table">
+                <thead>
+                    <tr>
+                        <th>Team</th>
+                        <th>專案名稱</th>
+                        <th>Customer</th>
+                        <th>NPI</th>
+                        <th>H/W VR.</th>
+                        <th>S/W VR.</th>
+                        <th>H/W Engineer</th>
+                        <th>S/W Engineer</th>
+                        <th>PJM</th>
+                        <th>申請單編號</th>
+                        <th>地點</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (_rows.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="12" class="empty-row">目前沒有資料</td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var row in _rows)
+                        {
+                            <tr class="clickable-row" @onclick="() => ViewDetail(row)">
+                                <td>@row.Team</td>
+                                <td>@row.Name</td>
+                                <td>@row.Customer</td>
+                                <td>@row.Npi</td>
+                                <td>@row.HardwareVersion</td>
+                                <td>@row.SoftwareVersion</td>
+                                <td>@row.HardwareEngineer</td>
+                                <td>@row.SoftwareEngineer</td>
+                                <td>@row.Pjm</td>
+                                <td>@row.RecordNo</td>
+                                <td>@row.Location</td>
+                                <td class="action-cell" @onclick:stopPropagation="true">
+                                    <button type="button" class="table-link-btn" @onclick="() => EditRow(row)">編輯</button>
+                                    <button type="button" class="table-chip-btn danger" @onclick="() => DeleteRowAsync(row)">刪除</button>
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+</div>
+
+@code {
+    [Parameter] public string moduleCode { get; set; } = string.Empty;
+
+    private string _status = "Open";
+    private string _site = "TP";
+    private string _search = string.Empty;
+    private int _page = 1;
+    private int _pageSize = 50;
+
+    private List<ModuleRecordListItemDto> _rows = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        Console.WriteLine($"[ModuleRecordList] Init moduleCode={moduleCode}");
+        await ReloadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        Console.WriteLine($"[ModuleRecordList] ParametersSet moduleCode={moduleCode}");
+        await ReloadAsync();
+    }
+
+    private async Task ReloadAsync()
+    {
+        if (string.IsNullOrWhiteSpace(moduleCode))
+        {
+            Console.WriteLine("[ModuleRecordList] moduleCode is empty");
+            return;
+        }
+
+        Console.WriteLine($"[ModuleRecordList] Reload status={_status}, site={_site}, search={_search}");
+
+        var result = await ModuleRecordService.GetProjectViewListAsync(
+            moduleCode,
+            _status,
+            _site,
+            _search,
+            _page,
+            _pageSize);
+
+        _rows = result.Items ?? new List<ModuleRecordListItemDto>();
+
+        Console.WriteLine($"[ModuleRecordList] rows={_rows.Count}");
+    }
+
+    private async Task ChangeStatusAsync(string status)
+    {
+        Console.WriteLine($"[ModuleRecordList] ChangeStatus => {status}");
+        _status = status;
+        _page = 1;
+        await ReloadAsync();
+    }
+
+    private string GetStatusClass(string status)
+        => _status == status ? "is-active" : string.Empty;
+
+    private void AddNew()
+    {
+        Console.WriteLine("[ModuleRecordList] AddNew");
+        Nav.NavigateTo($"/modules/{moduleCode}/edit/new");
+    }
+
+    private void ViewDetail(ModuleRecordListItemDto row)
+    {
+        Console.WriteLine($"[ModuleRecordList] ViewDetail => {row.Id}");
+        Nav.NavigateTo($"/modules/{moduleCode}/detail/{row.Id}");
+    }
+
+    private void EditRow(ModuleRecordListItemDto row)
+    {
+        Console.WriteLine($"[ModuleRecordList] EditRow => {row.Id}");
+        Nav.NavigateTo($"/modules/{moduleCode}/edit/{row.Id}");
+    }
+
+    private async Task DeleteRowAsync(ModuleRecordListItemDto row)
+    {
+        Console.WriteLine($"[ModuleRecordList] DeleteRow => {row.Id}");
+
+        var ok = await ModuleRecordService.DeleteAsync(row.Id);
+        if (ok)
+        {
+            await ReloadAsync();
+        }
+    }
+}

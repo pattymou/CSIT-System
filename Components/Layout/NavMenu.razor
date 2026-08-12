@@ -1,0 +1,70 @@
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.Interfaces
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IMenuManagementService MenuService
+@inject AuthenticationStateProvider AuthProvider
+@inject IJSRuntime JS
+
+<div class="nav-scroll">
+    @foreach (var menuSection in _sections.OrderBy(x => x.SortOrder))
+    {
+        <div class="nav-section">
+            <div class="nav-section-title">@menuSection.Icon @menuSection.Name</div>
+
+            @foreach (var item in _items
+                                 .Where(x => x.SectionId == menuSection.Id)
+                                 .Where(x => x.IsEnabled)
+                                 .Where(x => !_filterAdminOnly || !x.AdminOnly || _isAdmin)
+                                 .OrderBy(x => x.SortOrder))
+            {
+                var isExternal = IsExternalUrl(item.RoutePath);
+
+                <a class="nav-link-custom"
+                       href="@item.RoutePath"
+                       target="@(isExternal ? "_blank" : null)"
+                       rel="@(isExternal ? "noopener noreferrer" : null)">
+                    @item.Icon @item.Title
+                </a>
+            }
+        </div>
+    }
+</div>
+
+@code {
+    private List<MenuSectionDto> _sections = [];
+    private List<MenuItemDto> _items = [];
+    private bool _isAdmin;
+    private bool _filterAdminOnly = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        _isAdmin = auth.User.IsInRole("Admin");
+
+        _sections = (await MenuService.GetSectionsAsync())
+            .Where(x => x.IsEnabled)
+            .OrderBy(x => x.SortOrder)
+            .ToList();
+
+        foreach (var sectionItem in _sections)
+        {
+            var items = await MenuService.GetItemsBySectionAsync(sectionItem.Id);
+            _items.AddRange(items);
+        }
+    }
+
+    private static bool IsExternalUrl(string? routePath)
+    {
+        return !string.IsNullOrWhiteSpace(routePath)
+            && (routePath.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                || routePath.StartsWith("https://", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private async Task OpenExternalAsync(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+            return;
+
+        await JS.InvokeVoidAsync("open", url, "_blank");
+    }
+}

@@ -1,0 +1,30 @@
+@page "/login"
+@layout LoginLayout
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<PageTitle>Login</PageTitle>
+<div class="login-shell">
+    <form class="login-card" method="post" action="/auth/login">
+        <h1>SIT System</h1>
+        <p>使用公司 AD 帳號登入</p>
+        <input name="username" placeholder="AD 帳號" />
+        <input name="password" type="password" placeholder="密碼" />
+        <button type="submit">登入</button>
+        @if (_hasError)
+        {
+            <div class="error-text">登入失敗，請確認 AD 帳密。</div>
+        }
+    </form>
+</div>
+@code {
+    bool _hasError;
+
+    protected override void OnInitialized() => _hasError = Nav.ToAbsoluteUri(Nav.Uri).Query.Contains("error=1");
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        await JS.InvokeVoidAsync("scrollTo", 0, 0);
+    }
+}

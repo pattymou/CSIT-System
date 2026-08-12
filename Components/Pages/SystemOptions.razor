@@ -1,0 +1,669 @@
+﻿@page "/system/system-options"
+@rendermode InteractiveServer
+@using global::System.Net.Http.Json
+@inject HttpClient Http
+
+<h3 class="page-title">參數設定</h3>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="@(_isError ? "system-option-message error" : "system-option-message success")">
+        @_message
+    </div>
+}
+
+<div class="system-option-page">
+
+    <div class="surface-card option-panel">
+        <div class="option-header">
+            <div>
+                <div class="option-kicker">目前管理類別</div>
+                <h3>@GetCategoryDisplayName(_selectedCategory)</h3>
+                <p>
+                    這裡只管理 <b>@GetCategoryDisplayName(_selectedCategory)</b> 的參數。
+                    新增時會自動歸到這個類別，不需要再選一次。
+                </p>
+            </div>
+
+            <div class="option-category-box">
+                <label>切換參數類別</label>
+                <select value="@_selectedCategory" @onchange="OnCategoryChanged">
+                    @foreach (var c in _categories)
+                    {
+                        <option value="@c">@GetCategoryDisplayName(c)</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        <div class="option-stats">
+            <div class="stat-card">
+                <span>目前筆數</span>
+                <strong>@_items.Count</strong>
+            </div>
+
+            <div class="stat-card">
+                <span>啟用中</span>
+                <strong>@_items.Count(x => x.IsEnabled)</strong>
+            </div>
+
+            <div class="stat-card">
+                <span>停用</span>
+                <strong>@_items.Count(x => !x.IsEnabled)</strong>
+            </div>
+        </div>
+    </div>
+
+    <div class="surface-card option-panel">
+        <div class="option-section-title">
+            <div>
+                <h3>@(_editingId.HasValue ? $"修改 {GetCategoryDisplayName(_selectedCategory)} 參數" : $"新增 {GetCategoryDisplayName(_selectedCategory)} 參數")</h3>
+                <p>參數類別會自動使用目前管理類別：@GetCategoryDisplayName(_selectedCategory)</p>
+            </div>
+
+            @if (_editingId.HasValue)
+            {
+                <span class="editing-badge">編輯模式</span>
+            }
+            else
+            {
+                <span class="editing-badge normal">新增模式</span>
+            }
+        </div>
+
+        <div class="edit-grid option-form-grid">
+            <div class="form-row">
+                <label>顯示名稱 <span class="required">*</span></label>
+                <input @bind="_form.Name" placeholder="例如：ASUS、Q600、WiFi Team" />
+            </div>
+
+            <div class="form-row">
+                <label>實際值</label>
+                <input @bind="_form.Value"
+                       readonly="@_editingId.HasValue"
+                       class="@(_editingId.HasValue ? "readonly-input" : "")"
+                       placeholder="空白時會自動等於顯示名稱" />
+
+                @if (_editingId.HasValue)
+                {
+                    <div class="field-hint warning">
+                        實際值建立後不建議修改。若要更換值，請新增一筆新參數，並將舊參數停用。
+                    </div>
+                }
+            </div>
+
+            <div class="form-row">
+                <label>排序</label>
+                <input type="number" @bind="_form.Sort" />
+            </div>
+
+            <div class="form-row checkbox-row">
+                <label>啟用</label>
+                <label class="switch-line">
+                    <input type="checkbox" @bind="_form.IsEnabled" />
+                    <span>@(_form.IsEnabled ? "啟用中" : "已停用")</span>
+                </label>
+            </div>
+
+            <div class="form-row full-width">
+                <label>備註</label>
+                <textarea @bind="_form.Note" placeholder="可填寫此參數用途或補充說明"></textarea>
+            </div>
+        </div>
+
+        <div class="form-actions">
+            <button type="button" class="btn-primary" @onclick="SaveAsync">
+                @(_editingId.HasValue ? "儲存修改" : "新增參數")
+            </button>
+
+            <button type="button" class="btn-secondary" @onclick="ClearForm">
+                清空
+            </button>
+        </div>
+    </div>
+
+    <div class="surface-card option-panel">
+        <div class="option-section-title">
+            <div>
+                <h3>@GetCategoryDisplayName(_selectedCategory) 參數清單</h3>
+                <p>下方只顯示目前類別的參數。</p>
+            </div>
+        </div>
+
+        <div class="project-table-wrap">
+            <table class="project-table">
+                <thead>
+                    <tr>
+                        <th>顯示名稱</th>
+                        <th>值</th>
+                        <th>排序</th>
+                        <th>狀態</th>
+                        <th>備註</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (_items.Count == 0)
+                    {
+                        <tr>
+                            <td colspan="6" class="empty-row">
+                                目前尚無 @GetCategoryDisplayName(_selectedCategory) 參數，請使用上方表單新增第一筆。
+                            </td>
+                        </tr>
+                    }
+                    else
+                    {
+                        @foreach (var item in _items.OrderBy(x => x.Sort).ThenBy(x => x.Name))
+                        {
+                            <tr>
+                                <td>
+                                    <strong>@item.Name</strong>
+                                </td>
+                                <td>@item.Value</td>
+                                <td>@item.Sort</td>
+                                <td>
+                                    @if (item.IsEnabled)
+                                    {
+                                        <span class="status-pill on">啟用</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="status-pill off">停用</span>
+                                    }
+                                </td>
+                                <td>@Display(item.Note)</td>
+                                <td class="action-cell">
+                                    <button type="button" class="table-link-btn" @onclick="() => Edit(item)">
+                                        編輯
+                                    </button>
+
+@*                                     <button type="button" class="table-chip-btn danger" @onclick="() => DeleteAsync(item.Id)">
+                                        刪除
+                                    </button> *@
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<style>
+    .system-option-page {
+        display: flex;
+        flex-direction: column;
+        gap: 22px;
+    }
+
+    .option-panel {
+        padding: 22px;
+    }
+
+    .option-header {
+        display: grid;
+        grid-template-columns: 1fr 420px;
+        gap: 28px;
+        align-items: end;
+    }
+
+    .option-kicker {
+        color: #9bdcff;
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 8px;
+    }
+
+    .option-header h3,
+    .option-section-title h3 {
+        margin: 0;
+        color: #ffffff;
+        font-size: 24px;
+        font-weight: 800;
+    }
+
+    .option-header p,
+    .option-section-title p {
+        margin: 8px 0 0;
+        color: #8fb4c9;
+        font-size: 14px;
+    }
+
+    .option-category-box label {
+        display: block;
+        color: #bfe9ff;
+        font-size: 13px;
+        font-weight: 700;
+        margin-bottom: 8px;
+    }
+
+    .option-category-box select {
+        width: 100%;
+    }
+
+    .option-stats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 14px;
+        margin-top: 22px;
+    }
+
+    .stat-card {
+        border: 1px solid rgba(104, 180, 210, .18);
+        background: rgba(0, 20, 32, .45);
+        border-radius: 16px;
+        padding: 16px;
+    }
+
+    .stat-card span {
+        display: block;
+        color: #8fb4c9;
+        font-size: 13px;
+        margin-bottom: 8px;
+    }
+
+    .stat-card strong {
+        color: #ffffff;
+        font-size: 24px;
+    }
+
+    .option-section-title {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 20px;
+        margin-bottom: 20px;
+    }
+
+    .editing-badge {
+        display: inline-flex;
+        align-items: center;
+        border-radius: 999px;
+        padding: 7px 12px;
+        background: rgba(255, 180, 80, .16);
+        color: #ffd59b;
+        border: 1px solid rgba(255, 180, 80, .32);
+        font-size: 13px;
+        font-weight: 700;
+        white-space: nowrap;
+    }
+
+    .editing-badge.normal {
+        background: rgba(0, 190, 170, .16);
+        color: #85fff0;
+        border-color: rgba(0, 190, 170, .32);
+    }
+
+    .option-form-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .required {
+        color: #ff9b9b;
+    }
+
+    .checkbox-row {
+        justify-content: flex-start;
+    }
+
+    .switch-line {
+        display: flex !important;
+        align-items: center;
+        gap: 10px;
+        color: #d8f4ff !important;
+        font-weight: 600 !important;
+        margin-top: 12px;
+    }
+
+    .switch-line input {
+        width: 18px;
+        height: 18px;
+    }
+
+    .system-option-message {
+        border-radius: 14px;
+        padding: 14px 18px;
+        margin-bottom: 18px;
+        font-weight: 700;
+    }
+
+    .system-option-message.success {
+        background: rgba(0, 190, 170, .14);
+        color: #8fffee;
+        border: 1px solid rgba(0, 190, 170, .28);
+    }
+
+    .system-option-message.error {
+        background: rgba(255, 80, 100, .14);
+        color: #ffb7c0;
+        border: 1px solid rgba(255, 80, 100, .28);
+    }
+
+    .status-pill {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 52px;
+        border-radius: 999px;
+        padding: 5px 10px;
+        font-size: 12px;
+        font-weight: 800;
+    }
+
+    .status-pill.on {
+        background: rgba(0, 190, 170, .16);
+        color: #8fffee;
+        border: 1px solid rgba(0, 190, 170, .28);
+    }
+
+    .status-pill.off {
+        background: rgba(120, 140, 160, .16);
+        color: #b6c7d8;
+        border: 1px solid rgba(120, 140, 160, .28);
+    }
+
+    .empty-row {
+        text-align: center;
+        padding: 32px !important;
+        color: #8fb4c9;
+    }
+
+    @@media (max-width: 900px) {
+        .option-header {
+            grid-template-columns: 1fr;
+        }
+
+        .option-stats {
+            grid-template-columns: 1fr;
+        }
+
+        .option-form-grid {
+            grid-template-columns: 1fr;
+        }
+
+        .option-section-title {
+            flex-direction: column;
+        }
+    }
+
+    .readonly-input {
+        opacity: .72;
+        cursor: not-allowed;
+        background: rgba(80, 100, 120, .16) !important;
+    }
+
+    .field-hint {
+        margin-top: 8px;
+        font-size: 12px;
+        line-height: 1.5;
+    }
+
+        .field-hint.warning {
+            color: #ffd59b;
+        }
+</style>
+
+@code {
+    private readonly List<string> _categories =
+    [
+        "Customer",
+        "NPI",
+        "Department",
+        "SubPu",
+        "Team",
+        "ApparatusKind",
+        "ThreeLevelRootPath",
+        "AssetRootPath",
+        "TestReportRootPath"
+    ];
+
+    private string _selectedCategory = "Customer";
+    private string? _message;
+    private bool _isError;
+    private Guid? _editingId;
+
+    private List<SystemOptionDto> _items = new();
+
+    private SystemOptionUpsertRequest _form = new()
+    {
+        Category = "Customer",
+        IsEnabled = true
+    };
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadAsync();
+    }
+
+    private async Task OnCategoryChanged(ChangeEventArgs e)
+    {
+        var value = e.Value?.ToString();
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return;
+        }
+
+        _selectedCategory = value;
+        ClearForm();
+
+        Console.WriteLine($"[SystemOptions] Category changed. category={_selectedCategory}");
+
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        _message = null;
+        _isError = false;
+
+        try
+        {
+            var url = $"/api/system-options?category={Uri.EscapeDataString(_selectedCategory)}";
+
+            Console.WriteLine($"[SystemOptions] Load start. category={_selectedCategory}, url={url}");
+
+            var response = await Http.GetAsync(url);
+            var text = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _items = new();
+                _isError = true;
+                _message = $"載入參數失敗：{response.StatusCode} {text}";
+                Console.WriteLine($"[SystemOptions] Load failed. status={response.StatusCode}, body={text}");
+                return;
+            }
+
+            _items = await response.Content.ReadFromJsonAsync<List<SystemOptionDto>>() ?? new();
+
+            Console.WriteLine($"[SystemOptions] Load done. category={_selectedCategory}, count={_items.Count}");
+        }
+        catch (Exception ex)
+        {
+            _items = new();
+            _isError = true;
+            _message = $"載入參數失敗：{ex.Message}";
+            Console.WriteLine($"[SystemOptions] Load exception: {ex}");
+        }
+    }
+
+    private void Edit(SystemOptionDto item)
+    {
+        Console.WriteLine($"[SystemOptions] Edit item. id={item.Id}, category={item.Category}, name={item.Name}, value={item.Value}");
+
+        _editingId = item.Id;
+
+        _form = new SystemOptionUpsertRequest
+        {
+            Category = _selectedCategory,
+            Name = item.Name,
+            Value = item.Value,
+            Sort = item.Sort,
+            IsEnabled = item.IsEnabled,
+            Note = item.Note
+        };
+
+        _message = null;
+        _isError = false;
+    }
+
+    private async Task SaveAsync()
+    {
+        _message = null;
+        _isError = false;
+
+        if (string.IsNullOrWhiteSpace(_form.Name))
+        {
+            _isError = true;
+            _message = "顯示名稱不可空白。";
+            Console.WriteLine("[SystemOptions] Save blocked. Name is empty.");
+            return;
+        }
+
+        _form.Category = _selectedCategory;
+
+        if (string.IsNullOrWhiteSpace(_form.Value))
+        {
+            _form.Value = _form.Name.Trim();
+        }
+
+        _form.Name = _form.Name.Trim();
+        _form.Value = _form.Value?.Trim();
+        _form.Note = string.IsNullOrWhiteSpace(_form.Note) ? null : _form.Note.Trim();
+
+        try
+        {
+            HttpResponseMessage response;
+
+            if (_editingId.HasValue)
+            {
+                Console.WriteLine($"[SystemOptions] Update start. id={_editingId}, category={_form.Category}, name={_form.Name}, value={_form.Value}");
+                response = await Http.PutAsJsonAsync($"/api/system-options/{_editingId}", _form);
+            }
+            else
+            {
+                Console.WriteLine($"[SystemOptions] Create start. category={_form.Category}, name={_form.Name}, value={_form.Value}");
+                response = await Http.PostAsJsonAsync("/api/system-options", _form);
+            }
+
+            var body = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"[SystemOptions] Save success. status={response.StatusCode}, body={body}");
+
+                ClearForm();
+                await LoadAsync();
+
+                _isError = false;
+                _message = "儲存成功。";
+                return;
+            }
+
+            _isError = true;
+            _message = $"儲存失敗：{response.StatusCode} {body}";
+            Console.WriteLine($"[SystemOptions] Save failed. status={response.StatusCode}, body={body}");
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"儲存失敗：{ex.Message}";
+            Console.WriteLine($"[SystemOptions] Save exception: {ex}");
+        }
+    }
+
+    private async Task DeleteAsync(Guid id)
+    {
+        _message = null;
+        _isError = false;
+
+        try
+        {
+            Console.WriteLine($"[SystemOptions] Delete start. id={id}");
+
+            var response = await Http.DeleteAsync($"/api/system-options/{id}");
+            var body = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"[SystemOptions] Delete success. id={id}, status={response.StatusCode}");
+
+                await LoadAsync();
+
+                _isError = false;
+                _message = "刪除成功。";
+                return;
+            }
+
+            _isError = true;
+            _message = $"刪除失敗：{response.StatusCode} {body}";
+            Console.WriteLine($"[SystemOptions] Delete failed. id={id}, status={response.StatusCode}, body={body}");
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"刪除失敗：{ex.Message}";
+            Console.WriteLine($"[SystemOptions] Delete exception: {ex}");
+        }
+    }
+
+    private void ClearForm()
+    {
+        Console.WriteLine($"[SystemOptions] Clear form. category={_selectedCategory}");
+
+        _editingId = null;
+
+        _form = new SystemOptionUpsertRequest
+        {
+            Category = _selectedCategory,
+            IsEnabled = true,
+            Sort = 0
+        };
+    }
+
+    private static string GetCategoryDisplayName(string category)
+    {
+        return category switch
+        {
+            "Customer" => "客戶",
+            "NPI" => "NPI",
+            "Department" => "部門",
+            "SubPu" => "SubPU",
+            "Team" => "Team",
+            "ApparatusKind" => "設備類別",
+            "AssetRootPath" => "資產資料夾",
+            "ThreeLevelRootPath" => "三層公版資料夾",
+            "TestReportRootPath" => "TestReport資料夾",
+
+            _ => category
+        };
+    }
+
+    private static string Display(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "-" : value;
+    }
+
+    public class SystemOptionDto
+    {
+        public Guid Id { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+        public int Sort { get; set; }
+        public bool IsEnabled { get; set; }
+        public string? Note { get; set; }
+    }
+
+    public class SystemOptionUpsertRequest
+    {
+        public string Category { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string? Value { get; set; }
+        public int Sort { get; set; }
+        public bool IsEnabled { get; set; } = true;
+        public string? Note { get; set; }
+    }
+}

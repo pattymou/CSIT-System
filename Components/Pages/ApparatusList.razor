@@ -1,0 +1,292 @@
+@page "/apparatus"
+@page "/assets/{ModuleCode}"
+@rendermode InteractiveServer
+@using global::System.Net.Http.Json
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.Interfaces
+@inject HttpClient Http
+@inject NavigationManager Nav
+@inject IMenuManagementService MenuService
+
+<div class="case-title-row">
+    <div>
+        <div class="case-kicker">@PageKicker</div>
+        <h3>@PageTitle</h3>
+    </div>
+
+    <button class="primary-btn" @onclick="Create">
+        + 新增
+    </button>
+</div>
+
+<div class="form-card">
+    <div class="form-grid">
+        <div class="form-row">
+            <label>類別</label>
+            <input value="@_kind"
+                   @oninput="OnKindChanged"
+                   placeholder="例如：儀器 / 手機 / AP" />
+        </div>
+
+        <div class="form-row">
+            <label>關鍵字</label>
+            <input value="@_keyword"
+                   @oninput="OnKeywordChanged"
+                   placeholder="財產編號、名稱、廠商或型號" />
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="form-card error-text">@_message</div>
+}
+
+<div class="form-card">
+    @if (_items.Count == 0)
+    {
+        <div class="record-empty-box">
+            <strong>目前沒有資料</strong>
+            <span>請新增或調整搜尋條件。</span>
+        </div>
+    }
+    else
+    {
+        <div class="project-table-wrap">
+            <table class="project-table">
+                <thead>
+                    <tr>
+                        <th>財產編號</th>
+                        <th>類別</th>
+                        <th>廠牌</th>
+                        <th>型號</th>
+                        <th>名稱</th>
+                        <th>保管人</th>
+                        <th>狀態</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in _items)
+                    {
+                        <tr class="clickable-row" @onclick="() => View(item.Id)">
+                            <td>@Display(item.ProductsId)</td>
+                            <td>@Display(item.Kind)</td>
+                            <td>@Display(item.Brand)</td>
+                            <td>@Display(item.Model)</td>
+                            <td>@item.Name</td>
+                            <td>@Display(item.Custodian)</td>
+                            <td>@Display(item.ReservationStatus)</td>
+                            <td class="action-cell">
+                                <button type="button"
+                                        class="table-chip-btn danger"
+                                        @onclick:stopPropagation="true"
+                                        @onclick="() => DeleteAsync(item.Id)">
+                                    刪除
+                                </button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public string? ModuleCode { get; set; }
+
+    private string EffectiveModuleCode => string.IsNullOrWhiteSpace(ModuleCode) ? "equipment" : ModuleCode.Trim();
+
+    private string PageTitle { get; set; } = "資產管理";
+    private string PageKicker { get; set; } = "ASSET MANAGEMENT";
+
+    private string? _keyword;
+    private string? _kind;
+    private string? _message;
+    private List<ApparatusListItemDto> _items = new();
+    private CancellationTokenSource? _searchCts;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await LoadPageMetaAsync();
+        await LoadAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        await LoadPageMetaAsync();
+        await LoadAsync();
+    }
+
+    private async Task LoadPageMetaAsync()
+    {
+        try
+        {
+            var sections = await MenuService.GetSectionsAsync();
+
+            var departmentSection = sections.FirstOrDefault(x =>
+                string.Equals(x.Code, "department", StringComparison.OrdinalIgnoreCase));
+
+            if (departmentSection == null)
+            {
+                PageTitle = GetFallbackPageTitle();
+                PageKicker = $"ASSET / {EffectiveModuleCode.ToUpperInvariant()}";
+                Console.WriteLine($"[AssetList] Menu section not found. fallbackTitle={PageTitle}");
+                return;
+            }
+
+            var items = await MenuService.GetItemsBySectionAsync(departmentSection.Id);
+
+            var menu = items.FirstOrDefault(x =>
+                string.Equals(x.TemplateType, "Asset", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.ModuleCode, EffectiveModuleCode, StringComparison.OrdinalIgnoreCase));
+
+            if (menu == null)
+            {
+                PageTitle = GetFallbackPageTitle();
+                PageKicker = $"ASSET / {EffectiveModuleCode.ToUpperInvariant()}";
+                Console.WriteLine($"[AssetList] Asset menu not found. moduleCode={EffectiveModuleCode}, fallbackTitle={PageTitle}");
+                return;
+            }
+
+            PageTitle = string.IsNullOrWhiteSpace(menu.Title)
+                ? GetFallbackPageTitle()
+                : menu.Title.Trim();
+
+            PageKicker = $"{Display(menu.Icon)} ASSET / {EffectiveModuleCode.ToUpperInvariant()}";
+
+            Console.WriteLine($"[AssetList] Load page meta done. moduleCode={EffectiveModuleCode}, title={PageTitle}, route={menu.RoutePath}");
+        }
+        catch (Exception ex)
+        {
+            PageTitle = GetFallbackPageTitle();
+            PageKicker = $"ASSET / {EffectiveModuleCode.ToUpperInvariant()}";
+            Console.WriteLine($"[AssetList] LoadPageMeta exception: {ex}");
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _message = null;
+
+        try
+        {
+            var url = $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}?keyword={Uri.EscapeDataString(_keyword ?? "")}&kind={Uri.EscapeDataString(_kind ?? "")}";
+
+            Console.WriteLine($"[AssetList] Load url: {url}");
+
+            var response = await Http.GetAsync(url);
+            var text = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                _items = new();
+                _message = $"載入清單失敗：{response.StatusCode}\n{text}";
+                Console.WriteLine($"[AssetList] Load failed: {response.StatusCode} {text}");
+                return;
+            }
+
+            var result = await response.Content.ReadFromJsonAsync<List<ApparatusListItemDto>>();
+            _items = result ?? new();
+
+            Console.WriteLine($"[AssetList] Load success. moduleCode={EffectiveModuleCode}, count={_items.Count}");
+        }
+        catch (Exception ex)
+        {
+            _items = new();
+            _message = $"載入清單發生例外：{ex}";
+            Console.WriteLine($"[AssetList] Load exception: {ex}");
+        }
+    }
+
+    private void Create()
+    {
+        Nav.NavigateTo($"/assets/{EffectiveModuleCode}/new");
+    }
+
+    private void View(string id)
+    {
+        Nav.NavigateTo($"/assets/{EffectiveModuleCode}/{id}");
+    }
+
+    private async Task DeleteAsync(string id)
+    {
+        var response = await Http.DeleteAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(id)}");
+
+        if (response.IsSuccessStatusCode)
+        {
+            _items.RemoveAll(x => x.Id == id);
+            _message = "刪除成功。";
+            Console.WriteLine($"[AssetList] Delete success. moduleCode={EffectiveModuleCode}, id={id}");
+        }
+        else
+        {
+            var error = await response.Content.ReadAsStringAsync();
+            _message = $"刪除失敗：{response.StatusCode} {error}";
+            Console.WriteLine($"[AssetList] Delete failed. moduleCode={EffectiveModuleCode}, id={id}, status={response.StatusCode}, body={error}");
+        }
+    }
+
+    private string GetFallbackPageTitle()
+    {
+        return string.Equals(EffectiveModuleCode, "equipment", StringComparison.OrdinalIgnoreCase)
+            ? "設備管理"
+            : $"資產管理 - {EffectiveModuleCode}";
+    }
+
+    private static string Display(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "-" : value;
+    }
+
+    private async Task OnKeywordChanged(ChangeEventArgs e)
+    {
+        _keyword = e.Value?.ToString();
+        await DebouncedLoadAsync();
+    }
+
+    private async Task OnKindChanged(ChangeEventArgs e)
+    {
+        _kind = e.Value?.ToString();
+        await DebouncedLoadAsync();
+    }
+
+    private async Task DebouncedLoadAsync()
+    {
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+
+        _searchCts = new CancellationTokenSource();
+        var token = _searchCts.Token;
+
+        try
+        {
+            await Task.Delay(300, token);
+
+            if (!token.IsCancellationRequested)
+            {
+                await LoadAsync();
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (TaskCanceledException)
+        {
+        }
+    }
+
+    public class ApparatusListItemDto
+    {
+        public string Id { get; set; } = "";
+        public string ModuleCode { get; set; } = "equipment";
+        public string? ProductsId { get; set; }
+        public string Name { get; set; } = "";
+        public string? Kind { get; set; }
+        public string? Brand { get; set; }
+        public string? Model { get; set; }
+        public string? Number { get; set; }
+        public string? ReservationStatus { get; set; }
+        public string? Place { get; set; }
+        public string? Custodian { get; set; }
+    }
+}

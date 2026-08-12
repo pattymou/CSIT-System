@@ -1,0 +1,427 @@
+@page "/modules/{ModuleCode}/{RecordId:guid}/cases/new"
+@page "/modules/{ModuleCode}/{RecordId:guid}/cases/{CaseId:guid}/edit"
+@rendermode InteractiveServer
+@using global::System.Net.Http.Json
+@using Microsoft.AspNetCore.Components.Forms
+@inject HttpClient Http
+@inject NavigationManager Nav
+
+<div class="case-page">
+    <div class="case-title-row">
+        <div>
+            <h1>@(_isEdit ? "修改 Case" : "新增 Case")</h1>
+            <p>CASE FILE-FIRST UPLOAD</p>
+        </div>
+        <button type="button" class="btn-secondary" @onclick="BackToRecord">回主單</button>
+    </div>
+
+    <section class="surface-card case-card">
+        <div class="case-card-head">
+            <div>
+                <div class="case-kicker">CASE INFORMATION</div>
+                <h2>基本資料</h2>
+            </div>
+            <div class="case-no-badge">Case No：@Display(_caseNo)</div>
+        </div>
+
+        @if (!_caseNoReady)
+        {
+            <div class="record-empty-box">
+                <strong>正在取得 Case 流水號...</strong>
+                <span>這一步只取得 CaseNo，不會建立 draft DB row。</span>
+            </div>
+        }
+        else
+        {
+            <div class="form-grid">
+                <div class="form-row">
+                    <label>任務名稱</label>
+                    <input @bind="_form.Name" placeholder="請輸入 Case / 任務名稱" />
+                </div>
+
+                <div class="form-row">
+                    <label>Status</label>
+                    <select @bind="_form.Status">
+                        <option>Open</option>
+                        <option>Close</option>
+                        <option>Hold</option>
+                    </select>
+                </div>
+
+                <div class="form-row">
+                    <label>Sort</label>
+                    <input type="number" @bind="_form.SortOrder" />
+                </div>
+
+                <div class="form-row">
+                    <label>WiFi 認證單</label>
+                    <input @bind="_form.WifiNo" />
+                </div>
+
+                <div class="form-row">
+                    <label>BT 認證單</label>
+                    <input @bind="_form.BtNo" />
+                </div>
+
+                <div class="form-row">
+                    <label>GCF 認證單</label>
+                    <input @bind="_form.GcfNo" />
+                </div>
+
+                <div class="form-row">
+                    <label>PTCRB 認證單</label>
+                    <input @bind="_form.PtcrbNo" />
+                </div>
+
+                <div class="form-row full">
+                    <label>備註</label>
+                    <textarea @bind="_form.Note"></textarea>
+                </div>
+            </div>
+        }
+    </section>
+
+    <section class="surface-card case-card">
+        <div class="case-card-head">
+            <div>
+                <div class="case-kicker">FILE UPLOAD</div>
+                <h2>檔案上傳</h2>
+            </div>
+            <button type="button" class="btn-primary" @onclick="UploadFilesAsync" disabled="@(!_caseNoReady || _selectedFiles.Count == 0 || _uploading)">
+                @(_uploading ? "上傳中..." : "開始上傳")
+            </button>
+        </div>
+
+        @if (!_caseNoReady)
+        {
+            <div class="record-empty-box">
+                <strong>尚未取得 CaseNo</strong>
+                <span>取得 CaseNo 後即可立即上傳，不需要先儲存 Case。</span>
+            </div>
+        }
+        else
+        {
+            <div class="upload-box">
+                <InputFile OnChange="OnFilesSelected" multiple />
+                <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案，單檔上限 200MB。</span>
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_uploadMessage))
+            {
+                <div class="empty-text">@_uploadMessage</div>
+            }
+
+            @if (_selectedFiles.Count > 0)
+            {
+                <div class="upload-list">
+                    @foreach (var file in _selectedFiles)
+                    {
+                        <div class="upload-file-item">
+                            <span>@file.Name</span>
+                            <strong>@FormatSize(file.Size)</strong>
+                        </div>
+                    }
+                </div>
+            }
+        }
+    </section>
+
+    <section class="surface-card case-card">
+        <div class="case-card-head">
+            <div>
+                <div class="case-kicker">FILE LIST</div>
+                <h2>已上傳檔案</h2>
+            </div>
+            <button type="button" class="btn-secondary" @onclick="LoadFilesAsync" disabled="@(!_caseNoReady)">重新整理</button>
+        </div>
+
+        @if (_files.Count == 0)
+        {
+            <div class="record-empty-box">
+                <strong>尚無檔案</strong>
+                <span>可先上傳檔案，再填寫資料並儲存 Case。</span>
+            </div>
+        }
+        else
+        {
+            <div class="project-table-wrap">
+                <table class="project-table">
+                    <thead>
+                        <tr>
+                            <th>檔名</th>
+                            <th>大小</th>
+                            <th>上傳時間</th>
+                            <th>上傳者</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var file in _files)
+                        {
+                            <tr>
+                                <td>@file.FileName</td>
+                                <td>@FormatSize(file.FileSize)</td>
+                                <td>@file.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                                <td>@Display(file.UploadEmp)</td>
+                                <td class="action-cell">
+                                    <a class="table-link-btn" href="@($"/api/files/{file.Id}/download")" target="_blank">下載</a>
+                                    <button type="button" class="table-chip-btn danger" @onclick="() => DeleteFileAsync(file.Id)">刪除</button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <div class="form-actions">
+        <button type="button" class="btn-primary" @onclick="SaveAsync" disabled="@(!_caseNoReady || _saving)">
+            @(_saving ? "儲存中..." : "儲存")
+        </button>
+        <button type="button" class="btn-secondary" @onclick="BackToRecord">回主單</button>
+    </div>
+</div>
+
+@code {
+    [Parameter] public string ModuleCode { get; set; } = string.Empty;
+    [Parameter] public Guid RecordId { get; set; }
+    [Parameter] public Guid? CaseId { get; set; }
+
+    private bool _isEdit => CaseId.HasValue;
+    private bool _caseNoReady;
+    private bool _uploading;
+    private bool _saving;
+    private string _caseNo = string.Empty;
+    private string? _uploadMessage;
+
+    private ModuleCaseUpsertRequest _form = new()
+    {
+        Status = "Open"
+    };
+
+    private List<IBrowserFile> _selectedFiles = new();
+    private List<ModuleCaseFileDto> _files = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _uploadMessage = null;
+
+        if (_isEdit)
+        {
+            var data = await Http.GetFromJsonAsync<ModuleCaseDetailDto>($"/api/cases/{CaseId}");
+
+            if (data != null)
+            {
+                _caseNo = data.CaseNo;
+                _form = new ModuleCaseUpsertRequest
+                {
+                    CaseNo = data.CaseNo,
+                    Name = data.Name,
+                    Status = data.Status,
+                    Note = data.Note,
+                    SortOrder = data.SortOrder,
+                    WifiNo = data.WifiNo,
+                    BtNo = data.BtNo,
+                    GcfNo = data.GcfNo,
+                    PtcrbNo = data.PtcrbNo
+                };
+            }
+
+            _caseNoReady = !string.IsNullOrWhiteSpace(_caseNo);
+            await LoadFilesAsync();
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_caseNo))
+        {
+            var result = await Http.GetFromJsonAsync<NewCaseNoResponse>($"/api/records/{RecordId}/cases/new-id");
+            _caseNo = result?.CaseNo ?? string.Empty;
+            _form.CaseNo = _caseNo;
+            _caseNoReady = !string.IsNullOrWhiteSpace(_caseNo);
+            Console.WriteLine($"[ModuleCaseEdit] New CaseNo ready: {_caseNo}");
+        }
+
+        await LoadFilesAsync();
+    }
+
+    private async Task SaveAsync()
+    {
+        if (!_caseNoReady || _saving)
+        {
+            return;
+        }
+
+        _saving = true;
+        _form.CaseNo = _caseNo;
+
+        try
+        {
+            HttpResponseMessage response;
+
+            if (_isEdit)
+            {
+                response = await Http.PutAsJsonAsync($"/api/cases/{CaseId}", _form);
+            }
+            else
+            {
+                response = await Http.PostAsJsonAsync($"/api/records/{RecordId}/cases", _form);
+            }
+
+            if (response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"[ModuleCaseEdit] Case saved: caseNo={_caseNo}");
+                BackToRecord();
+            }
+            else
+            {
+                _uploadMessage = $"儲存失敗：{response.StatusCode}";
+            }
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private void BackToRecord()
+    {
+        Nav.NavigateTo($"/modules/{ModuleCode}/detail/{RecordId}");
+    }
+
+    private void OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        _selectedFiles = e.GetMultipleFiles(20).ToList();
+        _uploadMessage = $"已選擇 {_selectedFiles.Count} 個檔案";
+    }
+
+    private async Task UploadFilesAsync()
+    {
+        if (!_caseNoReady || _selectedFiles.Count == 0 || _uploading)
+        {
+            return;
+        }
+
+        _uploading = true;
+        _uploadMessage = null;
+
+        try
+        {
+            using var content = new MultipartFormDataContent();
+
+            foreach (var file in _selectedFiles)
+            {
+                var stream = file.OpenReadStream(200_000_000);
+                var sc = new StreamContent(stream);
+
+                if (!string.IsNullOrWhiteSpace(file.ContentType))
+                {
+                    sc.Headers.ContentType = new global::System.Net.Http.Headers.MediaTypeHeaderValue(file.ContentType);
+                }
+
+                content.Add(sc, "files", file.Name);
+            }
+
+            var encodedCaseNo = Uri.EscapeDataString(_caseNo);
+            var res = await Http.PostAsync($"/api/records/{RecordId}/cases/upload/{encodedCaseNo}/attachments", content);
+
+            if (res.IsSuccessStatusCode)
+            {
+                _uploadMessage = "上傳成功";
+                _selectedFiles.Clear();
+                await LoadFilesAsync();
+            }
+            else
+            {
+                var error = await res.Content.ReadAsStringAsync();
+                _uploadMessage = $"上傳失敗：{res.StatusCode} {error}";
+                Console.WriteLine($"[ModuleCaseEdit] Upload failed: {res.StatusCode} {error}");
+            }
+        }
+        catch (Exception ex)
+        {
+            _uploadMessage = $"上傳發生例外：{ex.Message}";
+            Console.WriteLine($"[ModuleCaseEdit] Upload exception: {ex}");
+        }
+        finally
+        {
+            _uploading = false;
+        }
+    }
+
+    private async Task LoadFilesAsync()
+    {
+        if (!_caseNoReady || string.IsNullOrWhiteSpace(_caseNo))
+        {
+            _files = new();
+            return;
+        }
+
+        var encodedCaseNo = Uri.EscapeDataString(_caseNo);
+        var result = await Http.GetFromJsonAsync<List<ModuleCaseFileDto>>(
+            $"/api/records/{RecordId}/cases/{encodedCaseNo}/attachments");
+
+        _files = result ?? new();
+    }
+
+    private async Task DeleteFileAsync(Guid id)
+    {
+        var response = await Http.DeleteAsync($"/api/files/{id}");
+        if (response.IsSuccessStatusCode)
+        {
+            await LoadFilesAsync();
+        }
+    }
+
+    private static string Display(string? value)
+    {
+        return string.IsNullOrWhiteSpace(value) ? "-" : value;
+    }
+
+    private static string FormatSize(long size)
+    {
+        if (size >= 1024 * 1024) return $"{size / 1024d / 1024d:0.##} MB";
+        if (size >= 1024) return $"{size / 1024d:0.##} KB";
+        return $"{size} B";
+    }
+
+    public class NewCaseNoResponse
+    {
+        public string CaseNo { get; set; } = string.Empty;
+    }
+
+    public class ModuleCaseDetailDto
+    {
+        public string CaseNo { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public string? Note { get; set; }
+        public int SortOrder { get; set; }
+        public string? WifiNo { get; set; }
+        public string? BtNo { get; set; }
+        public string? GcfNo { get; set; }
+        public string? PtcrbNo { get; set; }
+    }
+
+    public class ModuleCaseUpsertRequest
+    {
+        public string? CaseNo { get; set; }
+        public string Name { get; set; } = string.Empty;
+        public string Status { get; set; } = "Open";
+        public string? Note { get; set; }
+        public int SortOrder { get; set; }
+        public string? WifiNo { get; set; }
+        public string? BtNo { get; set; }
+        public string? GcfNo { get; set; }
+        public string? PtcrbNo { get; set; }
+    }
+
+    public class ModuleCaseFileDto
+    {
+        public Guid Id { get; set; }
+        public string FileName { get; set; } = string.Empty;
+        public long FileSize { get; set; }
+        public string? UploadEmp { get; set; }
+        public DateTime CreatedAt { get; set; }
+    }
+}

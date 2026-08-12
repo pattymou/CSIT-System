@@ -1,0 +1,773 @@
+﻿@page "/apparatus/new"
+@page "/apparatus/{Id}/edit"
+@page "/assets/{ModuleCode}/new"
+@page "/assets/{ModuleCode}/{Id}/edit"
+@rendermode InteractiveServer
+@using global::System.Net.Http.Json
+@using Microsoft.AspNetCore.Components.Forms
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.Interfaces
+@inject HttpClient Http
+@inject NavigationManager Nav
+@inject IMenuManagementService MenuService
+
+<h3>@PageTitle</h3>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="form-card error-text">@_message</div>
+}
+
+<div class="form-card">
+    <div class="case-card-head">
+        <div>
+            <div class="case-kicker">@PageKicker</div>
+            <h3>基本資料</h3>
+        </div>
+        <div class="case-no-badge">ID：@_form.Id</div>
+    </div>
+
+    <div class="form-grid">
+        <div class="form-row">
+            <label>財產編號</label>
+            <input @bind="_form.ProductsId" />
+        </div>
+
+        <div class="form-row">
+            <label>名稱(中文) *</label>
+            <input @bind="_form.Name" />
+        </div>
+
+        <div class="form-row">
+            <label>名稱(英文)</label>
+            <input @bind="_form.NameEn" />
+        </div>
+
+        <div class="form-row">
+            <label>類別 *</label>
+            <select @bind="_form.Kind">
+                <option value="">請選擇類別</option>
+                @foreach (var option in _apparatusKindOptions)
+                {
+                    <option value="@option.Value">@option.Name</option>
+                }
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>料號</label>
+            <input @bind="_form.PartNo" />
+        </div>
+
+        <div class="form-row">
+            <label>廠商(中/英文)</label>
+            <input @bind="_form.Manufacturer" />
+        </div>
+
+        <div class="form-row">
+            <label>廠商貨品編號</label>
+            <input @bind="_form.ManufacturerNumber" />
+        </div>
+
+        <div class="form-row">
+            <label>廠牌</label>
+            <input @bind="_form.Brand" />
+        </div>
+
+        <div class="form-row">
+            <label>型號</label>
+            <input @bind="_form.Model" />
+        </div>
+
+        <div class="form-row">
+            <label>序號</label>
+            <input @bind="_form.Number" />
+        </div>
+
+        <div class="form-row">
+            <label>對應採購</label>
+            <input @bind="_form.ProcurementStaff" />
+        </div>
+
+        <div class="form-row">
+            <label>IMEI</label>
+            <input @bind="_form.Imei" />
+        </div>
+
+        <div class="form-row">
+            <label>OS</label>
+            <select @bind="_form.Os">
+                <option value="">請選擇 OS</option>
+                <option>IOS</option>
+                <option>Android</option>
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>OS Ver.</label>
+            <input @bind="_form.OsVersion" />
+        </div>
+
+        <div class="form-row">
+            <label>檢查日期</label>
+            <input type="date" @bind="_form.InspectionDate" />
+        </div>
+
+        <div class="form-row">
+            <label>保養日期</label>
+            <input type="date" @bind="_form.MaintenanceDate" />
+        </div>
+
+        <div class="form-row">
+            <label>放置地點</label>
+            <input @bind="_form.Place" />
+        </div>
+
+        <div class="form-row">
+            <label>取得成本</label>
+            <input @bind="_form.CostPrice" />
+        </div>
+
+        <div class="form-row">
+            <label>使用年限</label>
+            <input @bind="_form.YearsUse" />
+        </div>
+
+        <div class="form-row">
+            <label>使用天數</label>
+            <input @bind="_form.DaysUse" />
+        </div>
+
+        <div class="form-row">
+            <label>使用價格</label>
+            <input @bind="_form.PriceUse" />
+        </div>
+
+        <div class="form-row">
+            <label>保管部門</label>
+            <select @bind="_form.CustodianDepartment">
+                <option value="">請選擇保管部門</option>
+                @foreach (var option in _departmentOptions)
+                {
+                    <option value="@option.Value">@option.Name</option>
+                }
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>保管人 *</label>
+            <input @bind="_form.Custodian" />
+        </div>
+
+        <div class="form-row">
+            <label>保管代理人</label>
+            <input @bind="_form.Agent" />
+        </div>
+
+        <div class="form-row">
+            <label>狀態</label>
+            <select @bind="_form.ReservationStatus">
+                <option>可借用</option>
+                <option>校驗中</option>
+                <option>異常維修中</option>
+                <option>不可借用</option>
+                <option>採購中</option>
+            </select>
+        </div>
+
+        <div class="form-row full-width">
+            <label>Feature</label>
+            <textarea class="text-area" rows="5" @bind="_form.Feature"></textarea>
+        </div>
+
+        <div class="form-row full-width">
+            <label>Specification</label>
+            <textarea class="text-area" rows="5" @bind="_form.Spec"></textarea>
+        </div>
+
+        <div class="form-row full-width">
+            <label>備註</label>
+            <textarea class="text-area" rows="5" @bind="_form.Note"></textarea>
+        </div>
+    </div>
+</div>
+
+<div class="form-card">
+    <div class="case-card-head">
+        <div>
+            <div class="case-kicker">FILE UPLOAD</div>
+            <h3>@PageFileTitle</h3>
+        </div>
+
+        <button class="primary-btn"
+                @onclick="UploadFilesAsync"
+                disabled="@(_selectedFiles.Count == 0 || _uploading)">
+            @(_uploading ? "上傳中..." : "開始上傳")
+        </button>
+    </div>
+
+    <div class="upload-box">
+        <InputFile OnChange="OnFilesSelected" multiple />
+        <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案。</span>
+    </div>
+
+    @if (_selectedFiles.Count > 0)
+    {
+        <div class="upload-list">
+            @foreach (var f in _selectedFiles)
+            {
+                <div class="upload-file-item">
+                    <span>@f.FileName</span>
+                    <strong>@FormatSize(f.Size)</strong>
+                </div>
+            }
+        </div>
+    }
+
+    @if (_files.Count > 0)
+    {
+        <div class="apparatus-image-grid">
+            @foreach (var file in _files)
+            {
+                <div class="apparatus-image-card">
+                    <img src="@file.ImageUrl" alt="@file.FileName" />
+                    <div>@file.FileName</div>
+                    <button type="button" class="table-chip-btn danger" @onclick="() => DeleteFileAsync(file.Id)">
+                        刪除
+                    </button>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+<div class="form-actions">
+    <button class="primary-btn" @onclick="SaveAsync" disabled="@_saving">
+        @(_saving ? "儲存中..." : "確定")
+    </button>
+
+    <button class="btn-secondary" @onclick="Back">
+        回上一頁
+    </button>
+</div>
+
+@code {
+    [Parameter] public string? ModuleCode { get; set; }
+    [Parameter] public string? Id { get; set; }
+
+    private string EffectiveModuleCode => string.IsNullOrWhiteSpace(ModuleCode) ? "equipment" : ModuleCode.Trim();
+
+    private string AssetTitle { get; set; } = "資產管理";
+    private string PageTitle => _isEdit ? $"修改{AssetDisplayName}" : $"新增{AssetDisplayName}";
+    private string PageKicker => $"ASSET / {EffectiveModuleCode.ToUpperInvariant()}";
+    private string PageFileTitle => $"{AssetDisplayName}檔案";
+    private string AssetDisplayName => GetAssetDisplayName();
+
+    private bool _isEdit => !string.IsNullOrWhiteSpace(Id);
+    private bool _saving;
+    private bool _uploading;
+    private string? _message;
+    private bool _hasCreatedRecord;
+
+    private ApparatusUpsertRequest _form = new()
+    {
+        ReservationStatus = "可借用"
+    };
+
+    private List<SelectedUploadFile> _selectedFiles = new();
+    private List<ApparatusFileDto> _files = new();
+
+    private List<SystemOptionDto> _apparatusKindOptions = new();
+    private List<SystemOptionDto> _departmentOptions = new();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _message = null;
+
+        await LoadPageMetaAsync();
+        await LoadOptionsAsync();
+
+        if (_isEdit)
+        {
+            _hasCreatedRecord = true;
+
+            Console.WriteLine($"[ApparatusEdit] Edit load start. moduleCode={EffectiveModuleCode}, id={Id}");
+
+            var detail = await Http.GetFromJsonAsync<ApparatusDetailDto>(
+                $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Id}");
+
+            if (detail != null)
+            {
+                _form = new ApparatusUpsertRequest
+                {
+                    Id = detail.Id,
+                    RowVersion = detail.RowVersion,
+                    ProductsId = detail.ProductsId,
+                    Name = detail.Name,
+                    NameEn = detail.NameEn,
+                    Kind = detail.Kind,
+                    PartNo = detail.PartNo,
+                    Manufacturer = detail.Manufacturer,
+                    ManufacturerNumber = detail.ManufacturerNumber,
+                    Brand = detail.Brand,
+                    Model = detail.Model,
+                    Number = detail.Number,
+                    ProcurementStaff = detail.ProcurementStaff,
+                    Imei = detail.Imei,
+                    Os = detail.Os,
+                    OsVersion = detail.OsVersion,
+                    InspectionDate = detail.InspectionDate,
+                    MaintenanceDate = detail.MaintenanceDate,
+                    Place = detail.Place,
+                    CostPrice = detail.CostPrice,
+                    YearsUse = detail.YearsUse,
+                    DaysUse = detail.DaysUse,
+                    PriceUse = detail.PriceUse,
+                    CustodianDepartment = detail.CustodianDepartment,
+                    Custodian = detail.Custodian,
+                    Agent = detail.Agent,
+                    ReservationStatus = string.IsNullOrWhiteSpace(detail.ReservationStatus) ? "可借用" : detail.ReservationStatus,
+                    Feature = detail.Feature,
+                    Spec = detail.Spec,
+                    Note = detail.Note
+                };
+
+                _files = detail.Files ?? new();
+
+                EnsureCurrentOption(_apparatusKindOptions, _form.Kind);
+                EnsureCurrentOption(_departmentOptions, _form.CustodianDepartment);
+
+                Console.WriteLine($"[ApparatusEdit] Edit load done. id={_form.Id}, kind={_form.Kind}, dept={_form.CustodianDepartment}");
+            }
+
+            _hasCreatedRecord = false;
+            return;
+        }
+
+        var newId = await Http.GetFromJsonAsync<NewApparatusIdResponse>(
+            $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/new-id");
+
+        _form.Id = newId?.Id ?? "";
+        _form.ReservationStatus = string.IsNullOrWhiteSpace(_form.ReservationStatus) ? "可借用" : _form.ReservationStatus;
+
+        Console.WriteLine($"[ApparatusEdit] New asset id loaded. moduleCode={EffectiveModuleCode}, id={_form.Id}");
+    }
+
+    private async Task LoadPageMetaAsync()
+    {
+        try
+        {
+            var sections = await MenuService.GetSectionsAsync();
+
+            var departmentSection = sections.FirstOrDefault(x =>
+                string.Equals(x.Code, "department", StringComparison.OrdinalIgnoreCase));
+
+            if (departmentSection == null)
+            {
+                AssetTitle = GetFallbackAssetTitle();
+                return;
+            }
+
+            var items = await MenuService.GetItemsBySectionAsync(departmentSection.Id);
+
+            var menu = items.FirstOrDefault(x =>
+                string.Equals(x.TemplateType, "Asset", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.ModuleCode, EffectiveModuleCode, StringComparison.OrdinalIgnoreCase));
+
+            AssetTitle = string.IsNullOrWhiteSpace(menu?.Title)
+                ? GetFallbackAssetTitle()
+                : menu.Title.Trim();
+
+            Console.WriteLine($"[ApparatusEdit] Load page meta done. moduleCode={EffectiveModuleCode}, title={AssetTitle}");
+        }
+        catch (Exception ex)
+        {
+            AssetTitle = GetFallbackAssetTitle();
+            Console.WriteLine($"[ApparatusEdit] LoadPageMeta exception: {ex}");
+        }
+    }
+
+    private string GetFallbackAssetTitle()
+    {
+        return string.Equals(EffectiveModuleCode, "equipment", StringComparison.OrdinalIgnoreCase)
+            ? "設備管理"
+            : $"資產管理 - {EffectiveModuleCode}";
+    }
+
+    private string GetAssetDisplayName()
+    {
+        var title = AssetTitle;
+
+        if (title.EndsWith("管理", StringComparison.OrdinalIgnoreCase))
+        {
+            title = title[..^2];
+        }
+
+        return string.IsNullOrWhiteSpace(title) ? "資產" : title;
+    }
+
+    private async Task SaveAsync()
+    {
+        _message = null;
+
+        if (string.IsNullOrWhiteSpace(_form.Name))
+        {
+            _message = "名稱不可空白。";
+            Console.WriteLine("[ApparatusEdit] Save blocked. Name is empty.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_form.Kind))
+        {
+            _message = "類別不可空白。";
+            Console.WriteLine("[ApparatusEdit] Save blocked. Kind is empty.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_form.Custodian))
+        {
+            _message = "保管人不可空白。";
+            Console.WriteLine("[ApparatusEdit] Save blocked. Custodian is empty.");
+            return;
+        }
+
+        _saving = true;
+
+        try
+        {
+            HttpResponseMessage response;
+
+            if (_isEdit || _hasCreatedRecord)
+            {
+                Console.WriteLine($"[ApparatusEdit] Update start. moduleCode={EffectiveModuleCode}, id={_form.Id}, name={_form.Name}, kind={_form.Kind}");
+                response = await Http.PutAsJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}", _form);
+            }
+            else
+            {
+                Console.WriteLine($"[ApparatusEdit] Create start. moduleCode={EffectiveModuleCode}, id={_form.Id}, name={_form.Name}, kind={_form.Kind}");
+                response = await Http.PostAsJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}", _form);
+            }
+
+            var body = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+            {
+                Console.WriteLine($"[ApparatusEdit] Save success. status={response.StatusCode}, body={body}");
+                Nav.NavigateTo($"/assets/{EffectiveModuleCode}");
+                return;
+            }
+
+            _message = $"儲存失敗：{response.StatusCode} {body}";
+            Console.WriteLine($"[ApparatusEdit] Save failed. status={response.StatusCode}, body={body}");
+        }
+        catch (Exception ex)
+        {
+            _message = $"儲存發生例外：{ex.Message}";
+            Console.WriteLine($"[ApparatusEdit] Save exception: {ex}");
+        }
+        finally
+        {
+            _saving = false;
+        }
+    }
+
+    private async Task OnFilesSelected(InputFileChangeEventArgs e)
+    {
+        _selectedFiles.Clear();
+
+        foreach (var file in e.GetMultipleFiles(20))
+        {
+            await using var stream = file.OpenReadStream(200_000_000);
+            using var ms = new MemoryStream();
+            await stream.CopyToAsync(ms);
+
+            _selectedFiles.Add(new SelectedUploadFile
+            {
+                FileName = file.Name,
+                ContentType = file.ContentType,
+                Size = file.Size,
+                Content = ms.ToArray()
+            });
+        }
+
+        Console.WriteLine($"[ApparatusEdit] Files selected. count={_selectedFiles.Count}");
+    }
+
+    private async Task UploadFilesAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_form.Id))
+        {
+            _message = "尚未取得 ID。";
+            Console.WriteLine("[ApparatusEdit] Upload blocked. Asset id is empty.");
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_form.Name) ||
+            string.IsNullOrWhiteSpace(_form.Kind) ||
+            string.IsNullOrWhiteSpace(_form.Custodian))
+        {
+            _message = "請先填寫名稱、類別、保管人，再上傳檔案。";
+            Console.WriteLine("[ApparatusEdit] Upload blocked. Required field missing.");
+            return;
+        }
+
+        if (_selectedFiles.Count == 0)
+        {
+            _message = "請先選擇檔案。";
+            Console.WriteLine("[ApparatusEdit] Upload blocked. No selected files.");
+            return;
+        }
+
+        _uploading = true;
+        _message = null;
+
+        try
+        {
+            if (!_isEdit && !_hasCreatedRecord)
+            {
+                Console.WriteLine($"[ApparatusEdit] Create before upload start. moduleCode={EffectiveModuleCode}, id={_form.Id}");
+
+                var createResponse = await Http.PostAsJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}", _form);
+                var createText = await createResponse.Content.ReadAsStringAsync();
+
+                if (!createResponse.IsSuccessStatusCode)
+                {
+                    _message = $"上傳前建立資料失敗：{createResponse.StatusCode} {createText}";
+                    Console.WriteLine($"[ApparatusEdit] Create before upload failed. status={createResponse.StatusCode}, body={createText}");
+                    return;
+                }
+
+                _hasCreatedRecord = true;
+                Console.WriteLine($"[ApparatusEdit] Create before upload success. id={_form.Id}");
+            }
+
+            using var content = new MultipartFormDataContent();
+
+            foreach (var file in _selectedFiles)
+            {
+                var streamContent = new StreamContent(new MemoryStream(file.Content));
+
+                if (!string.IsNullOrWhiteSpace(file.ContentType))
+                {
+                    streamContent.Headers.ContentType =
+                        new global::System.Net.Http.Headers.MediaTypeHeaderValue(file.ContentType);
+                }
+
+                content.Add(streamContent, "files", file.FileName);
+            }
+
+            Console.WriteLine($"[ApparatusEdit] Upload start. moduleCode={EffectiveModuleCode}, id={_form.Id}, count={_selectedFiles.Count}");
+
+            var response = await Http.PostAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files", content);
+            var responseText = await response.Content.ReadAsStringAsync();
+
+            if (response.IsSuccessStatusCode)
+            {
+                _selectedFiles.Clear();
+                await LoadFilesAsync();
+                _message = "上傳成功。";
+                Console.WriteLine($"[ApparatusEdit] Upload success. id={_form.Id}, body={responseText}");
+                return;
+            }
+
+            _message = $"上傳失敗：{response.StatusCode} {responseText}";
+            Console.WriteLine($"[ApparatusEdit] Upload failed. status={response.StatusCode}, body={responseText}");
+        }
+        catch (Exception ex)
+        {
+            _message = $"上傳發生例外：{ex.Message}";
+            Console.WriteLine($"[ApparatusEdit] Upload exception: {ex}");
+        }
+        finally
+        {
+            _uploading = false;
+        }
+    }
+
+    private async Task LoadFilesAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_form.Id))
+        {
+            _files = new();
+            return;
+        }
+
+        Console.WriteLine($"[ApparatusEdit] LoadFiles start. moduleCode={EffectiveModuleCode}, id={_form.Id}");
+
+        _files = await Http.GetFromJsonAsync<List<ApparatusFileDto>>(
+            $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files") ?? new();
+
+        Console.WriteLine($"[ApparatusEdit] LoadFiles done. id={_form.Id}, count={_files.Count}");
+    }
+
+    private async Task DeleteFileAsync(Guid fileId)
+    {
+        Console.WriteLine($"[ApparatusEdit] DeleteFile start. fileId={fileId}");
+
+        var response = await Http.DeleteAsync($"/api/assets/files/{fileId}");
+        var body = await response.Content.ReadAsStringAsync();
+
+        if (response.IsSuccessStatusCode)
+        {
+            Console.WriteLine($"[ApparatusEdit] DeleteFile success. fileId={fileId}");
+            await LoadFilesAsync();
+        }
+        else
+        {
+            _message = $"刪除失敗：{response.StatusCode} {body}";
+            Console.WriteLine($"[ApparatusEdit] DeleteFile failed. fileId={fileId}, status={response.StatusCode}, body={body}");
+        }
+    }
+
+    private async Task LoadOptionsAsync()
+    {
+        Console.WriteLine("[ApparatusEdit] LoadOptions start.");
+
+        _apparatusKindOptions = await LoadOptionCategoryAsync("ApparatusKind");
+        _departmentOptions = await LoadOptionCategoryAsync("Department");
+
+        EnsureCurrentOption(_apparatusKindOptions, _form.Kind);
+        EnsureCurrentOption(_departmentOptions, _form.CustodianDepartment);
+
+        Console.WriteLine($"[ApparatusEdit] LoadOptions done. kind={_apparatusKindOptions.Count}, dept={_departmentOptions.Count}");
+    }
+
+    private async Task<List<SystemOptionDto>> LoadOptionCategoryAsync(string category)
+    {
+        try
+        {
+            var url = $"/api/system-options/category/{Uri.EscapeDataString(category)}";
+
+            Console.WriteLine($"[ApparatusEdit] LoadOptionCategory start. category={category}, url={url}");
+
+            var result = await Http.GetFromJsonAsync<List<SystemOptionDto>>(url) ?? new();
+
+            var list = result
+                .Where(x => x.IsEnabled)
+                .OrderBy(x => x.Sort)
+                .ThenBy(x => x.Name)
+                .ToList();
+
+            Console.WriteLine($"[ApparatusEdit] LoadOptionCategory done. category={category}, count={list.Count}");
+
+            return list;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ApparatusEdit] LoadOptionCategory exception. category={category}, error={ex}");
+            return new();
+        }
+    }
+
+    private static void EnsureCurrentOption(List<SystemOptionDto> options, string? currentValue)
+    {
+        if (string.IsNullOrWhiteSpace(currentValue))
+        {
+            return;
+        }
+
+        var exists = options.Any(x =>
+            string.Equals(x.Value, currentValue, StringComparison.OrdinalIgnoreCase));
+
+        if (exists)
+        {
+            return;
+        }
+
+        options.Insert(0, new SystemOptionDto
+        {
+            Id = Guid.Empty,
+            Category = "",
+            Name = $"{currentValue}（舊值）",
+            Value = currentValue,
+            Sort = -999,
+            IsEnabled = true
+        });
+    }
+
+    private void Back()
+    {
+        Nav.NavigateTo($"/assets/{EffectiveModuleCode}");
+    }
+
+    private static string FormatSize(long size)
+    {
+        if (size >= 1024 * 1024) return $"{size / 1024d / 1024d:0.##} MB";
+        if (size >= 1024) return $"{size / 1024d:0.##} KB";
+        return $"{size} B";
+    }
+
+    private class SelectedUploadFile
+    {
+        public string FileName { get; set; } = "";
+        public string? ContentType { get; set; }
+        public long Size { get; set; }
+        public byte[] Content { get; set; } = [];
+    }
+
+    public class SystemOptionDto
+    {
+        public Guid Id { get; set; }
+        public string Category { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+        public string Value { get; set; } = string.Empty;
+        public int Sort { get; set; }
+        public bool IsEnabled { get; set; }
+        public string? Note { get; set; }
+    }
+
+    public class NewApparatusIdResponse
+    {
+        public string Id { get; set; } = "";
+    }
+
+    public class ApparatusFileDto
+    {
+        public Guid Id { get; set; }
+        public string ApparatusId { get; set; } = "";
+        public string FileName { get; set; } = "";
+        public string? ContentType { get; set; }
+        public long FileSize { get; set; }
+        public string ImageUrl { get; set; } = "";
+        public DateTime CreatedAt { get; set; }
+    }
+
+    public class ApparatusDetailDto : ApparatusUpsertRequest
+    {
+        public List<ApparatusFileDto> Files { get; set; } = new();
+    }
+
+    public class ApparatusUpsertRequest
+    {
+        public string? Id { get; set; }
+        public string? RowVersion { get; set; }
+        public string? ProductsId { get; set; }
+        public string Name { get; set; } = "";
+        public string? NameEn { get; set; }
+        public string? Kind { get; set; }
+        public string? PartNo { get; set; }
+        public string? Manufacturer { get; set; }
+        public string? ManufacturerNumber { get; set; }
+        public string? Brand { get; set; }
+        public string? Model { get; set; }
+        public string? Number { get; set; }
+        public string? ProcurementStaff { get; set; }
+        public string? Imei { get; set; }
+        public string? Os { get; set; }
+        public string? OsVersion { get; set; }
+        public DateOnly? InspectionDate { get; set; }
+        public DateOnly? MaintenanceDate { get; set; }
+        public string? Place { get; set; }
+        public string? CostPrice { get; set; }
+        public string? YearsUse { get; set; }
+        public string? DaysUse { get; set; }
+        public string? PriceUse { get; set; }
+        public string? CustodianDepartment { get; set; }
+        public string? Custodian { get; set; }
+        public string? Agent { get; set; }
+        public string? ReservationStatus { get; set; }
+        public string? Feature { get; set; }
+        public string? Spec { get; set; }
+        public string? Note { get; set; }
+    }
+}
