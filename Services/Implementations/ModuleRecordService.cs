@@ -1,6 +1,7 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
@@ -9,11 +10,16 @@ public class ModuleRecordService : IModuleRecordService
 {
     private readonly AppDbContext _db;
     private readonly ICaseFileService _caseFileService;
+    private readonly IModuleRecordCreationService _creationService;
 
-    public ModuleRecordService(AppDbContext db, ICaseFileService caseFileService)
+    public ModuleRecordService(
+        AppDbContext db,
+        ICaseFileService caseFileService,
+        IModuleRecordCreationService creationService)
     {
         _db = db;
         _caseFileService = caseFileService;
+        _creationService = creationService;
     }
 
     public async Task<ListResponseDto<ModuleRecordListItemDto>> GetListAsync(
@@ -239,14 +245,9 @@ public class ModuleRecordService : IModuleRecordService
 
     public async Task<Guid> CreateAsync(string moduleCode, ModuleRecordUpsertRequest request)
     {
-        var module = await _db.Modules.FirstAsync(x => x.Code == moduleCode);
-
-        var entity = new Entities.ModuleRecord
+        var entity = await _creationService.CreateAsync(new ModuleRecordCreationRequest
         {
-            Id = Guid.NewGuid(),
-            ModuleId = module.Id,
-            RecordNo = $"REC-{DateTime.Now:yyyyMMddHHmmss}",
-
+            ModuleCode = moduleCode,
             Name = request.Name.Trim(),
             Customer = request.Customer,
             Owner = request.Owner,
@@ -284,14 +285,8 @@ public class ModuleRecordService : IModuleRecordService
             DspModel = request.DspModel,
             DqaOwner = request.DqaOwner,
             JiraLink = request.JiraLink,
-            NotifyUsers = JoinNotifyUsers(request.NotifyUsers),
-
-            CreatedAt = DateTime.UtcNow,
-            UpdatedAt = DateTime.UtcNow
-        };
-
-        _db.ModuleRecords.Add(entity);
-        await _db.SaveChangesAsync();
+            NotifyUsers = JoinNotifyUsers(request.NotifyUsers)
+        });
 
         return entity.Id;
     }

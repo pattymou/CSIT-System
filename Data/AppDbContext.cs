@@ -19,6 +19,8 @@ public class AppDbContext : DbContext
     public DbSet<Apparatus> Apparatuses => Set<Apparatus>();
     public DbSet<ApparatusFile> ApparatusFiles => Set<ApparatusFile>();
     public DbSet<SystemOption> SystemOptions => Set<SystemOption>();
+    public DbSet<VerificationApplication> VerificationApplications => Set<VerificationApplication>();
+    public DbSet<VerificationApplicationFile> VerificationApplicationFiles => Set<VerificationApplicationFile>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -93,6 +95,83 @@ public class AppDbContext : DbContext
             entity.HasOne(x => x.Module)
                 .WithMany(x => x.Records)
                 .HasForeignKey(x => x.ModuleId);
+        });
+
+        modelBuilder.HasSequence<long>("verification_application_no_seq");
+
+        modelBuilder.Entity<VerificationApplication>(entity =>
+        {
+            entity.ToTable("verification_applications", table =>
+                table.HasCheckConstraint(
+                    "ck_verification_applications_status",
+                    "status IN ('Draft', 'Submitted', 'Returned', 'Accepted', 'Rejected')"));
+            entity.HasKey(x => x.Id);
+
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.ApplicationNo).HasColumnName("application_no").HasMaxLength(32).IsRequired();
+            entity.Property(x => x.ModuleCode).HasColumnName("module_code").HasMaxLength(100).IsRequired();
+            entity.Property(x => x.ApplicantAccount).HasColumnName("applicant_account").HasMaxLength(100).IsRequired();
+            entity.Property(x => x.ApplicantName).HasColumnName("applicant_name").HasMaxLength(200).IsRequired();
+            entity.Property(x => x.ApplicantEmail).HasColumnName("applicant_email").HasMaxLength(320).IsRequired();
+            entity.Property(x => x.Department).HasColumnName("department").HasMaxLength(200).IsRequired();
+            entity.Property(x => x.ApplicantExtension).HasColumnName("applicant_extension").HasMaxLength(50);
+            entity.Property(x => x.ProjectName).HasColumnName("project_name").HasMaxLength(300).IsRequired();
+            entity.Property(x => x.SubPu).HasColumnName("sub_pu").HasMaxLength(200);
+            entity.Property(x => x.Customer).HasColumnName("customer").HasMaxLength(200);
+            entity.Property(x => x.ProductModel).HasColumnName("product_model").HasMaxLength(300);
+            entity.Property(x => x.RequestedFinishDate).HasColumnName("requested_finish_date");
+            entity.Property(x => x.ValidationRequirement).HasColumnName("validation_requirement");
+            entity.Property(x => x.HardwareVersion).HasColumnName("hardware_version").HasMaxLength(200);
+            entity.Property(x => x.FirmwareVersion).HasColumnName("firmware_version").HasMaxLength(200);
+            entity.Property(x => x.SoftwareVersion).HasColumnName("software_version").HasMaxLength(200);
+            entity.Property(x => x.SampleReadyDate).HasColumnName("sample_ready_date");
+            entity.Property(x => x.JiraLink).HasColumnName("jira_link").HasMaxLength(1000);
+            entity.Property(x => x.Location).HasColumnName("location").HasMaxLength(100);
+            entity.Property(x => x.Npi).HasColumnName("npi").HasMaxLength(200);
+            entity.Property(x => x.WirelessDrive).HasColumnName("wireless_drive").HasMaxLength(200);
+            entity.Property(x => x.Chipset).HasColumnName("chipset").HasMaxLength(200);
+            entity.Property(x => x.SampleMacAddress).HasColumnName("sample_mac_address").HasMaxLength(200);
+            entity.Property(x => x.UtilityVersion).HasColumnName("utility_version").HasMaxLength(200);
+            entity.Property(x => x.DspModel).HasColumnName("dsp_model").HasMaxLength(200);
+            entity.Property(x => x.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(20).IsRequired();
+            entity.Property(x => x.ModuleRecordId).HasColumnName("module_record_id");
+            entity.Property(x => x.SubmittedAt).HasColumnName("submitted_at");
+            entity.Property(x => x.ReturnedAt).HasColumnName("returned_at");
+            entity.Property(x => x.RejectedAt).HasColumnName("rejected_at");
+            entity.Property(x => x.AcceptedAt).HasColumnName("accepted_at");
+            entity.Property(x => x.ProcessedAt).HasColumnName("processed_at");
+            entity.Property(x => x.ProcessedBy).HasColumnName("processed_by").HasMaxLength(100);
+            entity.Property(x => x.ProcessingNote).HasColumnName("processing_note");
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(x => x.ApplicationNo).IsUnique();
+            entity.HasIndex(x => x.ModuleRecordId).IsUnique().HasFilter("module_record_id IS NOT NULL");
+            entity.HasIndex(x => new { x.Status, x.SubmittedAt });
+
+            entity.HasOne(x => x.ModuleRecord)
+                .WithOne()
+                .HasForeignKey<VerificationApplication>(x => x.ModuleRecordId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<VerificationApplicationFile>(entity =>
+        {
+            entity.ToTable("verification_application_files");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.VerificationApplicationId).HasColumnName("verification_application_id");
+            entity.Property(x => x.FileName).HasColumnName("file_name").HasMaxLength(300).IsRequired();
+            entity.Property(x => x.FilePath).HasColumnName("file_path").HasMaxLength(1000).IsRequired();
+            entity.Property(x => x.ContentType).HasColumnName("content_type").HasMaxLength(200);
+            entity.Property(x => x.FileSize).HasColumnName("file_size");
+            entity.Property(x => x.UploadedBy).HasColumnName("uploaded_by").HasMaxLength(100).IsRequired();
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.HasIndex(x => x.VerificationApplicationId);
+            entity.HasOne(x => x.VerificationApplication)
+                .WithMany(x => x.Files)
+                .HasForeignKey(x => x.VerificationApplicationId)
+                .OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<ModuleRecordCase>(entity =>
