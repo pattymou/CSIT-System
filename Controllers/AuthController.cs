@@ -13,12 +13,16 @@ public class AuthController(AdAuthenticationService ad) : Controller
     public IActionResult Root() => Redirect("/signin");
 
     [HttpGet("/signin")]
-    public ContentResult LoginPage([FromQuery] int? error = null)
+    public ContentResult LoginPage([FromQuery] int? error = null, [FromQuery] string? returnUrl = null)
     {
+        var safeReturnUrl = GetSafeReturnUrl(returnUrl);
         var hasError = error == 1;
         var errorHtml = hasError
             ? "<div class='error-text'>登入失敗，請確認 AD 帳密。</div>"
             : string.Empty;
+        var returnUrlInput = safeReturnUrl is null
+            ? string.Empty
+            : $"<input type='hidden' name='returnUrl' value='{WebUtility.HtmlEncode(safeReturnUrl)}' />";
 
         var html = $$"""
 <!DOCTYPE html>
@@ -88,6 +92,7 @@ public class AuthController(AdAuthenticationService ad) : Controller
 <body>
   <div class="shell">
     <form class="card" method="post" action="/auth/login">
+      {{returnUrlInput}}
       <h1>SIT System</h1>
       <p>使用公司 AD 帳號登入</p>
       {{errorHtml}}
@@ -104,12 +109,23 @@ public class AuthController(AdAuthenticationService ad) : Controller
     }
 
     [HttpPost("/auth/login")]
-    public async Task<IActionResult> Login([FromForm] string username, [FromForm] string password)
+    public async Task<IActionResult> Login([FromForm] string username, [FromForm] string password, [FromForm] string? returnUrl = null)
     {
+        var safeReturnUrl = GetSafeReturnUrl(returnUrl);
         var principal = await ad.AuthenticateAsync(username, password);
-        if (principal is null) return Redirect("/signin?error=1");
+        if (principal is null)
+        {
+            var failureUrl = "/signin?error=1";
+            if (safeReturnUrl is not null)
+            {
+                failureUrl += $"&returnUrl={Uri.EscapeDataString(safeReturnUrl)}";
+            }
+
+            return Redirect(failureUrl);
+        }
+
         await HttpContext.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, principal);
-        return Redirect("/home");
+        return Redirect(safeReturnUrl ?? "/home");
     }
 
     [HttpGet("/auth/logout")]
@@ -117,5 +133,15 @@ public class AuthController(AdAuthenticationService ad) : Controller
     {
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         return Redirect("/signin");
+    }
+
+    private string? GetSafeReturnUrl(string? returnUrl)
+    {
+        if (string.IsNullOrWhiteSpace(returnUrl) || !Url.IsLocalUrl(returnUrl))
+        {
+            return null;
+        }
+
+        return returnUrl.StartsWith("/signin", StringComparison.OrdinalIgnoreCase) ? null : returnUrl;
     }
 }

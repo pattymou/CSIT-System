@@ -1,0 +1,27 @@
+@inherits LayoutComponentBase
+
+<div class="obsidian-shell">
+    <aside class="sidebar">
+        <div class="brand">
+            <div class="brand-title">SIT System</div>
+        </div>
+
+        <div class="nav-scroll">
+            <div class="nav-section">
+                <div class="nav-section-title">RD 服務</div>
+                <NavLink class="nav-link-custom" href="/rd" Match="NavLinkMatch.All">首頁</NavLink>
+                <NavLink class="nav-link-custom" href="/verification-applications" Match="NavLinkMatch.Prefix">系統驗證申請單</NavLink>
+            </div>
+        </div>
+    </aside>
+
+    <div class="content">
+        <header class="topbar">
+            <div>CSIT / Department System</div>
+        </header>
+
+        <main class="page-body">
+            @Body
+        </main>
+    </div>
+</div>

@@ -2,9 +2,16 @@
     <Found Context="routeData">
         <AuthorizeRouteView RouteData="routeData" DefaultLayout="typeof(Layout.MainLayout)">
             <NotAuthorized>
-                <LayoutView Layout="typeof(Layout.MainLayout)">
-                    <div class="surface-card error-text">您尚未登入或沒有權限存取此頁面。請由 <a href="/signin">登入頁</a> 重新登入。</div>
-                </LayoutView>
+                <AuthorizeView>
+                    <Authorized Context="authorizedContext">
+                        <LayoutView Layout="typeof(Layout.MainLayout)">
+                            <div class="surface-card error-text">您沒有權限存取此頁面。</div>
+                        </LayoutView>
+                    </Authorized>
+                    <NotAuthorized Context="anonymousContext">
+                        <RedirectToSignIn />
+                    </NotAuthorized>
+                </AuthorizeView>
             </NotAuthorized>
         </AuthorizeRouteView>
         <FocusOnNavigate RouteData="routeData" Selector="h1" />

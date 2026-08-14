@@ -1,0 +1,30 @@
+@page "/rd"
+@layout RdLayout
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Microsoft.AspNetCore.Authorization
+@inject NavigationManager Nav
+
+<PageTitle>RD 服務入口</PageTitle>
+
+<h3 class="page-title">RD 服務入口</h3>
+
+@foreach (var service in Services)
+{
+    <section class="surface-card dashboard-card">
+        <h3>@service.Title</h3>
+        <p class="hint-text">@service.Description</p>
+        <button type="button" class="btn-primary" @onclick="() => Open(service.Route)">@service.ActionText</button>
+    </section>
+}
+
+@code {
+    private static readonly RdServiceEntry[] Services =
+    [
+        new("系統驗證申請單", "新增驗證申請，或查看已提交與退回的申請進度。", "查看我的申請", "/verification-applications")
+    ];
+
+    private void Open(string route) => Nav.NavigateTo(route);
+
+    private sealed record RdServiceEntry(string Title, string Description, string ActionText, string Route);
+}
