@@ -1,5 +1,14 @@
 namespace SIT.DepartmentSystem.Web.Entities;
 
+// Resolved only from active VerificationCategory data at Submit/Resubmit time.
+public sealed record VerificationApplicationRouting(
+    Guid VerificationCategoryId,
+    string CategoryCode,
+    string CategoryName,
+    string ModuleCode,
+    string AssignedLeaderAccount,
+    string? AssignedLeaderDisplayName);
+
 public sealed class VerificationApplicationContent
 {
     public string ProjectName { get; init; } = string.Empty;
@@ -28,7 +37,12 @@ public class VerificationApplication
 
     public Guid Id { get; private set; }
     public string ApplicationNo { get; private set; } = string.Empty;
-    public string ModuleCode { get; private set; } = string.Empty;
+    public string? ModuleCode { get; private set; }
+    public Guid? VerificationCategoryId { get; private set; }
+    public string? CategoryCode { get; private set; }
+    public string? CategoryName { get; private set; }
+    public string? AssignedLeaderAccount { get; private set; }
+    public string? AssignedLeaderDisplayName { get; private set; }
 
     public string ApplicantAccount { get; private set; } = string.Empty;
     public string ApplicantName { get; private set; } = string.Empty;
@@ -68,12 +82,13 @@ public class VerificationApplication
     public DateTime UpdatedAt { get; private set; }
 
     public ModuleRecord? ModuleRecord { get; private set; }
+    public VerificationCategory? VerificationCategory { get; private set; }
     public ICollection<VerificationApplicationFile> Files { get; private set; } = new List<VerificationApplicationFile>();
 
     public static VerificationApplication CreateDraft(
         Guid id,
         string applicationNo,
-        string moduleCode,
+        Guid verificationCategoryId,
         string applicantAccount,
         string applicantName,
         string applicantEmail,
@@ -86,7 +101,7 @@ public class VerificationApplication
         {
             Id = id,
             ApplicationNo = applicationNo,
-            ModuleCode = moduleCode,
+            VerificationCategoryId = verificationCategoryId,
             ApplicantAccount = applicantAccount,
             ApplicantName = applicantName,
             ApplicantEmail = applicantEmail,
@@ -99,17 +114,26 @@ public class VerificationApplication
         return entity;
     }
 
-    public void UpdateContent(VerificationApplicationContent content, DateTime now)
+    public void UpdateContent(Guid verificationCategoryId, VerificationApplicationContent content, DateTime now)
     {
         EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
+        VerificationCategoryId = verificationCategoryId;
         ApplyContent(content);
         UpdatedAt = now;
     }
 
-    public void Submit(bool targetModuleExists, DateTime now)
+    public void Submit(VerificationApplicationRouting routing, DateTime now)
     {
         EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
-        EnsureSubmitRequirements(targetModuleExists);
+        ArgumentNullException.ThrowIfNull(routing);
+        if (VerificationCategoryId != routing.VerificationCategoryId)
+            throw new InvalidOperationException("Resolved verification category does not match the application.");
+        CategoryCode = RequiredRoutingValue(routing.CategoryCode, nameof(routing.CategoryCode));
+        CategoryName = RequiredRoutingValue(routing.CategoryName, nameof(routing.CategoryName));
+        ModuleCode = RequiredRoutingValue(routing.ModuleCode, nameof(routing.ModuleCode));
+        AssignedLeaderAccount = RequiredRoutingValue(routing.AssignedLeaderAccount, nameof(routing.AssignedLeaderAccount));
+        AssignedLeaderDisplayName = Clean(routing.AssignedLeaderDisplayName);
+        EnsureSubmitRequirements();
         Status = VerificationApplicationStatus.Submitted;
         SubmittedAt = now;
         ProcessedAt = null;
@@ -153,7 +177,7 @@ public class VerificationApplication
         SetProcessing(processedBy, null, now);
     }
 
-    private void EnsureSubmitRequirements(bool targetModuleExists)
+    private void EnsureSubmitRequirements()
     {
         var missing = new List<string>();
         AddIfMissing(missing, ApplicantAccount, nameof(ApplicantAccount));
@@ -165,7 +189,11 @@ public class VerificationApplication
         AddIfMissing(missing, ProductModel, nameof(ProductModel));
         AddIfMissing(missing, ValidationRequirement, nameof(ValidationRequirement));
         if (!RequestedFinishDate.HasValue) missing.Add(nameof(RequestedFinishDate));
-        if (string.IsNullOrWhiteSpace(ModuleCode) || !targetModuleExists) missing.Add(nameof(ModuleCode));
+        if (!VerificationCategoryId.HasValue) missing.Add(nameof(VerificationCategoryId));
+        AddIfMissing(missing, CategoryCode, nameof(CategoryCode));
+        AddIfMissing(missing, CategoryName, nameof(CategoryName));
+        AddIfMissing(missing, ModuleCode, nameof(ModuleCode));
+        AddIfMissing(missing, AssignedLeaderAccount, nameof(AssignedLeaderAccount));
 
         if (missing.Count > 0)
         {
@@ -226,6 +254,8 @@ public class VerificationApplication
     }
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string RequiredRoutingValue(string? value, string name) =>
+        string.IsNullOrWhiteSpace(value) ? throw new InvalidOperationException($"Routing configuration is missing {name}.") : value.Trim();
 
     private void EnsureStatus(params VerificationApplicationStatus[] allowed)
     {

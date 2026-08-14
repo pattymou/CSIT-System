@@ -7,6 +7,3 @@ public sealed record ApplicantSnapshot(
     string ApplicantEmail,
     string Department,
     string? ApplicantExtension);
-
-// The target module must come from restricted server-side routing/configuration.
-public sealed record VerificationApplicationTarget(string ModuleCode);

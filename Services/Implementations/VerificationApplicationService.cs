@@ -1,4 +1,5 @@
 using System.Data;
+using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
@@ -21,21 +22,15 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     }
 
     public async Task<VerificationApplicationDto> CreateDraftAsync(
-        ApplicantSnapshot applicant,
-        VerificationApplicationTarget target,
+        ClaimsPrincipal user,
         CreateVerificationApplicationRequest request,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(applicant);
-        ArgumentNullException.ThrowIfNull(target);
         ArgumentNullException.ThrowIfNull(request);
-        Require(target.ModuleCode, nameof(target.ModuleCode));
-
-        var moduleCode = target.ModuleCode.Trim();
-        if (!await _db.Modules.AnyAsync(x => x.Code == moduleCode, cancellationToken))
-        {
-            throw new ArgumentException("Unknown target module code.", nameof(target));
-        }
+        if (request.VerificationCategoryId == Guid.Empty)
+            throw new ArgumentException("VerificationCategoryId is required.", nameof(request));
+        var applicant = await ResolveApplicantAsync(user, cancellationToken);
+        await EnsureCategoryExistsAsync(request.VerificationCategoryId, cancellationToken);
 
         var now = DateTime.UtcNow;
         var sequence = await _db.Database
@@ -45,8 +40,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         var entity = VerificationApplication.CreateDraft(
             Guid.NewGuid(),
             $"VA-{now:yyyyMMdd}-{sequence:D6}",
-            moduleCode,
-            Normalize(applicant.ApplicantAccount),
+            request.VerificationCategoryId,
+            NormalizeAccount(applicant.ApplicantAccount),
             Normalize(applicant.ApplicantName),
             Normalize(applicant.ApplicantEmail),
             Normalize(applicant.Department),
@@ -61,55 +56,63 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
 
     public async Task<VerificationApplicationDto> UpdateDraftAsync(
         Guid id,
+        ClaimsPrincipal user,
         UpdateVerificationApplicationRequest request,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        var entity = await FindRequiredAsync(id, cancellationToken);
-        entity.UpdateContent(MapContent(request), DateTime.UtcNow);
+        if (request.VerificationCategoryId == Guid.Empty)
+            throw new ArgumentException("VerificationCategoryId is required.", nameof(request));
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        var entity = await FindApplicantApplicationRequiredAsync(id, account, cancellationToken);
+        await EnsureCategoryExistsAsync(request.VerificationCategoryId, cancellationToken);
+        entity.UpdateContent(request.VerificationCategoryId, MapContent(request), DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
         return Map(entity);
     }
 
-    public async Task<VerificationApplicationDto> SubmitAsync(Guid id, CancellationToken cancellationToken = default)
+    public async Task<VerificationApplicationDto> SubmitAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
     {
-        var entity = await FindRequiredAsync(id, cancellationToken);
-        var targetModuleExists = !string.IsNullOrWhiteSpace(entity.ModuleCode)
-            && await _db.Modules.AnyAsync(x => x.Code == entity.ModuleCode, cancellationToken);
-        entity.Submit(targetModuleExists, DateTime.UtcNow);
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        var entity = await FindApplicantApplicationRequiredAsync(id, account, cancellationToken);
+        var routing = await ResolveRoutingAsync(entity.VerificationCategoryId, cancellationToken);
+        entity.Submit(routing, DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
         return Map(entity);
     }
 
     public async Task<VerificationApplicationDto> ReturnAsync(
         Guid id,
-        string processedBy,
+        ClaimsPrincipal user,
         string? note,
         CancellationToken cancellationToken = default)
     {
-        var entity = await FindRequiredAsync(id, cancellationToken);
-        entity.Return(processedBy, note, DateTime.UtcNow);
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        var entity = await FindLeaderApplicationRequiredAsync(id, account, cancellationToken);
+        entity.Return(account, note, DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
         return Map(entity);
     }
 
     public async Task<VerificationApplicationDto> RejectAsync(
         Guid id,
-        string processedBy,
+        ClaimsPrincipal user,
         string? note,
         CancellationToken cancellationToken = default)
     {
-        var entity = await FindRequiredAsync(id, cancellationToken);
-        entity.Reject(processedBy, note, DateTime.UtcNow);
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        var entity = await FindLeaderApplicationRequiredAsync(id, account, cancellationToken);
+        entity.Reject(account, note, DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
         return Map(entity);
     }
 
     public async Task<VerificationApplicationDto> AcceptAsync(
         Guid id,
-        string processedBy,
+        ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
     {
+        var account = VerificationApplicationSecurity.GetAccount(user);
         await using var transaction = await _db.Database.BeginTransactionAsync(
             IsolationLevel.ReadCommitted,
             cancellationToken);
@@ -126,14 +129,20 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                 throw new InvalidOperationException("Only Submitted applications can be accepted.");
             }
 
+            VerificationApplicationSecurity.EnsureLeaderOwnership(entity, account);
+
             if (entity.ModuleRecordId.HasValue)
             {
                 throw new InvalidOperationException("The application already has a ModuleRecord.");
             }
 
+            var moduleCode = string.IsNullOrWhiteSpace(entity.ModuleCode)
+                ? throw new InvalidOperationException("The submitted application has no resolved ModuleCode.")
+                : entity.ModuleCode;
+
             var moduleRecord = await _moduleRecordCreation.CreateAsync(new ModuleRecordCreationRequest
             {
-                ModuleCode = entity.ModuleCode,
+                ModuleCode = moduleCode,
                 Name = entity.ProjectName,
                 Customer = entity.Customer,
                 Status = "Open",
@@ -158,7 +167,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                 JiraLink = entity.JiraLink
             }, cancellationToken);
 
-            entity.Accept(moduleRecord.Id, processedBy, DateTime.UtcNow);
+            entity.Accept(moduleRecord.Id, account, DateTime.UtcNow);
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return Map(entity);
@@ -171,36 +180,54 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         }
     }
 
-    public async Task<VerificationApplicationDto?> GetAsync(Guid id, CancellationToken cancellationToken = default)
+    public async Task<VerificationApplicationDto?> GetForApplicantAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
     {
+        var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await _db.VerificationApplications
             .AsNoTracking()
             .Include(x => x.Files)
-            .SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+            .Include(x => x.ModuleRecord)
+            .SingleOrDefaultAsync(x => x.Id == id && x.ApplicantAccount == account, cancellationToken);
         return entity is null ? null : Map(entity);
     }
 
-    public async Task<ListResponseDto<VerificationApplicationDto>> ListAsync(
-        VerificationApplicationStatus? status,
-        string? applicantAccount,
+    public async Task<VerificationApplicationDto?> GetForLeaderReviewAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    {
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        var entity = await _db.VerificationApplications.AsNoTracking().Include(x => x.Files)
+            .SingleOrDefaultAsync(x => x.Id == id && x.Status == VerificationApplicationStatus.Submitted && x.AssignedLeaderAccount == account, cancellationToken);
+        return entity is null ? null : Map(entity);
+    }
+
+    public Task<ListResponseDto<VerificationApplicationDto>> ListForApplicantAsync(
+        ClaimsPrincipal user,
         int page,
         int pageSize,
         CancellationToken cancellationToken = default)
     {
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        return ListAsync(x => x.ApplicantAccount == account, page, pageSize, cancellationToken);
+    }
+
+    public Task<ListResponseDto<VerificationApplicationDto>> ListForLeaderReviewAsync(
+        ClaimsPrincipal user,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        return ListAsync(x => x.Status == VerificationApplicationStatus.Submitted && x.AssignedLeaderAccount == account, page, pageSize, cancellationToken);
+    }
+
+    private async Task<ListResponseDto<VerificationApplicationDto>> ListAsync(
+        System.Linq.Expressions.Expression<Func<VerificationApplication, bool>> predicate,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken)
+    {
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 200);
-        var query = _db.VerificationApplications.AsNoTracking();
-
-        if (status.HasValue)
-        {
-            query = query.Where(x => x.Status == status.Value);
-        }
-
-        if (!string.IsNullOrWhiteSpace(applicantAccount))
-        {
-            var account = applicantAccount.Trim();
-            query = query.Where(x => x.ApplicantAccount == account);
-        }
+        var query = _db.VerificationApplications.AsNoTracking().Where(predicate);
 
         var totalCount = await query.CountAsync(cancellationToken);
         var entities = await query
@@ -219,16 +246,47 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         };
     }
 
-    private async Task<VerificationApplication> FindRequiredAsync(Guid id, CancellationToken cancellationToken) =>
-        await _db.VerificationApplications.SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
-        ?? throw new KeyNotFoundException($"Verification application {id} was not found.");
-
-    private static void Require(string? value, string name)
+    private async Task<ApplicantSnapshot> ResolveApplicantAsync(ClaimsPrincipal user, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(value))
-        {
-            throw new ArgumentException($"{name} is required.", name);
-        }
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        var appUser = await _db.Users.AsNoTracking().SingleOrDefaultAsync(x => x.Account == account, cancellationToken)
+            ?? throw new InvalidOperationException("Authenticated user profile was not found.");
+        return new ApplicantSnapshot(appUser.Account, appUser.DisplayName, appUser.Email, appUser.Department, null);
+    }
+
+    private Task<bool> CategoryExistsAsync(Guid id, CancellationToken cancellationToken) =>
+        _db.VerificationCategories.AnyAsync(x => x.Id == id, cancellationToken);
+
+    private async Task EnsureCategoryExistsAsync(Guid id, CancellationToken cancellationToken)
+    {
+        if (!await CategoryExistsAsync(id, cancellationToken))
+            throw new InvalidOperationException("Verification category does not exist.");
+    }
+
+    private async Task<VerificationApplicationRouting> ResolveRoutingAsync(Guid? categoryId, CancellationToken cancellationToken)
+    {
+        if (!categoryId.HasValue) throw new InvalidOperationException("Verification category is required before submit.");
+        var category = await _db.VerificationCategories.AsNoTracking().SingleOrDefaultAsync(x => x.Id == categoryId.Value, cancellationToken)
+            ?? throw new InvalidOperationException("Verification category does not exist.");
+        var module = await _db.Modules.AsNoTracking().FirstOrDefaultAsync(x => x.Code == category.ModuleCode, cancellationToken);
+        return VerificationApplicationRoutingRules.Resolve(category, module);
+    }
+
+    private async Task<VerificationApplication> FindApplicantApplicationRequiredAsync(Guid id, string account, CancellationToken cancellationToken)
+    {
+        var entity = await _db.VerificationApplications.SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException($"Verification application {id} was not found.");
+        VerificationApplicationSecurity.EnsureApplicantOwnership(entity, account);
+        return entity;
+    }
+
+    private async Task<VerificationApplication> FindLeaderApplicationRequiredAsync(Guid id, string account, CancellationToken cancellationToken)
+    {
+        var entity = await _db.VerificationApplications.SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException($"Verification application {id} was not found.");
+        if (entity.Status != VerificationApplicationStatus.Submitted) throw new InvalidOperationException("Only Submitted applications can be reviewed.");
+        VerificationApplicationSecurity.EnsureLeaderOwnership(entity, account);
+        return entity;
     }
 
     private static VerificationApplicationContent MapContent(VerificationApplicationContentRequest request) => new()
@@ -255,12 +313,15 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static string Normalize(string? value) => value?.Trim() ?? string.Empty;
+    private static string NormalizeAccount(string value) => value.Trim().ToLowerInvariant();
 
     private static VerificationApplicationDto Map(VerificationApplication entity) => new()
     {
         Id = entity.Id,
         ApplicationNo = entity.ApplicationNo,
-        ModuleCode = entity.ModuleCode,
+        VerificationCategoryId = entity.VerificationCategoryId,
+        CategoryCode = entity.CategoryCode,
+        CategoryName = entity.CategoryName,
         ApplicantAccount = entity.ApplicantAccount,
         ApplicantName = entity.ApplicantName,
         ApplicantEmail = entity.ApplicantEmail,
@@ -292,6 +353,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         ProcessedAt = entity.ProcessedAt,
         ProcessedBy = entity.ProcessedBy,
         ProcessingNote = entity.ProcessingNote,
+        ModuleRecordNo = entity.Status == VerificationApplicationStatus.Accepted ? entity.ModuleRecord?.RecordNo : null,
+        UpdatedAt = entity.UpdatedAt,
         Files = entity.Files.Select(x => new VerificationApplicationFileDto
         {
             Id = x.Id,

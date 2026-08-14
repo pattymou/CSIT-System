@@ -1,0 +1,75 @@
+@page "/system/verification-categories"
+@rendermode InteractiveServer
+@attribute [Authorize(Roles = "Admin")]
+@using Microsoft.AspNetCore.Authorization
+@inject IVerificationCategoryService Categories
+@inject IModuleService Modules
+
+<h3 class="page-title">Verification Category Settings</h3>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{ <div class="surface-card @(_isError ? "error-text" : "")">@_message</div> }
+
+<div class="surface-card">
+    <h4>@(_editingId.HasValue ? "修改驗證類別" : "新增驗證類別")</h4>
+    <div class="edit-grid">
+        <div class="form-row"><label>Code *</label><input @bind="_form.Code" /></div>
+        <div class="form-row"><label>Name *</label><input @bind="_form.Name" /></div>
+        <div class="form-row"><label>Module *</label><select @bind="_form.ModuleCode"><option value="">請選擇</option>@foreach(var module in _modules){<option value="@module.Code">@module.DisplayName (@module.Code)</option>}</select></div>
+        <div class="form-row"><label>Leader Account *</label><input @bind="_form.LeaderAccount" /></div>
+        <div class="form-row"><label>Leader Display Name</label><input @bind="_form.LeaderDisplayName" /></div>
+        <div class="form-row"><label>Display Order</label><input type="number" min="0" @bind="_form.DisplayOrder" /></div>
+        <div class="form-row"><label>Active</label><input type="checkbox" @bind="_form.IsActive" /></div>
+    </div>
+    <div class="form-actions">
+        <button type="button" class="btn-primary" @onclick="SaveAsync">儲存</button>
+        <button type="button" class="btn-secondary" @onclick="Clear">清除</button>
+    </div>
+</div>
+
+<div class="surface-card">
+    <div class="project-table-wrap">
+        <table class="project-table">
+            <thead><tr><th>Code</th><th>Name</th><th>Module</th><th>Leader</th><th>Order</th><th>Active</th><th></th></tr></thead>
+            <tbody>
+            @foreach(var item in _items)
+            {
+                <tr><td>@item.Code</td><td>@item.Name</td><td>@item.ModuleCode</td><td>@item.LeaderDisplayName (@item.LeaderAccount)</td><td>@item.DisplayOrder</td><td>@item.IsActive</td><td><button type="button" class="btn-secondary" @onclick="() => Edit(item)">編輯</button></td></tr>
+            }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    private List<VerificationCategoryDto> _items = [];
+    private List<ModuleListItemDto> _modules = [];
+    private VerificationCategoryUpsertRequest _form = new();
+    private Guid? _editingId;
+    private string? _message;
+    private bool _isError;
+    protected override async Task OnInitializedAsync()
+    {
+        _modules = await Modules.GetEnabledModulesAsync();
+        await LoadAsync();
+    }
+    private async Task LoadAsync() => _items = await Categories.ListAsync();
+    private async Task SaveAsync()
+    {
+        _message = null; _isError = false;
+        try
+        {
+            if (_editingId.HasValue) await Categories.UpdateAsync(_editingId.Value, _form);
+            else await Categories.CreateAsync(_form);
+            _message = "儲存成功。"; Clear(false); await LoadAsync();
+        }
+        catch(Exception ex) { _message = ex.Message; _isError = true; }
+    }
+    private void Edit(VerificationCategoryDto item)
+    {
+        _editingId = item.Id;
+        _form = new VerificationCategoryUpsertRequest { Code=item.Code, Name=item.Name, ModuleCode=item.ModuleCode, LeaderAccount=item.LeaderAccount, LeaderDisplayName=item.LeaderDisplayName, IsActive=item.IsActive, DisplayOrder=item.DisplayOrder };
+    }
+    private void Clear() => Clear(true);
+    private void Clear(bool clearMessage) { _editingId = null; _form = new VerificationCategoryUpsertRequest(); if(clearMessage) _message = null; }
+}

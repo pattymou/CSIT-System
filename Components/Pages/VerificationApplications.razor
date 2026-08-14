@@ -1,0 +1,86 @@
+@page "/verification-applications"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using SIT.DepartmentSystem.Web.Entities
+@inject IVerificationApplicationService Applications
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Nav
+
+<h3 class="page-title">我的驗證申請</h3>
+
+<div class="form-actions">
+    <button type="button" class="btn-primary" @onclick="Create">新增驗證申請</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="surface-card error-text">@_message</div>
+}
+else if (_loading)
+{
+    <div class="surface-card">載入中...</div>
+}
+else
+{
+    <div class="surface-card">
+        <div class="project-table-wrap">
+            <table class="project-table">
+                <thead><tr><th>申請編號</th><th>驗證類別</th><th>專案 / 產品</th><th>狀態</th><th>送出時間</th><th>更新時間</th></tr></thead>
+                <tbody>
+                @if (_items.Count == 0)
+                {
+                    <tr><td colspan="6" class="empty-row">目前沒有驗證申請。</td></tr>
+                }
+                else
+                {
+                    @foreach (var item in _items)
+                    {
+                        <tr class="clickable-row" @onclick="() => Open(item.Id)">
+                            <td><strong>@item.ApplicationNo</strong></td>
+                            <td>@Display(item.CategoryName)</td>
+                            <td>@item.ProjectName / @Display(item.ProductModel)</td>
+                            <td><span class="record-status-pill">@StatusText(item.Status)</span></td>
+                            <td>@FormatDate(item.SubmittedAt)</td>
+                            <td>@FormatDate(item.UpdatedAt)</td>
+                        </tr>
+                    }
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private List<VerificationApplicationDto> _items = [];
+    private bool _loading = true;
+    private string? _message;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            _items = (await Applications.ListForApplicantAsync(user, 1, 200)).Items.ToList();
+        }
+        catch (Exception ex) { _message = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private void Create() => Nav.NavigateTo("/verification-applications/new");
+    private void Open(Guid id) => Nav.NavigateTo($"/verification-applications/{id}");
+    private static string FormatDate(DateTime? value) => value?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "—";
+    private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("yyyy-MM-dd HH:mm");
+    private static string StatusText(VerificationApplicationStatus status) => status switch
+    {
+        VerificationApplicationStatus.Draft => "草稿",
+        VerificationApplicationStatus.Submitted => "待審核",
+        VerificationApplicationStatus.Returned => "已退回",
+        VerificationApplicationStatus.Rejected => "已拒絕",
+        VerificationApplicationStatus.Accepted => "已接受",
+        _ => status.ToString()
+    };
+}

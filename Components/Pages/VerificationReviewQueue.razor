@@ -1,0 +1,54 @@
+@page "/verification-reviews"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@inject IVerificationApplicationService Applications
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Nav
+
+<h3 class="page-title">Verification Review Queue</h3>
+
+@if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
+else if (_loading) { <div class="surface-card">載入中...</div> }
+else
+{
+    <div class="surface-card">
+        <div class="project-table-wrap">
+            <table class="project-table">
+                <thead><tr><th>申請編號</th><th>類別</th><th>申請人</th><th>部門 / 聯絡方式</th><th>專案 / 產品</th><th>送出時間</th></tr></thead>
+                <tbody>
+                @if (_items.Count == 0) { <tr><td colspan="6" class="empty-row">目前沒有待審核申請。</td></tr> }
+                else
+                {
+                    @foreach (var item in _items)
+                    {
+                        <tr class="clickable-row" @onclick="() => Open(item.Id)">
+                            <td><strong>@item.ApplicationNo</strong></td><td>@item.CategoryName</td><td>@item.ApplicantName</td>
+                            <td>@item.Department / @item.ApplicantEmail</td><td>@item.ProjectName / @item.ProductModel</td>
+                            <td>@item.SubmittedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
+                        </tr>
+                    }
+                }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private List<VerificationApplicationDto> _items = [];
+    private bool _loading = true;
+    private string? _message;
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            _items = (await Applications.ListForLeaderReviewAsync(user, 1, 200)).Items.ToList();
+        }
+        catch (Exception ex) { _message = ex.Message; }
+        finally { _loading = false; }
+    }
+    private void Open(Guid id) => Nav.NavigateTo($"/verification-reviews/{id}");
+}

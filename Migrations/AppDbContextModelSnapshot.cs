@@ -1292,6 +1292,71 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         });
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("code");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("display_order");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<string>("LeaderAccount")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("leader_account");
+
+                    b.Property<string>("LeaderDisplayName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("leader_display_name");
+
+                    b.Property<string>("ModuleCode")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("module_code");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("IsActive", "DisplayOrder");
+
+                    b.ToTable("verification_categories", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_verification_categories_display_order", "display_order >= 0");
+                        });
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationApplication", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1340,6 +1405,26 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("character varying(32)")
                         .HasColumnName("application_no");
 
+                    b.Property<string>("AssignedLeaderAccount")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("assigned_leader_account");
+
+                    b.Property<string>("AssignedLeaderDisplayName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("assigned_leader_display_name");
+
+                    b.Property<string>("CategoryCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("category_code");
+
+                    b.Property<string>("CategoryName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("category_name");
+
                     b.Property<string>("Chipset")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
@@ -1386,7 +1471,6 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnName("location");
 
                     b.Property<string>("ModuleCode")
-                        .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)")
                         .HasColumnName("module_code");
@@ -1470,6 +1554,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("text")
                         .HasColumnName("validation_requirement");
 
+                    b.Property<Guid?>("VerificationCategoryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("verification_category_id");
+
                     b.Property<string>("WirelessDrive")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
@@ -1480,11 +1568,17 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.HasIndex("ApplicationNo")
                         .IsUnique();
 
+                    b.HasIndex("ApplicantAccount", "Status");
+
+                    b.HasIndex("AssignedLeaderAccount", "Status");
+
                     b.HasIndex("ModuleRecordId")
                         .IsUnique()
                         .HasFilter("module_record_id IS NOT NULL");
 
                     b.HasIndex("Status", "SubmittedAt");
+
+                    b.HasIndex("VerificationCategoryId", "Status");
 
                     b.ToTable("verification_applications", null, t =>
                         {
@@ -1782,7 +1876,14 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasForeignKey("SIT.DepartmentSystem.Web.Entities.VerificationApplication", "ModuleRecordId")
                         .OnDelete(DeleteBehavior.Restrict);
 
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.VerificationCategory", "VerificationCategory")
+                        .WithMany("Applications")
+                        .HasForeignKey("VerificationCategoryId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("ModuleRecord");
+
+                    b.Navigation("VerificationCategory");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationApplicationFile", b =>
@@ -1868,6 +1969,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationApplication", b =>
                 {
                     b.Navigation("Files");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationCategory", b =>
+                {
+                    b.Navigation("Applications");
                 });
 #pragma warning restore 612, 618
         }

@@ -1,0 +1,107 @@
+@page "/verification-applications/{Id:guid}"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using SIT.DepartmentSystem.Web.Entities
+@inject IVerificationApplicationService Applications
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Nav
+
+<h3 class="page-title">驗證申請明細</h3>
+
+@if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
+@if (_loading) { <div class="surface-card">載入中...</div> }
+else if (_item is not null)
+{
+    <div class="surface-card">
+        <div class="detail-grid">
+            <div><span class="label">申請編號</span><strong>@_item.ApplicationNo</strong></div>
+            <div><span class="label">狀態</span><strong>@StatusText(_item.Status)</strong></div>
+            <div><span class="label">驗證類別</span><strong>@Display(_item.CategoryName)</strong></div>
+            <div><span class="label">專案名稱</span><strong>@_item.ProjectName</strong></div>
+            <div><span class="label">客戶</span><strong>@Display(_item.Customer)</strong></div>
+            <div><span class="label">產品型號</span><strong>@Display(_item.ProductModel)</strong></div>
+            <div><span class="label">要求完成日期</span><strong>@_item.RequestedFinishDate?.ToString("yyyy-MM-dd")</strong></div>
+            <div><span class="label">Sample Ready</span><strong>@_item.SampleReadyDate?.ToString("yyyy-MM-dd")</strong></div>
+            <div class="full"><span class="label">驗證需求</span><div>@Display(_item.ValidationRequirement)</div></div>
+            <div><span class="label">Hardware</span><strong>@Display(_item.HardwareVersion)</strong></div>
+            <div><span class="label">Firmware</span><strong>@Display(_item.FirmwareVersion)</strong></div>
+            <div><span class="label">Software</span><strong>@Display(_item.SoftwareVersion)</strong></div>
+            <div><span class="label">送出時間</span><strong>@FormatDate(_item.SubmittedAt)</strong></div>
+            @if (_item.Status == VerificationApplicationStatus.Accepted && !string.IsNullOrWhiteSpace(_item.ModuleRecordNo))
+            { <div><span class="label">Project / Record No</span><strong>@_item.ModuleRecordNo</strong></div> }
+        </div>
+
+        @if (_item.Status == VerificationApplicationStatus.Returned)
+        { <div class="workflow-note"><strong>退回原因：</strong>@Display(_item.ProcessingNote)</div> }
+        else if (_item.Status == VerificationApplicationStatus.Rejected)
+        { <div class="workflow-note"><strong>拒絕原因：</strong>@Display(_item.ProcessingNote)</div> }
+        else if (_item.Status == VerificationApplicationStatus.Submitted)
+        { <div class="workflow-note">等待 Team Leader 審核</div> }
+        else if (_item.Status == VerificationApplicationStatus.Accepted)
+        { <div class="workflow-note">此申請已接受並建立 CSIT Project。</div> }
+
+        <div class="form-actions">
+            @if (_item.Status is VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned)
+            {
+                <button type="button" class="btn-secondary" @onclick="Edit">修改</button>
+                <button type="button" class="btn-primary" disabled="@_working" @onclick="SubmitAsync">送出申請</button>
+            }
+            <button type="button" class="btn-secondary" @onclick="Back">返回清單</button>
+        </div>
+    </div>
+}
+
+<style>
+    .detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
+    .detail-grid .label { display:block; color:#94a3b8; font-size:.85rem; margin-bottom:4px; }
+    .detail-grid .full { grid-column:1/-1; }
+    .workflow-note { margin-top:20px; padding:14px; border-radius:10px; background:rgba(14,165,164,.12); }
+    @@media(max-width:700px){ .detail-grid { grid-template-columns:1fr; } .detail-grid .full { grid-column:auto; } }
+</style>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private VerificationApplicationDto? _item;
+    private bool _loading = true;
+    private bool _working;
+    private string? _message;
+
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    private async Task LoadAsync()
+    {
+        _loading = true; _message = null;
+        try
+        {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            _item = await Applications.GetForApplicantAsync(Id, user);
+            if (_item is null) _message = "找不到申請，或您無權存取。";
+        }
+        catch (Exception ex) { _message = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private async Task SubmitAsync()
+    {
+        _working = true; _message = null;
+        try
+        {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            _item = await Applications.SubmitAsync(Id, user);
+        }
+        catch (Exception ex) { _message = ex.Message; }
+        finally { _working = false; }
+    }
+
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private void Edit() => Nav.NavigateTo($"/verification-applications/{Id}/edit");
+    private void Back() => Nav.NavigateTo("/verification-applications");
+    private static string FormatDate(DateTime? value) => value?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "—";
+    private static string StatusText(VerificationApplicationStatus status) => status switch
+    {
+        VerificationApplicationStatus.Draft => "草稿", VerificationApplicationStatus.Submitted => "待審核",
+        VerificationApplicationStatus.Returned => "已退回", VerificationApplicationStatus.Rejected => "已拒絕",
+        VerificationApplicationStatus.Accepted => "已接受", _ => status.ToString()
+    };
+}

@@ -1,0 +1,133 @@
+@page "/verification-applications/new"
+@page "/verification-applications/{Id:guid}/edit"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using SIT.DepartmentSystem.Web.Entities
+@inject IVerificationApplicationService Applications
+@inject IVerificationCategoryService Categories
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Nav
+
+<h3 class="page-title">@(_isEdit ? "修改驗證申請" : "新增驗證申請")</h3>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="surface-card error-text">@_message</div>
+}
+
+@if (_loading)
+{
+    <div class="surface-card">載入中...</div>
+}
+else if (_canEdit)
+{
+    <div class="surface-card record-edit-card">
+        <div class="edit-grid">
+            <div class="form-row full-width">
+                <label>驗證類別 *</label>
+                <select @bind="_form.VerificationCategoryId">
+                    <option value="@Guid.Empty">請選擇</option>
+                    @foreach (var category in _categories)
+                    {
+                        <option value="@category.Id">@category.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="form-row full-width"><label>專案名稱 *</label><input @bind="_form.ProjectName" /></div>
+            <div class="form-row"><label>客戶 *</label><input @bind="_form.Customer" /></div>
+            <div class="form-row"><label>產品型號 *</label><input @bind="_form.ProductModel" /></div>
+            <div class="form-row"><label>要求完成日期 *</label><input type="date" value="@DateText(_form.RequestedFinishDate)" @onchange="e => _form.RequestedFinishDate = ParseDate(e.Value)" /></div>
+            <div class="form-row"><label>Sample Ready Date</label><input type="date" value="@DateText(_form.SampleReadyDate)" @onchange="e => _form.SampleReadyDate = ParseDate(e.Value)" /></div>
+            <div class="form-row full-width"><label>驗證需求 *</label><textarea @bind="_form.ValidationRequirement"></textarea></div>
+            <div class="form-row"><label>Sub-PU</label><input @bind="_form.SubPu" /></div>
+            <div class="form-row"><label>地點</label><input @bind="_form.Location" /></div>
+            <div class="form-row"><label>Hardware Version</label><input @bind="_form.HardwareVersion" /></div>
+            <div class="form-row"><label>Firmware Version</label><input @bind="_form.FirmwareVersion" /></div>
+            <div class="form-row"><label>Software Version</label><input @bind="_form.SoftwareVersion" /></div>
+            <div class="form-row"><label>NPI</label><input @bind="_form.Npi" /></div>
+            <div class="form-row"><label>Wireless Drive</label><input @bind="_form.WirelessDrive" /></div>
+            <div class="form-row"><label>Chipset</label><input @bind="_form.Chipset" /></div>
+            <div class="form-row"><label>Sample MAC Address</label><input @bind="_form.SampleMacAddress" /></div>
+            <div class="form-row"><label>Utility Version</label><input @bind="_form.UtilityVersion" /></div>
+            <div class="form-row"><label>DSP Model</label><input @bind="_form.DspModel" /></div>
+            <div class="form-row full-width"><label>Jira Link</label><input @bind="_form.JiraLink" /></div>
+        </div>
+        <div class="form-actions">
+            <button type="button" class="btn-primary" disabled="@_saving" @onclick="SaveAsync">儲存草稿</button>
+            <button type="button" class="btn-secondary" @onclick="Cancel">取消</button>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid? Id { get; set; }
+    private readonly UpdateVerificationApplicationRequest _form = new();
+    private List<VerificationCategoryOptionDto> _categories = [];
+    private bool _loading = true;
+    private bool _saving;
+    private bool _canEdit = true;
+    private string? _message;
+    private bool _isEdit => Id.HasValue;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        try
+        {
+            _categories = await Categories.ListActiveOptionsAsync();
+            if (!_isEdit) return;
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            var item = await Applications.GetForApplicantAsync(Id!.Value, user);
+            if (item is null) { _canEdit = false; _message = "找不到申請，或您無權存取。"; return; }
+            if (item.Status is not (VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned))
+            { _canEdit = false; _message = "此申請目前不可修改。"; return; }
+            Copy(item);
+            if (item.VerificationCategoryId.HasValue && _categories.All(x => x.Id != item.VerificationCategoryId.Value))
+                _message = "原驗證類別目前已停用，請選擇新的有效類別。";
+        }
+        catch (Exception ex) { _canEdit = false; _message = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private async Task SaveAsync()
+    {
+        _saving = true; _message = null;
+        try
+        {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            VerificationApplicationDto saved;
+            if (_isEdit)
+                saved = await Applications.UpdateDraftAsync(Id!.Value, user, _form);
+            else
+                saved = await Applications.CreateDraftAsync(user, ToCreateRequest());
+            Nav.NavigateTo($"/verification-applications/{saved.Id}");
+        }
+        catch (Exception ex) { _message = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    private CreateVerificationApplicationRequest ToCreateRequest() => new()
+    {
+        VerificationCategoryId = _form.VerificationCategoryId, ProjectName = _form.ProjectName, SubPu = _form.SubPu,
+        Customer = _form.Customer, ProductModel = _form.ProductModel, RequestedFinishDate = _form.RequestedFinishDate,
+        ValidationRequirement = _form.ValidationRequirement, HardwareVersion = _form.HardwareVersion,
+        FirmwareVersion = _form.FirmwareVersion, SoftwareVersion = _form.SoftwareVersion, SampleReadyDate = _form.SampleReadyDate,
+        JiraLink = _form.JiraLink, Location = _form.Location, Npi = _form.Npi, WirelessDrive = _form.WirelessDrive,
+        Chipset = _form.Chipset, SampleMacAddress = _form.SampleMacAddress, UtilityVersion = _form.UtilityVersion, DspModel = _form.DspModel
+    };
+
+    private void Copy(VerificationApplicationDto x)
+    {
+        _form.VerificationCategoryId = x.VerificationCategoryId ?? Guid.Empty; _form.ProjectName = x.ProjectName; _form.SubPu = x.SubPu;
+        _form.Customer = x.Customer; _form.ProductModel = x.ProductModel; _form.RequestedFinishDate = x.RequestedFinishDate;
+        _form.ValidationRequirement = x.ValidationRequirement; _form.HardwareVersion = x.HardwareVersion; _form.FirmwareVersion = x.FirmwareVersion;
+        _form.SoftwareVersion = x.SoftwareVersion; _form.SampleReadyDate = x.SampleReadyDate; _form.JiraLink = x.JiraLink;
+        _form.Location = x.Location; _form.Npi = x.Npi; _form.WirelessDrive = x.WirelessDrive; _form.Chipset = x.Chipset;
+        _form.SampleMacAddress = x.SampleMacAddress; _form.UtilityVersion = x.UtilityVersion; _form.DspModel = x.DspModel;
+    }
+
+    private static string DateText(DateOnly? value) => value?.ToString("yyyy-MM-dd") ?? string.Empty;
+    private static DateOnly? ParseDate(object? value) => DateOnly.TryParse(value?.ToString(), out var date) ? date : null;
+    private void Cancel() => Nav.NavigateTo("/verification-applications");
+}

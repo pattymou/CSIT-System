@@ -21,6 +21,7 @@ public class AppDbContext : DbContext
     public DbSet<SystemOption> SystemOptions => Set<SystemOption>();
     public DbSet<VerificationApplication> VerificationApplications => Set<VerificationApplication>();
     public DbSet<VerificationApplicationFile> VerificationApplicationFiles => Set<VerificationApplicationFile>();
+    public DbSet<VerificationCategory> VerificationCategories => Set<VerificationCategory>();
     public DbSet<TestEnvironment> TestEnvironments => Set<TestEnvironment>();
     public DbSet<EquipmentGroup> EquipmentGroups => Set<EquipmentGroup>();
     public DbSet<EquipmentGroupRequirement> EquipmentGroupRequirements => Set<EquipmentGroupRequirement>();
@@ -33,6 +34,7 @@ public class AppDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ConfigureTestCatalog();
+        modelBuilder.ConfigureVerificationApplicationRouting();
 
         modelBuilder.Entity<ModuleEntity>(entity =>
         {
@@ -119,7 +121,12 @@ public class AppDbContext : DbContext
 
             entity.Property(x => x.Id).HasColumnName("id");
             entity.Property(x => x.ApplicationNo).HasColumnName("application_no").HasMaxLength(32).IsRequired();
-            entity.Property(x => x.ModuleCode).HasColumnName("module_code").HasMaxLength(100).IsRequired();
+            entity.Property(x => x.ModuleCode).HasColumnName("module_code").HasMaxLength(100);
+            entity.Property(x => x.VerificationCategoryId).HasColumnName("verification_category_id");
+            entity.Property(x => x.CategoryCode).HasColumnName("category_code").HasMaxLength(100);
+            entity.Property(x => x.CategoryName).HasColumnName("category_name").HasMaxLength(200);
+            entity.Property(x => x.AssignedLeaderAccount).HasColumnName("assigned_leader_account").HasMaxLength(100);
+            entity.Property(x => x.AssignedLeaderDisplayName).HasColumnName("assigned_leader_display_name").HasMaxLength(200);
             entity.Property(x => x.ApplicantAccount).HasColumnName("applicant_account").HasMaxLength(100).IsRequired();
             entity.Property(x => x.ApplicantName).HasColumnName("applicant_name").HasMaxLength(200).IsRequired();
             entity.Property(x => x.ApplicantEmail).HasColumnName("applicant_email").HasMaxLength(320).IsRequired();
@@ -158,10 +165,17 @@ public class AppDbContext : DbContext
             entity.HasIndex(x => x.ApplicationNo).IsUnique();
             entity.HasIndex(x => x.ModuleRecordId).IsUnique().HasFilter("module_record_id IS NOT NULL");
             entity.HasIndex(x => new { x.Status, x.SubmittedAt });
+            entity.HasIndex(x => new { x.ApplicantAccount, x.Status });
+            entity.HasIndex(x => new { x.AssignedLeaderAccount, x.Status });
+            entity.HasIndex(x => new { x.VerificationCategoryId, x.Status });
 
             entity.HasOne(x => x.ModuleRecord)
                 .WithOne()
                 .HasForeignKey<VerificationApplication>(x => x.ModuleRecordId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne(x => x.VerificationCategory)
+                .WithMany(x => x.Applications)
+                .HasForeignKey(x => x.VerificationCategoryId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

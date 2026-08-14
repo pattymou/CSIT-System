@@ -8,6 +8,7 @@ public class UpdateVerificationApplicationRequest : VerificationApplicationConte
 
 public abstract class VerificationApplicationContentRequest
 {
+    public Guid VerificationCategoryId { get; set; }
     public string ProjectName { get; set; } = string.Empty;
     public string? SubPu { get; set; }
     public string? Customer { get; set; }
@@ -32,7 +33,9 @@ public class VerificationApplicationDto
 {
     public Guid Id { get; set; }
     public string ApplicationNo { get; set; } = string.Empty;
-    public string ModuleCode { get; set; } = string.Empty;
+    public Guid? VerificationCategoryId { get; set; }
+    public string? CategoryCode { get; set; }
+    public string? CategoryName { get; set; }
     public string ApplicantAccount { get; set; } = string.Empty;
     public string ApplicantName { get; set; } = string.Empty;
     public string ApplicantEmail { get; set; } = string.Empty;
@@ -64,6 +67,8 @@ public class VerificationApplicationDto
     public DateTime? ProcessedAt { get; set; }
     public string? ProcessedBy { get; set; }
     public string? ProcessingNote { get; set; }
+    public string? ModuleRecordNo { get; set; }
+    public DateTime UpdatedAt { get; set; }
     public IReadOnlyList<VerificationApplicationFileDto> Files { get; set; } = [];
 }
 
