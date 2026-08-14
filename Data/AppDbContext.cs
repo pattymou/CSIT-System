@@ -21,9 +21,19 @@ public class AppDbContext : DbContext
     public DbSet<SystemOption> SystemOptions => Set<SystemOption>();
     public DbSet<VerificationApplication> VerificationApplications => Set<VerificationApplication>();
     public DbSet<VerificationApplicationFile> VerificationApplicationFiles => Set<VerificationApplicationFile>();
+    public DbSet<TestEnvironment> TestEnvironments => Set<TestEnvironment>();
+    public DbSet<EquipmentGroup> EquipmentGroups => Set<EquipmentGroup>();
+    public DbSet<EquipmentGroupRequirement> EquipmentGroupRequirements => Set<EquipmentGroupRequirement>();
+    public DbSet<TestCapability> TestCapabilities => Set<TestCapability>();
+    public DbSet<TestPlanTemplate> TestPlanTemplates => Set<TestPlanTemplate>();
+    public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
+    public DbSet<TestExecutionProfile> TestExecutionProfiles => Set<TestExecutionProfile>();
+    public DbSet<PlannedTestItem> PlannedTestItems => Set<PlannedTestItem>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ConfigureTestCatalog();
+
         modelBuilder.Entity<ModuleEntity>(entity =>
         {
             entity.ToTable("modules");

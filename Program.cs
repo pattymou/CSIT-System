@@ -39,6 +39,8 @@ builder.Services.AddScoped<IModuleService, ModuleService>();
 builder.Services.AddScoped<IModuleRecordService, ModuleRecordService>();
 builder.Services.AddScoped<IModuleRecordCreationService, ModuleRecordCreationService>();
 builder.Services.AddScoped<IVerificationApplicationService, VerificationApplicationService>();
+builder.Services.AddScoped<ITestCatalogService, TestCatalogService>();
+builder.Services.AddScoped<IPlannedTestItemService, PlannedTestItemService>();
 builder.Services.AddScoped<IModuleCaseService, ModuleCaseService>();
 builder.Services.AddScoped<IModuleTaskService, ModuleTaskService>();
 builder.Services.AddScoped<IMenuManagementService, MenuManagementService>();
