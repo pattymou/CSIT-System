@@ -231,7 +231,7 @@ else if (_canEdit)
         <div class="reservation-calendar-backdrop" @onclick="CloseCalendar"></div>
         <aside class="reservation-calendar-drawer" role="dialog" aria-label="設備預約">
             <div class="reservation-calendar-drawer-head"><div><p>APPARATUS RESERVATION</p><h4>@_calendarEquipment.Name</h4><span>@ReservationUi.Display(_calendarEquipment.ProductsId) · @ReservationUi.Display(_calendarEquipment.Kind) · @ReservationUi.Display(_calendarEquipment.Brand) / @ReservationUi.Display(_calendarEquipment.Model) · @ReservationUi.Display(_calendarEquipment.Place)</span></div><button type="button" class="btn-secondary" @onclick="CloseCalendar">關閉</button></div>
-            <ApparatusReservationCalendar ApparatusId="_calendarEquipment.Id" />
+            <ApparatusReservationCalendar ApparatusId="@_calendarEquipment.Id" />
             <div class="reservation-calendar-drawer-actions">
                 @if (CalendarEquipmentSelected) { <span class="hint-text">已選擇此設備</span> }
                 else if (_mode == ReservationMode.Direct) { <button type="button" class="btn-primary" @onclick="SelectCalendarEquipment">選擇此設備</button> }

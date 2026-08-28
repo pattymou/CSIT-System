@@ -20,7 +20,7 @@
     @if (_loading) { <div class="surface-card">載入設備中...</div> }
     else if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
     else if (SelectedApparatus is null) { <div class="surface-card overview-empty">請先選擇要查看的設備。</div> }
-    else { <section class="surface-card"><ApparatusReservationCalendar ApparatusId="SelectedApparatus.Id" IncludeHistory="_includeHistory" EventSelected="ShowQuickDetail" /></section> }
+    else { <section class="surface-card"><ApparatusReservationCalendar ApparatusId="@SelectedApparatus.Id" IncludeHistory="@_includeHistory" EventSelected="@ShowQuickDetail" /></section> }
 
     @if (_selected is not null)
     {
