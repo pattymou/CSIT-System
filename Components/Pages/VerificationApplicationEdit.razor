@@ -2,12 +2,12 @@
 @page "/verification-applications/{Id:guid}/edit"
 @layout RdLayout
 @rendermode InteractiveServer
-@attribute [Authorize]
+@attribute [Authorize(Policy = SystemAuthorization.Policies.RdApplicant)]
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
 @using SIT.DepartmentSystem.Web.Entities
 @inject IVerificationApplicationService Applications
-@inject IVerificationCategoryService Categories
+@inject ISystemOptionService SystemOptions
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject NavigationManager Nav
 
@@ -27,12 +27,12 @@ else if (_canEdit)
     <div class="surface-card record-edit-card">
         <div class="edit-grid">
             <div class="form-row full-width">
-                <label>驗證類別 *</label>
-                <select @bind="_form.VerificationCategoryId">
+                <label>Team *</label>
+                <select @bind="_form.TeamOptionId">
                     <option value="@Guid.Empty">請選擇</option>
-                    @foreach (var category in _categories)
+                    @foreach (var team in _teams)
                     {
-                        <option value="@category.Id">@category.Name</option>
+                        <option value="@team.Id">@team.Name</option>
                     }
                 </select>
             </div>
@@ -65,7 +65,7 @@ else if (_canEdit)
 @code {
     [Parameter] public Guid? Id { get; set; }
     private readonly UpdateVerificationApplicationRequest _form = new();
-    private List<VerificationCategoryOptionDto> _categories = [];
+    private List<SystemOptionDto> _teams = [];
     private bool _loading = true;
     private bool _saving;
     private bool _canEdit = true;
@@ -76,7 +76,7 @@ else if (_canEdit)
     {
         try
         {
-            _categories = await Categories.ListActiveOptionsAsync();
+            _teams = await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Team);
             if (!_isEdit) return;
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
             var item = await Applications.GetForApplicantAsync(Id!.Value, user);
@@ -84,8 +84,8 @@ else if (_canEdit)
             if (item.Status is not (VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned))
             { _canEdit = false; _message = "此申請目前不可修改。"; return; }
             Copy(item);
-            if (item.VerificationCategoryId.HasValue && _categories.All(x => x.Id != item.VerificationCategoryId.Value))
-                _message = "原驗證類別目前已停用，請選擇新的有效類別。";
+            if (item.TeamOptionId.HasValue && _teams.All(x => x.Id != item.TeamOptionId.Value))
+                _message = "原 Team 目前已停用，請選擇新的有效 Team。";
         }
         catch (Exception ex) { _canEdit = false; _message = ex.Message; }
         finally { _loading = false; }
@@ -110,7 +110,7 @@ else if (_canEdit)
 
     private CreateVerificationApplicationRequest ToCreateRequest() => new()
     {
-        VerificationCategoryId = _form.VerificationCategoryId, ProjectName = _form.ProjectName, SubPu = _form.SubPu,
+        TeamOptionId = _form.TeamOptionId, ProjectName = _form.ProjectName, SubPu = _form.SubPu,
         Customer = _form.Customer, ProductModel = _form.ProductModel, RequestedFinishDate = _form.RequestedFinishDate,
         ValidationRequirement = _form.ValidationRequirement, HardwareVersion = _form.HardwareVersion,
         FirmwareVersion = _form.FirmwareVersion, SoftwareVersion = _form.SoftwareVersion, SampleReadyDate = _form.SampleReadyDate,
@@ -120,7 +120,7 @@ else if (_canEdit)
 
     private void Copy(VerificationApplicationDto x)
     {
-        _form.VerificationCategoryId = x.VerificationCategoryId ?? Guid.Empty; _form.ProjectName = x.ProjectName; _form.SubPu = x.SubPu;
+        _form.TeamOptionId = x.TeamOptionId ?? Guid.Empty; _form.ProjectName = x.ProjectName; _form.SubPu = x.SubPu;
         _form.Customer = x.Customer; _form.ProductModel = x.ProductModel; _form.RequestedFinishDate = x.RequestedFinishDate;
         _form.ValidationRequirement = x.ValidationRequirement; _form.HardwareVersion = x.HardwareVersion; _form.FirmwareVersion = x.FirmwareVersion;
         _form.SoftwareVersion = x.SoftwareVersion; _form.SampleReadyDate = x.SampleReadyDate; _form.JiraLink = x.JiraLink;

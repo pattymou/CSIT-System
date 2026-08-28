@@ -1,5 +1,6 @@
 ﻿@page "/apparatus/{Id}"
 @page "/assets/{ModuleCode}/{Id}"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode InteractiveServer
 @using global::System.Net.Http.Json
 @using SIT.DepartmentSystem.Web.Services.Interfaces

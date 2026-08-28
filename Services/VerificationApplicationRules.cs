@@ -3,6 +3,12 @@ using SIT.DepartmentSystem.Web.Entities;
 
 namespace SIT.DepartmentSystem.Web.Services;
 
+internal static class VerificationApplicationWorkflow
+{
+    // Verification Application creates records in the existing verification module.
+    public const string ModuleCode = "verification";
+}
+
 internal static class VerificationApplicationSecurity
 {
     public static string GetAccount(ClaimsPrincipal user)
@@ -25,27 +31,4 @@ internal static class VerificationApplicationSecurity
         if (!string.Equals(entity.AssignedLeaderAccount, account, StringComparison.Ordinal))
             throw new UnauthorizedAccessException("The application is assigned to another team leader.");
     }
-}
-
-internal static class VerificationApplicationRoutingRules
-{
-    public static VerificationApplicationRouting Resolve(VerificationCategory category, ModuleEntity? module)
-    {
-        ArgumentNullException.ThrowIfNull(category);
-        if (!category.IsActive) throw new InvalidOperationException("Verification category is inactive.");
-        if (string.IsNullOrWhiteSpace(category.LeaderAccount)) throw new InvalidOperationException("Verification category has no leader account configured.");
-        if (module is null || !module.IsEnabled || !string.Equals(module.Code, category.ModuleCode, StringComparison.Ordinal))
-            throw new InvalidOperationException("Verification category does not reference an enabled module.");
-
-        return new VerificationApplicationRouting(
-            category.Id,
-            Required(category.Code, "category code"),
-            Required(category.Name, "category name"),
-            module.Code,
-            category.LeaderAccount.Trim().ToLowerInvariant(),
-            string.IsNullOrWhiteSpace(category.LeaderDisplayName) ? null : category.LeaderDisplayName.Trim());
-    }
-
-    private static string Required(string? value, string name) =>
-        string.IsNullOrWhiteSpace(value) ? throw new InvalidOperationException($"Verification category has no {name} configured.") : value.Trim();
 }

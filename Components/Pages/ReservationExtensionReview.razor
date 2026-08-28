@@ -1,0 +1,39 @@
+@page "/reservation-review/extensions"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@inject ReservationApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>待審續借</PageTitle>
+<h3 class="page-title">待審續借</h3>
+@if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
+else if (_loading) { <div class="surface-card">載入中...</div> }
+else
+{
+    <div class="surface-card"><div class="project-table-wrap"><table class="project-table">
+        <thead><tr><th>預約</th><th>申請人 / 部門 / 分機</th><th>原結束時間</th><th>申請結束時間</th><th>設備</th><th>操作</th></tr></thead>
+        <tbody>
+        @if (_items.Count == 0) { <tr><td colspan="6" class="empty-row">目前沒有待審續借。</td></tr> }
+        @foreach (var item in _items)
+        {
+            <tr><td><a href="/reservation-review/@item.ReservationId">@item.ReservationNo</a></td>
+                <td>@item.RequestedByName<br /><span class="hint-text">@item.ApplicantDepartment / #@item.ApplicantExtension</span></td>
+                <td><LocalDateTime Value="item.CurrentEndTimeSnapshot" /></td><td><LocalDateTime Value="item.RequestedEndTime" /></td>
+                <td>@string.Join("、", item.ApparatusNames)</td>
+                <td><button class="btn-primary" disabled="@_working" @onclick="() => ApproveAsync(item.Id)">核准</button>
+                    <button class="btn-secondary" disabled="@_working" @onclick="() => RejectAsync(item.Id)">拒絕</button></td></tr>
+        }
+        </tbody></table></div>
+        <div class="form-actions"><button class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-review")'>返回管理</button></div>
+    </div>
+}
+@code {
+    private List<ReservationExtensionRequestDto> _items = [];
+    private bool _loading = true, _working;
+    private string? _message;
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private async Task LoadAsync() { _loading = true; try { _items = await Api.PendingExtensionsAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _loading = false; } }
+    private async Task ApproveAsync(Guid id) { if (!await Api.ConfirmAsync("確定核准續借？")) return; await RunAsync(() => Api.ApproveExtensionAsync(id)); }
+    private async Task RejectAsync(Guid id) { var reason = await Api.PromptReasonAsync("請輸入拒絕原因："); if (string.IsNullOrWhiteSpace(reason)) return; await RunAsync(() => Api.RejectExtensionAsync(id, reason)); }
+    private async Task RunAsync(Func<Task<ReservationExtensionRequestDto>> action) { _working = true; _message = null; try { await action(); await LoadAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _working = false; } }
+}

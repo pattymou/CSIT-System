@@ -1,0 +1,88 @@
+@using SIT.DepartmentSystem.Web.Entities
+@inject ReservationApiClient Api
+
+<div class="apparatus-calendar">
+    <div class="apparatus-calendar-toolbar">
+        <div class="apparatus-calendar-nav"><button type="button" class="btn-secondary" @onclick="PreviousMonth">上一月</button><button type="button" class="btn-secondary" @onclick="Today">今天</button><button type="button" class="btn-secondary" @onclick="NextMonth">下一月</button></div>
+        <strong>@_month.ToString("yyyy 年 M 月")</strong>
+    </div>
+    @if (_loading) { <div class="apparatus-calendar-empty">載入預約資料中...</div> }
+    else if (!string.IsNullOrWhiteSpace(_message)) { <div class="apparatus-calendar-empty error-text">@_message</div> }
+    else
+    {
+        <div class="apparatus-calendar-scroll">
+            <div class="apparatus-calendar-grid">
+                <div class="apparatus-weekdays">@foreach (var day in Weekdays) { <div>@day</div> }</div>
+                @foreach (var week in Weeks)
+                {
+                    <div class="apparatus-calendar-week">
+                        <div class="apparatus-date-grid">@for (var index = 0; index < 7; index++) { var day = week.AddDays(index); <div class="apparatus-calendar-day @(day.Month == _month.Month ? string.Empty : "outside")">@day.Day</div> }</div>
+                        <div class="apparatus-bar-grid">
+                            @foreach (var segment in SegmentsFor(week))
+                            {
+                                <button type="button" class="apparatus-reservation-bar status-@segment.Item.Status.ToString().ToLowerInvariant() @(segment.Item.IsOverdue ? "overdue" : string.Empty)" style="grid-column:@segment.Column / span @segment.Span" @onclick="() => EventSelected.InvokeAsync(segment.Item)" @onmouseenter="(e => ShowTooltip(segment.Item, e))" @onmousemove="(e => ShowTooltip(segment.Item, e))" @onmouseleave="HideTooltip">
+                                    @BarText(segment.Item)
+                                </button>
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        </div>
+    }
+    @if (_hovered is not null)
+    {
+        <div class="apparatus-calendar-tooltip" style="left:@(_tooltipX)px;top:@(_tooltipY)px">
+            <strong>@_hovered.ReservationNo</strong><span>@_hovered.ApplicantDepartment</span><span>@_hovered.ApplicantName　#@ReservationUi.Display(_hovered.ApplicantExtension)</span><span><LocalDateTime Value="_hovered.StartTime" /> ～ <LocalDateTime Value="_hovered.EndTime" /></span><span>@StatusText(_hovered.Status)</span><span>@ReservationUi.Display(_hovered.Purpose)</span>
+        </div>
+    }
+</div>
+
+<style>
+    .apparatus-calendar { min-width:0; width:100%; }.apparatus-calendar-toolbar { display:flex; justify-content:space-between; align-items:center; gap:12px; margin-bottom:14px; }.apparatus-calendar-nav { display:flex; flex-wrap:wrap; gap:8px; }.apparatus-calendar-scroll { min-width:0; overflow-x:auto; }.apparatus-calendar-grid { width:100%; min-width:0; border:1px solid rgba(148,163,184,.16); border-radius:12px; overflow:hidden; }.apparatus-weekdays,.apparatus-date-grid,.apparatus-bar-grid { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); }.apparatus-weekdays { background:rgba(15,23,38,.82); }.apparatus-weekdays div { padding:9px 6px; color:#94a3b8; text-align:center; font-size:.78rem; font-weight:700; }.apparatus-calendar-week { display:grid; grid-template-rows:30px minmax(34px,auto); min-height:0; border-top:1px solid rgba(148,163,184,.13); }.apparatus-date-grid { grid-row:1; position:static; }.apparatus-calendar-day { min-height:30px; padding:5px 7px; color:#cbd5e1; border-right:1px solid rgba(148,163,184,.09); font-size:.79rem; }.apparatus-calendar-day.outside { opacity:.35; }.apparatus-bar-grid { grid-row:2; min-height:34px; position:static; z-index:1; grid-auto-rows:25px; gap:3px 0; padding:4px 0 8px; }.apparatus-reservation-bar { min-width:0; min-height:25px; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; text-align:left; border:0; border-left:3px solid #2dd4bf; border-radius:0; background:#115e59; color:#f8fafc; padding:3px 7px; font-size:.76rem; cursor:pointer; box-shadow:none; transform:none; }.apparatus-reservation-bar:hover { filter:brightness(1.14); transform:none; }.apparatus-reservation-bar.status-pending { background:#854d0e; border-color:#facc15; }.apparatus-reservation-bar.status-borrowed { background:#1e40af; border-color:#60a5fa; }.apparatus-reservation-bar.overdue { background:#991b1b; border-color:#fca5a5; }.apparatus-calendar-empty { padding:26px 12px; color:#94a3b8; text-align:center; border:1px dashed rgba(148,163,184,.25); border-radius:12px; }.apparatus-calendar-tooltip { position:fixed; z-index:200; display:grid; gap:3px; width:min(290px,calc(100vw - 24px)); padding:12px; border:1px solid rgba(56,189,248,.35); border-radius:10px; background:#111b28; box-shadow:0 16px 36px rgba(2,6,23,.55); color:#dbe5f2; font-size:.82rem; pointer-events:none; }.apparatus-calendar-tooltip strong { color:#f8fafc; }.apparatus-calendar-tooltip span { line-height:1.4; }
+    @@media(max-width:640px) { .apparatus-calendar-toolbar { align-items:flex-start; flex-direction:column; }.apparatus-calendar-nav button { padding:.65rem .8rem; } }
+</style>
+
+@code {
+    [Parameter, EditorRequired] public string ApparatusId { get; set; } = string.Empty;
+    [Parameter] public bool IncludeHistory { get; set; }
+    [Parameter] public EventCallback<ReservationOverviewDto> EventSelected { get; set; }
+    private static readonly string[] Weekdays = ["一", "二", "三", "四", "五", "六", "日"];
+    private DateTime _month = new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private List<ReservationOverviewDto> _items = [];
+    private bool _loading;
+    private string? _message;
+    private string _loadedApparatusId = string.Empty;
+    private bool _loadedHistory;
+    private ReservationOverviewDto? _hovered;
+    private double _tooltipX, _tooltipY;
+    private IEnumerable<DateTime> Weeks => Enumerable.Range(0, 6).Select(x => CalendarStart.AddDays(x * 7));
+    private DateTime CalendarStart { get { var offset = ((int)_month.DayOfWeek + 6) % 7; return _month.AddDays(-offset); } }
+    protected override async Task OnParametersSetAsync()
+    {
+        if (!string.Equals(_loadedApparatusId, ApparatusId, StringComparison.Ordinal) || _loadedHistory != IncludeHistory)
+        { _loadedApparatusId = ApparatusId; _loadedHistory = IncludeHistory; _month = new(DateTime.Today.Year, DateTime.Today.Month, 1); await LoadAsync(); }
+    }
+    private async Task LoadAsync()
+    {
+        if (string.IsNullOrWhiteSpace(ApparatusId)) return;
+        _loading = true; _message = null; _hovered = null;
+        try { var from = DateTime.SpecifyKind(CalendarStart, DateTimeKind.Utc); _items = (await Api.OverviewAsync(new ReservationOverviewQuery { From = from, To = from.AddDays(42), ApparatusId = ApparatusId, IncludeHistory = IncludeHistory })).GroupBy(x => x.ReservationId).Select(x => x.First()).ToList(); }
+        catch (Exception ex) { _items = []; _message = ex.Message; }
+        finally { _loading = false; }
+    }
+    private async Task PreviousMonth() { _month = _month.AddMonths(-1); await LoadAsync(); }
+    private async Task NextMonth() { _month = _month.AddMonths(1); await LoadAsync(); }
+    private async Task Today() { _month = new(DateTime.Today.Year, DateTime.Today.Month, 1); await LoadAsync(); }
+    private IEnumerable<BarSegment> SegmentsFor(DateTime week)
+    {
+        var weekEnd = week.AddDays(7);
+        foreach (var item in _items.Where(x => x.StartTime < weekEnd && week < x.EndTime))
+        { var first = item.StartTime.Date < week ? week : item.StartTime.Date; var inclusiveLast = item.EndTime.TimeOfDay == TimeSpan.Zero ? item.EndTime.Date.AddDays(-1) : item.EndTime.Date; var last = inclusiveLast >= weekEnd ? weekEnd.AddDays(-1) : inclusiveLast; if (last >= first) yield return new(item, (first - week).Days + 1, (last - first).Days + 1); }
+    }
+    private void ShowTooltip(ReservationOverviewDto item, MouseEventArgs e) { _hovered = item; _tooltipX = Math.Min(e.ClientX + 14, Math.Max(12, e.ClientX)); _tooltipY = e.ClientY + 14; }
+    private void HideTooltip() => _hovered = null;
+    private static string BarText(ReservationOverviewDto item) => string.IsNullOrWhiteSpace(item.ApplicantExtension) ? $"{item.ApplicantDepartment}｜{item.ApplicantName}" : $"{item.ApplicantDepartment}｜{item.ApplicantName}｜#{item.ApplicantExtension}";
+    private static string StatusText(ReservationStatus status) => status switch { ReservationStatus.Draft => "草稿", ReservationStatus.Pending => "待審核", ReservationStatus.Approved => "已核准", ReservationStatus.Borrowed => "借用中", ReservationStatus.Returned => "已歸還", ReservationStatus.Rejected => "已拒絕", ReservationStatus.Cancelled => "已取消", _ => status.ToString() };
+    private sealed record BarSegment(ReservationOverviewDto Item, int Column, int Span);
+}

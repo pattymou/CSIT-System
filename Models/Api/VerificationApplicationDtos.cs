@@ -8,7 +8,7 @@ public class UpdateVerificationApplicationRequest : VerificationApplicationConte
 
 public abstract class VerificationApplicationContentRequest
 {
-    public Guid VerificationCategoryId { get; set; }
+    public Guid TeamOptionId { get; set; }
     public string ProjectName { get; set; } = string.Empty;
     public string? SubPu { get; set; }
     public string? Customer { get; set; }
@@ -33,9 +33,9 @@ public class VerificationApplicationDto
 {
     public Guid Id { get; set; }
     public string ApplicationNo { get; set; } = string.Empty;
-    public Guid? VerificationCategoryId { get; set; }
-    public string? CategoryCode { get; set; }
-    public string? CategoryName { get; set; }
+    public Guid? TeamOptionId { get; set; }
+    public string? TeamCode { get; set; }
+    public string? TeamName { get; set; }
     public string ApplicantAccount { get; set; } = string.Empty;
     public string ApplicantName { get; set; } = string.Empty;
     public string ApplicantEmail { get; set; } = string.Empty;

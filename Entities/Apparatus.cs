@@ -54,4 +54,5 @@ public class Apparatus
     public uint Xmin { get; set; }
 
     public List<ApparatusFile> Files { get; set; } = new();
+    public List<ApparatusResourceCapability> ResourceCapabilities { get; set; } = new();
 }

@@ -1,6 +1,9 @@
 ﻿@page "/system/system-options"
 @rendermode InteractiveServer
+@attribute [Authorize(Roles = "Admin")]
+@using Microsoft.AspNetCore.Authorization
 @using global::System.Net.Http.Json
+@using SIT.DepartmentSystem.Web.Components.Pages.System
 @inject HttpClient Http
 
 <h3 class="page-title">參數設定</h3>
@@ -20,8 +23,14 @@
                 <div class="option-kicker">目前管理類別</div>
                 <h3>@GetCategoryDisplayName(_selectedCategory)</h3>
                 <p>
-                    這裡只管理 <b>@GetCategoryDisplayName(_selectedCategory)</b> 的參數。
-                    新增時會自動歸到這個類別，不需要再選一次。
+                    @if (IsTeamRoutingCategory)
+                    {
+                        <text>設定各 Team 的系統共用 Leader，此設定可供整個 CSIT workflow 使用。</text>
+                    }
+                    else
+                    {
+                        <text>這裡只管理 <b>@GetCategoryDisplayName(_selectedCategory)</b> 的參數。新增時會自動歸到這個類別，不需要再選一次。</text>
+                    }
                 </p>
             </div>
 
@@ -36,6 +45,8 @@
             </div>
         </div>
 
+        @if (!IsTeamRoutingCategory)
+        {
         <div class="option-stats">
             <div class="stat-card">
                 <span>目前筆數</span>
@@ -52,8 +63,15 @@
                 <strong>@_items.Count(x => !x.IsEnabled)</strong>
             </div>
         </div>
+        }
     </div>
 
+    @if (IsTeamRoutingCategory)
+    {
+        <TeamRoutingSettings />
+    }
+    else
+    {
     <div class="surface-card option-panel">
         <div class="option-section-title">
             <div>
@@ -188,6 +206,7 @@
             </table>
         </div>
     </div>
+    }
 </div>
 
 <style>
@@ -412,13 +431,16 @@
         "Department",
         "SubPu",
         "Team",
+        "TeamLeader",
         "ApparatusKind",
         "ThreeLevelRootPath",
         "AssetRootPath",
         "TestReportRootPath"
+        ,"Reservation"
     ];
 
     private string _selectedCategory = "Customer";
+    private bool IsTeamRoutingCategory => _selectedCategory == "TeamLeader";
     private string? _message;
     private bool _isError;
     private Guid? _editingId;
@@ -460,6 +482,12 @@
 
         try
         {
+            if (IsTeamRoutingCategory)
+            {
+                _items = [];
+                return;
+            }
+
             var url = $"/api/system-options?category={Uri.EscapeDataString(_selectedCategory)}";
 
             Console.WriteLine($"[SystemOptions] Load start. category={_selectedCategory}, url={url}");
@@ -632,10 +660,12 @@
             "Department" => "部門",
             "SubPu" => "SubPU",
             "Team" => "Team",
+            "TeamLeader" => "Team Leader",
             "ApparatusKind" => "設備類別",
             "AssetRootPath" => "資產資料夾",
             "ThreeLevelRootPath" => "三層公版資料夾",
             "TestReportRootPath" => "TestReport資料夾",
+            "Reservation" => "設備預約設定",
 
             _ => category
         };

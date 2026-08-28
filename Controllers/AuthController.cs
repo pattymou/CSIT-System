@@ -1,6 +1,7 @@
 using System.Net;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SIT.DepartmentSystem.Web.Services;
 
@@ -10,9 +11,11 @@ namespace SIT.DepartmentSystem.Web.Controllers;
 public class AuthController(AdAuthenticationService ad) : Controller
 {
     [HttpGet("/")]
+    [AllowAnonymous]
     public IActionResult Root() => Redirect("/signin");
 
     [HttpGet("/signin")]
+    [AllowAnonymous]
     public ContentResult LoginPage([FromQuery] int? error = null, [FromQuery] string? returnUrl = null)
     {
         var safeReturnUrl = GetSafeReturnUrl(returnUrl);
@@ -109,6 +112,7 @@ public class AuthController(AdAuthenticationService ad) : Controller
     }
 
     [HttpPost("/auth/login")]
+    [AllowAnonymous]
     public async Task<IActionResult> Login([FromForm] string username, [FromForm] string password, [FromForm] string? returnUrl = null)
     {
         var safeReturnUrl = GetSafeReturnUrl(returnUrl);
@@ -129,6 +133,7 @@ public class AuthController(AdAuthenticationService ad) : Controller
     }
 
     [HttpGet("/auth/logout")]
+    [Authorize]
     public async Task<IActionResult> Logout()
     {
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);

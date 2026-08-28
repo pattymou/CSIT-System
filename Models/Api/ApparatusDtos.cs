@@ -13,6 +13,8 @@ public class ApparatusListItemDto
     public string? ReservationStatus { get; set; }
     public string? Place { get; set; }
     public string? Custodian { get; set; }
+    public string? Agent { get; set; }
+    public string? Note { get; set; }
 }
 
 public class ApparatusDetailDto

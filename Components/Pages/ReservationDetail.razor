@@ -1,0 +1,70 @@
+@page "/reservations/{Id:guid}"
+@layout RdLayout
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Authorize(Policy = SystemAuthorization.Policies.RdApplicant)]
+@using SIT.DepartmentSystem.Web.Entities
+@inject ReservationApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>設備預約明細</PageTitle>
+
+<div class="reservation-detail-page">
+    @if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
+    @if (_loading) { <div class="surface-card">載入中...</div> }
+    else if (_item is not null)
+    {
+        <ReservationDetailContent Item="_item" Title="設備預約明細">
+            <HeaderActions>
+                @if (_item.Status == ReservationStatus.Draft)
+                {
+                    <button type="button" class="btn-secondary" disabled="@_working" @onclick="Edit">修改</button>
+                    <button type="button" class="btn-primary" disabled="@_working" @onclick="SubmitAsync">送出預約</button>
+                }
+                @if (_item.Status is ReservationStatus.Pending or ReservationStatus.Approved) { <button type="button" class="btn-secondary" disabled="@_working" @onclick="CancelAsync">取消預約</button> }
+                <button type="button" class="btn-secondary" disabled="@_working" @onclick="Back">返回清單</button>
+            </HeaderActions>
+        </ReservationDetailContent>
+
+        @if (_item.Status is ReservationStatus.Approved or ReservationStatus.Borrowed)
+        {
+            <section class="reservation-detail-card reservation-extension-card">
+                <h2>申請續借</h2>
+                <p>目前結束時間：<LocalDateTime Value="_item.EndTime" />；每次最多延長 @(_settings?.MaxExtensionDays ?? 7) 天。</p>
+                @if (_item.ExtensionRequests.Any(x => x.Status == ReservationExtensionRequestStatus.Pending))
+                {
+                    var pending = _item.ExtensionRequests.First(x => x.Status == ReservationExtensionRequestStatus.Pending);
+                    <p>待審的新結束時間：<LocalDateTime Value="pending.RequestedEndTime" /></p>
+                    <button class="btn-secondary" disabled="@_working" @onclick="() => CancelExtensionAsync(pending.Id)">取消續借申請</button>
+                }
+                else { <div class="reservation-extension-actions"><input type="datetime-local" value="@_extensionEndLocal" @onchange="ExtensionEndChanged" /><button class="btn-primary" disabled="@_working" @onclick="RequestExtensionAsync">送出續借申請</button></div> }
+            </section>
+        }
+    }
+</div>
+
+<style>
+    .reservation-detail-page { max-width:1280px; margin:0 auto; padding-bottom:28px; }
+    .reservation-extension-card p { margin:0; color:#cbd5e1; line-height:1.55; }.reservation-extension-actions { display:flex; align-items:center; gap:12px; margin-top:14px; }.reservation-extension-actions input { max-width:290px; }
+    @@media(max-width:760px) { .reservation-extension-actions { align-items:stretch; flex-direction:column; }.reservation-extension-actions input { max-width:none; } }
+</style>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    [Parameter] public string BasePath { get; set; } = "/reservations";
+    private ReservationDetailDto? _item;
+    private bool _loading = true;
+    private bool _working;
+    private string? _message;
+    private string _extensionEndLocal = string.Empty;
+    private ReservationPolicySettings? _settings;
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    private async Task LoadAsync() { _loading = true; _message = null; try { _item = await Api.GetAsync(Id); _settings = await Api.GetPolicySettingsAsync(); _extensionEndLocal = await Api.UtcToLocalInputAsync(_item.EndTime.AddDays(1)); } catch (Exception ex) { _item = null; _message = ex.Message; } finally { _loading = false; } }
+    private async Task SubmitAsync() { if (await Api.ConfirmAsync("確定送出此設備預約？")) await ExecuteAsync(() => Api.SubmitAsync(Id)); }
+    private async Task CancelAsync() { var reason = await Api.PromptReasonAsync("請輸入取消原因（可留空）："); if (reason is null || !await Api.ConfirmAsync("確定取消此設備預約？")) return; await ExecuteAsync(() => Api.CancelAsync(Id, reason)); }
+    private async Task ExecuteAsync(Func<Task<ReservationDetailDto>> action) { _working = true; _message = null; try { _item = await action(); } catch (Exception ex) { _message = ex.Message; } finally { _working = false; } }
+    private async Task RequestExtensionAsync() { _working = true; _message = null; try { await Api.RequestExtensionAsync(Id, await Api.LocalInputToUtcAsync(_extensionEndLocal)); await LoadAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _working = false; } }
+    private void ExtensionEndChanged(ChangeEventArgs e) => _extensionEndLocal = e.Value?.ToString() ?? string.Empty;
+    private async Task CancelExtensionAsync(Guid extensionId) { if (!await Api.ConfirmAsync("確定取消這筆續借申請？")) return; _working = true; try { await Api.CancelExtensionAsync(extensionId); await LoadAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _working = false; } }
+    private void Edit() => Nav.NavigateTo($"{BasePath}/{Id}/edit");
+    private void Back() => Nav.NavigateTo(BasePath);
+}

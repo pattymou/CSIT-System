@@ -12,6 +12,4 @@ public class VerificationCategory
     public int DisplayOrder { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
-
-    public ICollection<VerificationApplication> Applications { get; set; } = new List<VerificationApplication>();
 }

@@ -1,0 +1,77 @@
+@page "/reservation-review/{Id:guid}"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@using SIT.DepartmentSystem.Web.Entities
+@inject ReservationApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>設備預約審核</PageTitle>
+
+<div class="reservation-detail-page reservation-review-page">
+    @if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
+    @if (_loading) { <div class="surface-card">載入中...</div> }
+    else if (_item is not null)
+    {
+        <ReservationDetailContent Item="_item" Title="設備預約審核" />
+
+        @if (_item.ExtensionRequests.Any())
+        {
+            <section class="reservation-detail-card review-extension-card">
+                <h2>續借申請</h2>
+                <div class="review-extension-list">
+                    @foreach (var extension in _item.ExtensionRequests.OrderByDescending(x => x.RequestedAt))
+                    {
+                        <article class="review-extension-item">
+                            <div><span>@ExtensionStatusText(extension.Status)</span><strong><LocalDateTime Value="extension.CurrentEndTimeSnapshot" /> → <LocalDateTime Value="extension.RequestedEndTime" /></strong><p>@extension.RequestedByName · <LocalDateTime Value="extension.RequestedAt" /></p></div>
+                            @if (extension.Status == ReservationExtensionRequestStatus.Pending)
+                            {
+                                <div class="review-extension-actions"><button class="btn-primary" disabled="@_working" @onclick="() => ApproveExtensionAsync(extension.Id)">核准續借</button><button class="btn-secondary" disabled="@_working" @onclick="() => RejectExtensionAsync(extension.Id)">拒絕續借</button></div>
+                            }
+                        </article>
+                    }
+                </div>
+            </section>
+        }
+
+        <section class="reservation-detail-card review-action-panel">
+            <div><p class="review-action-kicker">REVIEW ACTION</p><h2>審核處理</h2><p class="review-action-hint">僅顯示目前狀態允許的操作。</p></div>
+            <div class="review-action-buttons">
+                @if (_item.Status == ReservationStatus.Pending)
+                {
+                    <button type="button" class="btn-secondary review-reject-button" disabled="@_working" @onclick="RejectAsync">拒絕</button>
+                    <button type="button" class="btn-primary" disabled="@_working" @onclick="ApproveAsync">核准</button>
+                }
+                @if (_item.Status == ReservationStatus.Approved) { <button type="button" class="btn-primary" disabled="@_working" @onclick="CheckoutAsync">標示為已借出</button> }
+                @if (_item.Status == ReservationStatus.Borrowed) { <button type="button" class="btn-primary" disabled="@_working" @onclick="ReturnAsync">確認歸還</button> }
+                @if (_working) { <span class="hint-text">處理中...</span> }
+                <button type="button" class="btn-secondary review-back-button" disabled="@_working" @onclick="Back">返回設備預約管理</button>
+            </div>
+        </section>
+    }
+</div>
+
+<style>
+    .reservation-detail-page { max-width:1280px; margin:0 auto; padding-bottom:28px; }
+    .review-extension-list { display:grid; gap:10px; }.review-extension-item { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:14px; border:1px solid rgba(148,163,184,.13); border-radius:12px; background:rgba(15,23,38,.48); }.review-extension-item span { display:block; margin-bottom:5px; color:#94a3b8; font-size:.8rem; font-weight:700; }.review-extension-item strong { display:block; color:#e8edf7; font-size:.9rem; }.review-extension-item p { margin:5px 0 0; color:#94a3b8; font-size:.84rem; }.review-extension-actions,.review-action-buttons { display:flex; align-items:center; flex-wrap:wrap; gap:10px; }
+    .review-action-panel { display:flex; justify-content:space-between; align-items:center; gap:20px; }.review-action-panel h2 { margin-bottom:5px; }.review-action-kicker { margin:0 0 6px; color:#67e8f9; font-size:.72rem; font-weight:800; letter-spacing:.14em; }.review-action-hint { margin:0; color:#94a3b8; font-size:.86rem; }.review-reject-button { color:#fecaca; background:linear-gradient(135deg,#5a3540,#472d38); }.review-back-button { margin-left:8px; opacity:.86; }
+    @@media(max-width:760px) { .review-extension-item,.review-action-panel { align-items:stretch; flex-direction:column; }.review-extension-actions,.review-action-buttons { width:100%; }.review-extension-actions button,.review-action-buttons button { flex:1 1 auto; }.review-back-button { margin-left:0; } }
+</style>
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private ReservationDetailDto? _item;
+    private bool _loading = true;
+    private bool _working;
+    private string? _message;
+    protected override async Task OnParametersSetAsync() => await LoadAsync();
+    private async Task LoadAsync() { _loading = true; _message = null; try { _item = await Api.GetAsync(Id); } catch (Exception ex) { _item = null; _message = ex.Message; } finally { _loading = false; } }
+    private async Task ApproveAsync() { if (await Api.ConfirmAsync("確定核准此設備預約？")) await ExecuteAsync(() => Api.ApproveAsync(Id)); }
+    private async Task RejectAsync() { var reason = await Api.PromptReasonAsync("請輸入拒絕原因："); if (reason is null) return; if (string.IsNullOrWhiteSpace(reason)) { _message = "拒絕原因不可空白。"; return; } if (await Api.ConfirmAsync("確定拒絕此設備預約？")) await ExecuteAsync(() => Api.RejectAsync(Id, reason)); }
+    private async Task CheckoutAsync() { if (await Api.ConfirmAsync("確定將設備標示為已借出？")) await ExecuteAsync(() => Api.CheckoutAsync(Id)); }
+    private async Task ReturnAsync() { if (await Api.ConfirmAsync("確定設備已歸還？")) await ExecuteAsync(() => Api.ReturnAsync(Id)); }
+    private async Task ExecuteAsync(Func<Task<ReservationDetailDto>> action) { _working = true; _message = null; try { _item = await action(); } catch (Exception ex) { _message = ex.Message; } finally { _working = false; } }
+    private async Task ApproveExtensionAsync(Guid id) { if (!await Api.ConfirmAsync("確定核准續借？")) return; _working = true; try { await Api.ApproveExtensionAsync(id); await LoadAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _working = false; } }
+    private async Task RejectExtensionAsync(Guid id) { var reason = await Api.PromptReasonAsync("請輸入拒絕原因："); if (string.IsNullOrWhiteSpace(reason)) return; _working = true; try { await Api.RejectExtensionAsync(id, reason); await LoadAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _working = false; } }
+    private static string ExtensionStatusText(ReservationExtensionRequestStatus status) => status switch { ReservationExtensionRequestStatus.Pending => "待審核", ReservationExtensionRequestStatus.Approved => "已核准", ReservationExtensionRequestStatus.Rejected => "已拒絕", ReservationExtensionRequestStatus.Cancelled => "已取消", _ => status.ToString() };
+    private void Back() => Nav.NavigateTo("/reservation-review");
+}

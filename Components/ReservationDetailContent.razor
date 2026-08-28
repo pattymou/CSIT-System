@@ -1,0 +1,141 @@
+@using SIT.DepartmentSystem.Web.Entities
+
+<header class="reservation-detail-header">
+    <div>
+        <p class="reservation-detail-kicker">RESERVATION DETAIL</p>
+        <h1>@Title</h1>
+        <p class="reservation-number">@Item.ReservationNo</p>
+    </div>
+    <div class="reservation-header-side">
+        <span class="reservation-status-badge @StatusCss(Item.Status)">@StatusText(Item.Status)</span>
+        @if (HeaderActions is not null)
+        {
+            <div class="reservation-header-actions">@HeaderActions</div>
+        }
+    </div>
+</header>
+
+<section class="reservation-detail-card">
+    <h2>預約資訊</h2>
+    <div class="reservation-definition-grid">
+        <div class="reservation-definition-item"><span>設備配置方式</span><strong>@(Item.Mode == ReservationMode.Environment ? "依測試環境配置" : "自行選擇設備")</strong></div>
+        <div class="reservation-definition-item"><span>借用期間</span><strong>@DurationText(Item.StartTime, Item.EndTime)</strong></div>
+        <div class="reservation-definition-item"><span>開始時間</span><strong><LocalDateTime Value="Item.StartTime" /></strong></div>
+        <div class="reservation-definition-item"><span>結束時間</span><strong><LocalDateTime Value="Item.EndTime" /></strong></div>
+        @if (Item.Mode == ReservationMode.Environment)
+        {
+            <div class="reservation-definition-item"><span>測試環境</span><strong>@Snapshot(Item.TestEnvironmentNameSnapshot, Item.TestEnvironmentCodeSnapshot)</strong></div>
+            <div class="reservation-definition-item"><span>Profile</span><strong>@Snapshot(Item.TestExecutionProfileNameSnapshot, Item.TestExecutionProfileCodeSnapshot)</strong></div>
+            <div class="reservation-definition-item"><span>Equipment Group</span><strong>@Snapshot(Item.EquipmentGroupNameSnapshot, Item.EquipmentGroupCodeSnapshot)</strong></div>
+        }
+    </div>
+</section>
+
+<section class="reservation-detail-card">
+    <h2>測試 / 專案資訊</h2>
+    <div class="reservation-definition-grid">
+        <div class="reservation-definition-item reservation-definition-full"><span>任務名稱 / 預約用途</span><strong>@ReservationUi.Display(Item.Purpose)</strong></div>
+        <div class="reservation-definition-item"><span>機種名稱</span><strong>@ReservationUi.Display(Item.ProductModelName)</strong></div>
+        <div class="reservation-definition-item"><span>客戶</span><strong>@ReservationUi.Display(Item.Customer)</strong></div>
+        <div class="reservation-definition-item"><span>專案 / 機種 Sub-PU</span><strong>@ReservationUi.Display(Item.ProjectSubPu)</strong></div>
+        @if (!string.IsNullOrWhiteSpace(Item.Note))
+        {
+            <div class="reservation-definition-item reservation-definition-full"><span>Reservation 備註</span><strong class="reservation-multiline">@Item.Note</strong></div>
+        }
+    </div>
+</section>
+
+<section class="reservation-detail-card">
+    <h2>申請 / 聯絡資訊</h2>
+    <div class="reservation-definition-grid">
+        <div class="reservation-definition-item"><span>申請人</span><strong>@Item.ApplicantName <small>@Item.ApplicantAccount</small></strong></div>
+        <div class="reservation-definition-item"><span>部門</span><strong>@ReservationUi.Display(Item.ApplicantDepartment)</strong></div>
+        <div class="reservation-definition-item"><span>Email</span><strong>@ReservationUi.Display(Item.ApplicantEmail)</strong></div>
+        <div class="reservation-definition-item"><span>分機</span><strong>@ReservationUi.Display(Item.ApplicantExtension)</strong></div>
+    </div>
+    <div class="reservation-contact-subsection">
+        <h3>代理聯絡人</h3>
+        <div class="reservation-definition-grid">
+            <div class="reservation-definition-item"><span>姓名</span><strong>@ReservationUi.Display(Item.ApplicantAgentName)</strong></div>
+            <div class="reservation-definition-item"><span>分機</span><strong>@ReservationUi.Display(Item.ApplicantAgentExtension)</strong></div>
+            <div class="reservation-definition-item"><span>Email</span><strong>@ReservationUi.Display(Item.ApplicantAgentEmail)</strong></div>
+        </div>
+    </div>
+</section>
+
+@if (Item.Status == ReservationStatus.Rejected || Item.Status == ReservationStatus.Cancelled)
+{
+    <section class="reservation-detail-card reservation-reason-card">
+        <h2>@(Item.Status == ReservationStatus.Rejected ? "拒絕原因" : "取消原因")</h2>
+        <p>@ReservationUi.Display(Item.Status == ReservationStatus.Rejected ? Item.RejectReason : Item.CancelReason)</p>
+    </section>
+}
+
+<section class="reservation-detail-card reservation-equipment-card">
+    <div class="reservation-section-heading"><h2>預約設備（@Item.Items.Count）</h2><span>預約當時設備資料</span></div>
+    <div class="reservation-table-wrap">
+        <table class="reservation-equipment-table">
+            <thead><tr><th>名稱</th><th>財產編號</th><th>類型</th><th>品牌 / 型號</th><th>設備編號</th><th>地點</th><th>保管人</th></tr></thead>
+            <tbody>
+                @foreach (var requirementGroup in Item.Items.GroupBy(x => x.EquipmentGroupRequirementId))
+                {
+                    @if (Item.Mode == ReservationMode.Environment)
+                    {
+                        var first = requirementGroup.First();
+                        <tr class="reservation-requirement-row"><td colspan="7"><strong>@first.RequirementResourceTypeSnapshot × @requirementGroup.Count()</strong>@if (!string.IsNullOrWhiteSpace(first.RequirementCapabilityTagSnapshot)) { <span>（@first.RequirementCapabilityTagSnapshot）</span> }</td></tr>
+                    }
+                    @foreach (var equipment in requirementGroup)
+                    {
+                        <tr><td class="equipment-name">@ReservationUi.Display(equipment.ApparatusName)</td><td>@ReservationUi.Display(equipment.ProductsId)</td><td>@ReservationUi.Display(equipment.Kind)</td><td>@ReservationUi.Display(equipment.Brand) / @ReservationUi.Display(equipment.Model)</td><td>@ReservationUi.Display(equipment.Number)</td><td>@ReservationUi.Display(equipment.Place)</td><td>@ReservationUi.Display(equipment.Custodian)</td></tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+</section>
+
+<section class="reservation-detail-card">
+    <h2>流程歷程</h2>
+    <div class="reservation-timeline">
+        @foreach (var audit in Item.AuditEvents.OrderByDescending(x => x.OccurredAt))
+        {
+            <article class="reservation-timeline-item">
+                <span class="reservation-timeline-dot" aria-hidden="true"></span>
+                <div class="reservation-timeline-time"><LocalDateTime Value="audit.OccurredAt" /></div>
+                <div class="reservation-timeline-content">
+                    <h3>@AuditActionText(audit.Action)</h3>
+                    <p class="reservation-timeline-actor">@ReservationUi.Display(audit.ActorName)</p>
+                    @if (audit.FromStatus.HasValue || audit.ToStatus.HasValue) { <p class="reservation-timeline-status">@StatusTransitionText(audit.FromStatus, audit.ToStatus)</p> }
+                    @if (!string.IsNullOrWhiteSpace(audit.Reason)) { <p class="reservation-timeline-reason">@audit.Reason</p> }
+                </div>
+            </article>
+        }
+    </div>
+</section>
+
+<style>
+    .reservation-detail-header { display:flex; justify-content:space-between; align-items:flex-start; gap:24px; margin:0 0 22px; }
+    .reservation-detail-kicker { margin:0 0 6px; color:#67e8f9; font-size:.72rem; font-weight:800; letter-spacing:.14em; }
+    .reservation-detail-header h1 { margin:0; font-size:1.75rem; }.reservation-number { margin:7px 0 0; color:#94a3b8; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.9rem; }
+    .reservation-header-side { display:flex; flex-direction:column; align-items:flex-end; gap:12px; }.reservation-header-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:10px; }
+    .reservation-status-badge { display:inline-flex; align-items:center; min-height:32px; padding:6px 13px; border:1px solid; border-radius:999px; font-size:.86rem; font-weight:800; white-space:nowrap; }
+    .status-draft { color:#cbd5e1; background:rgba(148,163,184,.12); border-color:rgba(148,163,184,.3); }.status-pending { color:#fde68a; background:rgba(234,179,8,.12); border-color:rgba(234,179,8,.32); }.status-approved { color:#a7f3d0; background:rgba(16,185,129,.12); border-color:rgba(16,185,129,.32); }.status-borrowed { color:#bae6fd; background:rgba(14,165,233,.12); border-color:rgba(14,165,233,.32); }.status-returned { color:#bbf7d0; background:rgba(34,197,94,.11); border-color:rgba(34,197,94,.3); }.status-rejected,.status-cancelled { color:#fecaca; background:rgba(239,68,68,.11); border-color:rgba(239,68,68,.3); }
+    .reservation-detail-card { margin-bottom:18px; padding:22px; border:1px solid rgba(148,163,184,.16); border-radius:18px; background:linear-gradient(180deg,rgba(18,27,38,.94),rgba(12,20,31,.94)); }.reservation-detail-card h2 { margin:0 0 18px; font-size:1.08rem; }
+    .reservation-definition-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px 22px; }.reservation-definition-item { min-width:0; padding-bottom:12px; border-bottom:1px solid rgba(148,163,184,.11); }.reservation-definition-item span { display:block; margin-bottom:5px; color:#94a3b8; font-size:.8rem; font-weight:700; }.reservation-definition-item strong { display:block; color:#e8edf7; font-size:.95rem; font-weight:650; overflow-wrap:anywhere; }.reservation-definition-item small { margin-left:5px; color:#94a3b8; font-size:.79rem; font-weight:500; }.reservation-definition-full { grid-column:1/-1; }.reservation-multiline { white-space:pre-wrap; line-height:1.55; }
+    .reservation-contact-subsection { margin-top:20px; padding-top:18px; border-top:1px solid rgba(148,163,184,.14); }.reservation-contact-subsection h3 { margin:0 0 14px; color:#cbd5e1; font-size:.93rem; }.reservation-reason-card p { margin:0; color:#cbd5e1; line-height:1.55; }
+    .reservation-section-heading { display:flex; justify-content:space-between; align-items:baseline; gap:16px; margin-bottom:18px; }.reservation-section-heading h2 { margin:0; }.reservation-section-heading span { color:#94a3b8; font-size:.82rem; }.reservation-table-wrap { overflow-x:auto; border:1px solid rgba(148,163,184,.14); border-radius:12px; }.reservation-equipment-table { width:100%; min-width:860px; border-collapse:collapse; }.reservation-equipment-table th { padding:12px 14px; color:#cbd5e1; background:rgba(15,23,38,.86); border-bottom:1px solid rgba(148,163,184,.16); font-size:.8rem; text-align:left; white-space:nowrap; }.reservation-equipment-table td { padding:13px 14px; color:#dbe5f2; border-bottom:1px solid rgba(148,163,184,.1); font-size:.88rem; vertical-align:top; overflow-wrap:anywhere; }.reservation-equipment-table tbody tr:not(.reservation-requirement-row):hover td { background:rgba(15,118,110,.1); }.reservation-equipment-table tbody tr:last-child td { border-bottom:0; }.reservation-equipment-table .equipment-name { color:#f1f5f9; font-weight:700; }.reservation-requirement-row td { padding:10px 14px; color:#b7f3ed; background:rgba(15,118,110,.12); font-size:.85rem; }
+    .reservation-timeline { position:relative; display:grid; gap:0; }.reservation-timeline-item { position:relative; display:grid; grid-template-columns:170px minmax(0,1fr); column-gap:20px; padding:0 0 22px 20px; }.reservation-timeline-item:not(:last-child)::before { content:""; position:absolute; top:15px; bottom:0; left:5px; width:1px; background:rgba(148,163,184,.24); }.reservation-timeline-dot { position:absolute; top:5px; left:0; width:11px; height:11px; border:2px solid #38bdf8; border-radius:50%; background:#121b26; box-shadow:0 0 0 4px rgba(56,189,248,.08); }.reservation-timeline-time { color:#94a3b8; font-size:.84rem; line-height:1.45; }.reservation-timeline-content h3 { margin:0 0 4px; color:#f1f5f9; font-size:.98rem; }.reservation-timeline-content p { margin:0; }.reservation-timeline-actor { color:#cbd5e1; font-size:.88rem; }.reservation-timeline-status { margin-top:5px !important; color:#7dd3fc; font-size:.86rem; }.reservation-timeline-reason { margin-top:8px !important; padding:9px 11px; border-left:2px solid rgba(56,189,248,.52); color:#cbd5e1; background:rgba(15,23,38,.55); border-radius:0 8px 8px 0; font-size:.87rem; line-height:1.45; }
+    @@media(max-width:760px) { .reservation-detail-header,.reservation-header-side { align-items:stretch; }.reservation-detail-header { flex-direction:column; }.reservation-header-actions { justify-content:flex-start; }.reservation-definition-grid { grid-template-columns:1fr; }.reservation-definition-full { grid-column:auto; }.reservation-timeline-item { grid-template-columns:1fr; row-gap:5px; } }
+</style>
+
+@code {
+    [Parameter, EditorRequired] public ReservationDetailDto Item { get; set; } = null!;
+    [Parameter] public string Title { get; set; } = "設備預約明細";
+    [Parameter] public RenderFragment? HeaderActions { get; set; }
+    private static string StatusCss(ReservationStatus status) => $"status-{status.ToString().ToLowerInvariant()}";
+    private static string StatusText(ReservationStatus status) => status switch { ReservationStatus.Draft => "草稿", ReservationStatus.Pending => "待審核", ReservationStatus.Approved => "已核准", ReservationStatus.Borrowed => "借用中", ReservationStatus.Returned => "已歸還", ReservationStatus.Rejected => "已拒絕", ReservationStatus.Cancelled => "已取消", _ => status.ToString() };
+    private static string Snapshot(string? name, string? code) => string.IsNullOrWhiteSpace(name) ? ReservationUi.Display(code) : string.IsNullOrWhiteSpace(code) ? name : $"{name} ({code})";
+    private static string DurationText(DateTime start, DateTime end) { var duration = end - start; return duration.TotalDays >= 1 ? $"{(int)duration.TotalDays} 天 {duration.Hours} 小時" : $"{duration.Hours} 小時 {duration.Minutes} 分鐘"; }
+    private static string AuditActionText(string action) => action switch { ReservationAuditActions.Created => "建立預約", ReservationAuditActions.Updated => "更新預約", ReservationAuditActions.Submitted => "送出預約", ReservationAuditActions.Approved => "核准預約", ReservationAuditActions.Rejected => "退回 / 拒絕預約", ReservationAuditActions.Cancelled => "取消預約", ReservationAuditActions.CheckedOut => "設備借出", ReservationAuditActions.Returned => "設備歸還", ReservationAuditActions.ExtensionRequested => "申請延長借用", ReservationAuditActions.ExtensionApproved => "核准延長借用", ReservationAuditActions.ExtensionRejected => "拒絕延長借用", ReservationAuditActions.ExtensionCancelled => "取消延長申請", _ => action };
+    private static string StatusTransitionText(ReservationStatus? from, ReservationStatus? to) => from.HasValue && to.HasValue ? $"{StatusText(from.Value)} → {StatusText(to.Value)}" : to.HasValue ? $"狀態：{StatusText(to.Value)}" : $"狀態：{StatusText(from!.Value)}";
+}

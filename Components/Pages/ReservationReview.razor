@@ -1,0 +1,82 @@
+@page "/reservation-review"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@using SIT.DepartmentSystem.Web.Entities
+@inject ReservationApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>設備預約管理</PageTitle>
+<h3 class="page-title">設備預約管理</h3>
+
+<div class="form-actions">
+    <button class="btn-secondary" @onclick='() => Nav.NavigateTo("/staff/reservations")'>返回設備預約管理</button>
+    <button class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-review/extensions")'>待審續借</button>
+    <button class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-overdue")'>逾期未歸還</button>
+</div>
+
+<div class="form-actions reservation-toolbar">
+    <div class="form-row">
+        <label>狀態</label>
+        <select @bind="_filter">
+            <option value="">全部</option>
+            @foreach (var status in Enum.GetValues<ReservationStatus>().Where(x => x != ReservationStatus.Draft))
+            {
+                <option value="@status">@ReservationUi.StatusText(status)</option>
+            }
+        </select>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
+else if (_loading) { <div class="surface-card">載入中...</div> }
+else
+{
+    <div class="surface-card">
+        <div class="project-table-wrap">
+            <table class="project-table">
+                <thead><tr><th>預約編號</th><th>申請人 / 部門</th><th>預約時間</th><th>用途</th><th>設備</th><th>狀態</th><th>建立時間</th></tr></thead>
+                <tbody>
+                    @if (!FilteredItems.Any())
+                    {
+                        <tr><td colspan="7" class="empty-row">目前沒有符合條件的設備預約。</td></tr>
+                    }
+                    else
+                    {
+                        @foreach (var item in FilteredItems)
+                        {
+                            <tr class="clickable-row" @onclick="() => Open(item.Id)">
+                                <td><strong>@item.ReservationNo</strong></td>
+                                <td>@item.ApplicantName<br /><span class="hint-text">@item.ApplicantDepartment</span></td>
+                                <td><LocalDateTime Value="item.StartTime" /> ～ <LocalDateTime Value="item.EndTime" /></td>
+                                <td>@item.Purpose</td>
+                                <td>@ReservationUi.EquipmentSummary(item.ApparatusNames, item.ItemCount)</td>
+                                <td><span class="record-status-pill">@ReservationUi.StatusText(item.Status)</span></td>
+                                <td><LocalDateTime Value="item.CreatedAt" /></td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+<style>.reservation-toolbar { justify-content:flex-start; } .reservation-toolbar .form-row { min-width:190px; margin:0; }</style>
+
+@code {
+    private List<ReservationListDto> _items = [];
+    private ReservationStatus? _filter = ReservationStatus.Pending;
+    private bool _loading = true;
+    private string? _message;
+    private IEnumerable<ReservationListDto> FilteredItems => (_filter.HasValue ? _items.Where(x => x.Status == _filter) : _items)
+        .OrderBy(x => x.Status == ReservationStatus.Pending ? 0 : 1)
+        .ThenBy(x => x.StartTime);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { _items = await Api.StaffListAsync(); }
+        catch (Exception ex) { _message = ex.Message; }
+        finally { _loading = false; }
+    }
+    private void Open(Guid id) => Nav.NavigateTo($"/reservation-review/{id}");
+}

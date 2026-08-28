@@ -1,7 +1,7 @@
 @page "/verification-applications/{Id:guid}"
 @layout RdLayout
 @rendermode InteractiveServer
-@attribute [Authorize]
+@attribute [Authorize(Policy = SystemAuthorization.Policies.RdApplicant)]
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
 @using SIT.DepartmentSystem.Web.Entities
@@ -19,7 +19,7 @@ else if (_item is not null)
         <div class="detail-grid">
             <div><span class="label">申請編號</span><strong>@_item.ApplicationNo</strong></div>
             <div><span class="label">狀態</span><strong>@StatusText(_item.Status)</strong></div>
-            <div><span class="label">驗證類別</span><strong>@Display(_item.CategoryName)</strong></div>
+            <div><span class="label">Team</span><strong>@Display(_item.TeamName)</strong></div>
             <div><span class="label">專案名稱</span><strong>@_item.ProjectName</strong></div>
             <div><span class="label">客戶</span><strong>@Display(_item.Customer)</strong></div>
             <div><span class="label">產品型號</span><strong>@Display(_item.ProductModel)</strong></div>

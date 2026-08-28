@@ -1,10 +1,12 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 
 namespace SIT.DepartmentSystem.Web.Controllers;
 
 [ApiController]
+[Authorize(Roles = "Admin")]
 [Route("api/menu-management")]
 public class MenuManagementController : ControllerBase
 {

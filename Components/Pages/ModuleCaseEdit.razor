@@ -1,5 +1,6 @@
 @page "/modules/{ModuleCode}/{RecordId:guid}/cases/new"
 @page "/modules/{ModuleCode}/{RecordId:guid}/cases/{CaseId:guid}/edit"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode InteractiveServer
 @using global::System.Net.Http.Json
 @using Microsoft.AspNetCore.Components.Forms

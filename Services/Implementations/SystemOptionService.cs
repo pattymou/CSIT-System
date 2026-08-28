@@ -57,6 +57,99 @@ public class SystemOptionService : ISystemOptionService
         return result;
     }
 
+    public Task<bool> TeamExistsAsync(Guid teamOptionId, CancellationToken cancellationToken = default) =>
+        _db.SystemOptions.AnyAsync(
+            x => x.Id == teamOptionId && x.Category == SystemOptionCategories.Team,
+            cancellationToken);
+
+    public async Task<List<TeamRoutingDto>> GetTeamRoutingsAsync(CancellationToken cancellationToken = default)
+    {
+        return await (
+            from routing in _db.TeamRoutings.AsNoTracking()
+            join team in _db.SystemOptions.AsNoTracking() on routing.TeamOptionId equals team.Id
+            orderby team.Sort, team.Name
+            select new TeamRoutingDto
+            {
+                Id = routing.Id,
+                TeamOptionId = routing.TeamOptionId,
+                TeamCode = team.Value,
+                TeamName = team.Name,
+                TeamIsEnabled = team.IsEnabled,
+                LeaderAccount = routing.LeaderAccount,
+                LeaderDisplayName = routing.LeaderDisplayName,
+                IsEnabled = routing.IsEnabled
+            })
+            .ToListAsync(cancellationToken);
+    }
+
+    public async Task<TeamLeaderResolution> GetActiveTeamLeaderAsync(
+        Guid teamOptionId,
+        CancellationToken cancellationToken = default)
+    {
+        var routing = await _db.TeamRoutings.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.TeamOptionId == teamOptionId, cancellationToken)
+            ?? throw new InvalidOperationException("The selected Team has no Team Leader configured.");
+        var team = await _db.SystemOptions.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == routing.TeamOptionId, cancellationToken)
+            ?? throw new InvalidOperationException("The selected Team does not exist.");
+
+        if (team.Category != SystemOptionCategories.Team || !team.IsEnabled)
+            throw new InvalidOperationException("The selected Team is disabled or invalid.");
+        if (!routing.IsEnabled)
+            throw new InvalidOperationException("The selected Team Leader routing is disabled.");
+        if (string.IsNullOrWhiteSpace(routing.LeaderAccount))
+            throw new InvalidOperationException("The selected Team has no Leader Account configured.");
+        if (string.IsNullOrWhiteSpace(routing.LeaderDisplayName))
+            throw new InvalidOperationException("The selected Team has no Leader Display Name configured.");
+
+        return new TeamLeaderResolution(
+            routing.TeamOptionId,
+            Required(team.Value, "Team code"),
+            Required(team.Name, "Team name"),
+            routing.LeaderAccount.Trim().ToLowerInvariant(),
+            routing.LeaderDisplayName.Trim());
+    }
+
+    public async Task<Guid> CreateTeamRoutingAsync(
+        TeamRoutingUpsertRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var values = await ValidateTeamRoutingAsync(request, null, cancellationToken);
+        var now = DateTime.UtcNow;
+        var entity = new TeamRouting
+        {
+            Id = Guid.NewGuid(),
+            TeamOptionId = request.TeamOptionId,
+            LeaderAccount = values.LeaderAccount,
+            LeaderDisplayName = values.LeaderDisplayName,
+            IsEnabled = request.IsEnabled,
+            CreatedAt = now,
+            UpdatedAt = now
+        };
+        _db.TeamRoutings.Add(entity);
+        await _db.SaveChangesAsync(cancellationToken);
+        return entity.Id;
+    }
+
+    public async Task<bool> UpdateTeamRoutingAsync(
+        Guid id,
+        TeamRoutingUpsertRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        var entity = await _db.TeamRoutings.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (entity is null) return false;
+        var values = await ValidateTeamRoutingAsync(request, id, cancellationToken);
+        entity.TeamOptionId = request.TeamOptionId;
+        entity.LeaderAccount = values.LeaderAccount;
+        entity.LeaderDisplayName = values.LeaderDisplayName;
+        entity.IsEnabled = request.IsEnabled;
+        entity.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(cancellationToken);
+        return true;
+    }
+
     public async Task<Guid> CreateAsync(SystemOptionUpsertRequest request)
     {
         Console.WriteLine($"[SystemOptionService] CreateAsync start. category={request.Category}, name={request.Name}");
@@ -164,6 +257,32 @@ public class SystemOptionService : ISystemOptionService
         if (string.IsNullOrWhiteSpace(request.Name))
             throw new InvalidOperationException("顯示名稱不可空白");
     }
+
+    private async Task<(string LeaderAccount, string LeaderDisplayName)> ValidateTeamRoutingAsync(
+        TeamRoutingUpsertRequest request,
+        Guid? excludedId,
+        CancellationToken cancellationToken)
+    {
+        if (request.TeamOptionId == Guid.Empty) throw new ArgumentException("Team is required.", nameof(request));
+        var leaderAccount = Required(request.LeaderAccount, "Leader Account").ToLowerInvariant();
+        var leaderDisplayName = Required(request.LeaderDisplayName, "Leader Display Name");
+
+        if (!await _db.SystemOptions.AnyAsync(
+                x => x.Id == request.TeamOptionId && x.Category == SystemOptionCategories.Team,
+                cancellationToken))
+            throw new InvalidOperationException("Team must reference an existing Team parameter.");
+        if (await _db.TeamRoutings.AnyAsync(
+                x => x.TeamOptionId == request.TeamOptionId && (!excludedId.HasValue || x.Id != excludedId.Value),
+                cancellationToken))
+            throw new InvalidOperationException("The selected Team already has a Team Leader mapping.");
+
+        return (leaderAccount, leaderDisplayName);
+    }
+
+    private static string Required(string? value, string name) =>
+        string.IsNullOrWhiteSpace(value)
+            ? throw new InvalidOperationException($"{name} is required.")
+            : value.Trim();
 
     private static SystemOptionDto ToDto(SystemOption x)
     {

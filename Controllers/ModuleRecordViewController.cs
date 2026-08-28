@@ -1,10 +1,13 @@
 ﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 
 namespace SIT.DepartmentSystem.Web.Controllers;
 
 [ApiController]
+[Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 [Route("api/module-record-view")]
 public class ModuleRecordViewController : ControllerBase
 {

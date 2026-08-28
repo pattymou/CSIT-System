@@ -1,0 +1,55 @@
+@page "/reservations/overview"
+@layout RdLayout
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Authorize(Policy = SystemAuthorization.Policies.RdApplicant)]
+@using SIT.DepartmentSystem.Web.Entities
+@inject ReservationApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>設備預約總覽</PageTitle>
+<div class="reservation-overview-page">
+    <div class="reservation-overview-header"><div><p>RESERVATION OVERVIEW</p><h3 class="page-title">設備預約總覽</h3></div><div class="form-actions"><button class="btn-secondary" @onclick='() => Nav.NavigateTo(BasePath)'>我的預約</button><button class="btn-primary" @onclick='() => Nav.NavigateTo($"{BasePath}/new")'>新增預約</button>@if (StaffWorkspace) { <button class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-review")'>設備預約管理</button> }</div></div>
+
+    <section class="surface-card apparatus-picker-card">
+        <div class="form-row"><label>設備 *</label><input @bind="_keyword" @bind:event="oninput" placeholder="搜尋名稱、財產編號、類型、品牌、型號、編號或地點" /></div>
+        <div class="form-row"><label>選擇設備</label><select @bind="_apparatusId"><option value="">請選擇要查看的設備</option>@foreach (var item in FilteredEquipment) { <option value="@item.Id">@item.Name · @ReservationUi.Display(item.ProductsId) · @ReservationUi.Display(item.Kind) · @ReservationUi.Display(item.Place)</option> }</select></div>
+        <label class="history-toggle"><input type="checkbox" @bind="_includeHistory" /> 顯示歷史預約</label>
+        @if (SelectedApparatus is not null) { <div class="apparatus-summary"><strong>@SelectedApparatus.Name</strong><span>@ReservationUi.Display(SelectedApparatus.ProductsId) · @ReservationUi.Display(SelectedApparatus.Kind) · @ReservationUi.Display(SelectedApparatus.Brand) / @ReservationUi.Display(SelectedApparatus.Model) · @ReservationUi.Display(SelectedApparatus.Place)</span></div> }
+    </section>
+
+    @if (_loading) { <div class="surface-card">載入設備中...</div> }
+    else if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
+    else if (SelectedApparatus is null) { <div class="surface-card overview-empty">請先選擇要查看的設備。</div> }
+    else { <section class="surface-card"><ApparatusReservationCalendar ApparatusId="SelectedApparatus.Id" IncludeHistory="_includeHistory" EventSelected="ShowQuickDetail" /></section> }
+
+    @if (_selected is not null)
+    {
+        <div class="overview-drawer-backdrop" @onclick="CloseQuickDetail"></div>
+        <aside class="overview-quick-drawer" role="dialog" aria-label="預約快速明細">
+            <div class="overview-drawer-head"><div><p>RESERVATION QUICK DETAIL</p><h4>@_selected.ReservationNo</h4></div><button class="btn-secondary" @onclick="CloseQuickDetail">關閉</button></div>
+            <div class="overview-quick-grid"><div><span>狀態</span><strong>@ReservationUi.StatusText(_selected.Status)</strong></div><div><span>部門</span><strong>@_selected.ApplicantDepartment</strong></div><div><span>借用人 / 分機</span><strong>@_selected.ApplicantName　#@ReservationUi.Display(_selected.ApplicantExtension)</strong></div><div><span>期間</span><strong><LocalDateTime Value="_selected.StartTime" /> ～ <LocalDateTime Value="_selected.EndTime" /></strong></div><div><span>用途</span><strong>@ReservationUi.Display(_selected.Purpose)</strong></div><div><span>目前設備</span><strong>@SelectedApparatus?.Name</strong></div></div>
+            <button class="btn-primary" @onclick="ViewDetail">查看完整明細</button>
+        </aside>
+    }
+</div>
+
+<style>
+    .reservation-overview-page { max-width:1280px; margin:0 auto; }.reservation-overview-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:18px; }.reservation-overview-header p,.overview-drawer-head p { margin:0 0 5px; color:#67e8f9; font-size:.72rem; font-weight:800; letter-spacing:.14em; }.reservation-overview-header .page-title { margin:0; }.apparatus-picker-card { display:grid; grid-template-columns:minmax(240px,1fr) minmax(300px,1.2fr) auto; gap:14px; align-items:end; margin-bottom:16px; }.apparatus-picker-card .form-row { margin:0; }.history-toggle { padding:13px 0; white-space:nowrap; }.apparatus-summary { grid-column:1/-1; display:flex; flex-wrap:wrap; gap:8px 14px; color:#cbd5e1; font-size:.88rem; }.apparatus-summary strong { color:#f1f5f9; }.overview-empty { padding:34px; color:#94a3b8; text-align:center; }.overview-drawer-backdrop { position:fixed; inset:0; z-index:100; background:rgba(2,6,23,.56); }.overview-quick-drawer { position:fixed; z-index:101; top:0; right:0; width:min(500px,100vw); height:100vh; overflow:auto; padding:24px; border-left:1px solid rgba(148,163,184,.2); background:#111b28; box-shadow:-18px 0 42px rgba(2,6,23,.45); }.overview-drawer-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:22px; }.overview-drawer-head h4 { margin:0; font-size:1.15rem; }.overview-quick-grid { display:grid; gap:15px; margin-bottom:22px; }.overview-quick-grid div { padding-bottom:12px; border-bottom:1px solid rgba(148,163,184,.13); }.overview-quick-grid span { display:block; margin-bottom:4px; color:#94a3b8; font-size:.8rem; }.overview-quick-grid strong { display:block; color:#e8edf7; overflow-wrap:anywhere; }
+    @@media(max-width:800px) { .reservation-overview-header { flex-direction:column; }.apparatus-picker-card { grid-template-columns:1fr; }.history-toggle { padding:0; } }
+</style>
+
+@code {
+    [Parameter] public string BasePath { get; set; } = "/reservations";
+    [Parameter] public bool StaffWorkspace { get; set; }
+    private List<ApparatusListItemDto> _equipment = [];
+    private string _keyword = string.Empty, _apparatusId = string.Empty;
+    private bool _includeHistory, _loading = true;
+    private string? _message;
+    private ReservationOverviewDto? _selected;
+    private IEnumerable<ApparatusListItemDto> FilteredEquipment => _equipment.Where(x => new[] { x.Name, x.ProductsId, x.Kind, x.Brand, x.Model, x.Number, x.Place }.Any(v => v?.Contains(_keyword.Trim(), StringComparison.OrdinalIgnoreCase) == true));
+    private ApparatusListItemDto? SelectedApparatus => _equipment.FirstOrDefault(x => x.Id == _apparatusId);
+    protected override async Task OnInitializedAsync() { try { _equipment = await Api.GetBookableApparatusAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _loading = false; } }
+    private void ShowQuickDetail(ReservationOverviewDto item) => _selected = item;
+    private void CloseQuickDetail() => _selected = null;
+    private void ViewDetail() { if (_selected is not null) Nav.NavigateTo($"{BasePath}/{_selected.ReservationId}"); }
+}

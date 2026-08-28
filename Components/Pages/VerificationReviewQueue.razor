@@ -1,6 +1,6 @@
 @page "/verification-reviews"
 @rendermode InteractiveServer
-@attribute [Authorize]
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
 @inject IVerificationApplicationService Applications
@@ -24,7 +24,7 @@ else
                     @foreach (var item in _items)
                     {
                         <tr class="clickable-row" @onclick="() => Open(item.Id)">
-                            <td><strong>@item.ApplicationNo</strong></td><td>@item.CategoryName</td><td>@item.ApplicantName</td>
+                            <td><strong>@item.ApplicationNo</strong></td><td>@item.TeamName</td><td>@item.ApplicantName</td>
                             <td>@item.Department / @item.ApplicantEmail</td><td>@item.ProjectName / @item.ProductModel</td>
                             <td>@item.SubmittedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
                         </tr>

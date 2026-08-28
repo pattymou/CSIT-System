@@ -1,10 +1,13 @@
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Authorization;
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 
 namespace SIT.DepartmentSystem.Web.Controllers;
 
 [ApiController]
+[Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 public class ApparatusController : ControllerBase
 {
     private readonly IApparatusService _service;
@@ -129,8 +132,15 @@ public class ApparatusController : ControllerBase
     {
         moduleCode = NormalizeModuleCode(moduleCode);
 
-        var ok = await _service.DeleteAsync(moduleCode, id);
-        return ok ? NoContent() : NotFound("找不到資料");
+        try
+        {
+            var ok = await _service.DeleteAsync(moduleCode, id);
+            return ok ? NoContent() : NotFound("找不到資料");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(ex.Message);
+        }
     }
 
     [HttpGet("api/apparatus/{id}/files")]

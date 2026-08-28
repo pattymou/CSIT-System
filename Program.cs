@@ -30,7 +30,19 @@ builder.Services
         options.AccessDeniedPath = "/signin";
     });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(SystemAuthorization.Policies.RdApplicant, policy =>
+        policy.RequireAuthenticatedUser()
+            .RequireClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.RdApplicant));
+    options.AddPolicy(SystemAuthorization.Policies.CsitStaff, policy =>
+        policy.RequireAuthenticatedUser()
+            .RequireClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff));
+    options.AddPolicy(SystemAuthorization.Policies.ReservationUser, policy =>
+        policy.RequireAuthenticatedUser().RequireAssertion(context =>
+            context.User.HasClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.RdApplicant)
+            || context.User.HasClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff)));
+});
 
 builder.Services.AddDbContextFactory<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
@@ -39,7 +51,12 @@ builder.Services.AddScoped<IModuleService, ModuleService>();
 builder.Services.AddScoped<IModuleRecordService, ModuleRecordService>();
 builder.Services.AddScoped<IModuleRecordCreationService, ModuleRecordCreationService>();
 builder.Services.AddScoped<IVerificationApplicationService, VerificationApplicationService>();
-builder.Services.AddScoped<IVerificationCategoryService, VerificationCategoryService>();
+builder.Services.AddScoped<IReservationService, ReservationService>();
+builder.Services.AddScoped<IReservationPolicyService, ReservationPolicyService>();
+builder.Services.AddScoped<IApparatusAvailabilityService, ApparatusAvailabilityService>();
+builder.Services.AddScoped<IApparatusResourceCapabilityService, ApparatusResourceCapabilityService>();
+builder.Services.AddScoped<IResourceSchedulerService, ResourceSchedulerService>();
+builder.Services.AddScoped<ReservationApiClient>();
 builder.Services.AddScoped<ITestCatalogService, TestCatalogService>();
 builder.Services.AddScoped<IPlannedTestItemService, PlannedTestItemService>();
 builder.Services.AddScoped<IModuleCaseService, ModuleCaseService>();

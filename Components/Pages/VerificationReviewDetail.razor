@@ -1,6 +1,6 @@
 @page "/verification-reviews/{Id:guid}"
 @rendermode InteractiveServer
-@attribute [Authorize]
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
 @inject IVerificationApplicationService Applications
@@ -16,7 +16,7 @@ else if (_item is not null)
     <div class="surface-card">
         <div class="detail-grid">
             <div><span>申請編號</span><strong>@_item.ApplicationNo</strong></div>
-            <div><span>驗證類別</span><strong>@_item.CategoryName</strong></div>
+            <div><span>Team</span><strong>@_item.TeamName</strong></div>
             <div><span>申請人</span><strong>@_item.ApplicantName (@_item.ApplicantAccount)</strong></div>
             <div><span>部門 / Email</span><strong>@_item.Department / @_item.ApplicantEmail</strong></div>
             <div><span>專案</span><strong>@_item.ProjectName</strong></div>

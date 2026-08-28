@@ -1,5 +1,6 @@
 ﻿@page "/modules/{moduleCode}/edit/new"
 @page "/modules/{moduleCode}/edit/{id:guid}"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode InteractiveServer
 @using global::System.Net.Http.Json
 @inject HttpClient Http

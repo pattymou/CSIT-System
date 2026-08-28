@@ -1,7 +1,7 @@
 @page "/verification-applications"
 @layout RdLayout
 @rendermode InteractiveServer
-@attribute [Authorize]
+@attribute [Authorize(Policy = SystemAuthorization.Policies.RdApplicant)]
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
 @using SIT.DepartmentSystem.Web.Entities
@@ -28,7 +28,7 @@ else
     <div class="surface-card">
         <div class="project-table-wrap">
             <table class="project-table">
-                <thead><tr><th>申請編號</th><th>驗證類別</th><th>專案 / 產品</th><th>狀態</th><th>送出時間</th><th>更新時間</th></tr></thead>
+                <thead><tr><th>申請編號</th><th>Team</th><th>專案 / 產品</th><th>狀態</th><th>送出時間</th><th>更新時間</th></tr></thead>
                 <tbody>
                 @if (_items.Count == 0)
                 {
@@ -40,7 +40,7 @@ else
                     {
                         <tr class="clickable-row" @onclick="() => Open(item.Id)">
                             <td><strong>@item.ApplicationNo</strong></td>
-                            <td>@Display(item.CategoryName)</td>
+                            <td>@Display(item.TeamName)</td>
                             <td>@item.ProjectName / @Display(item.ProductModel)</td>
                             <td><span class="record-status-pill">@StatusText(item.Status)</span></td>
                             <td>@FormatDate(item.SubmittedAt)</td>

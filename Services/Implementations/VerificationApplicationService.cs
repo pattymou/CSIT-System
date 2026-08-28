@@ -12,13 +12,16 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
 {
     private readonly AppDbContext _db;
     private readonly IModuleRecordCreationService _moduleRecordCreation;
+    private readonly ISystemOptionService _systemOptions;
 
     public VerificationApplicationService(
         AppDbContext db,
-        IModuleRecordCreationService moduleRecordCreation)
+        IModuleRecordCreationService moduleRecordCreation,
+        ISystemOptionService systemOptions)
     {
         _db = db;
         _moduleRecordCreation = moduleRecordCreation;
+        _systemOptions = systemOptions;
     }
 
     public async Task<VerificationApplicationDto> CreateDraftAsync(
@@ -27,10 +30,10 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (request.VerificationCategoryId == Guid.Empty)
-            throw new ArgumentException("VerificationCategoryId is required.", nameof(request));
+        if (request.TeamOptionId == Guid.Empty)
+            throw new ArgumentException("TeamOptionId is required.", nameof(request));
         var applicant = await ResolveApplicantAsync(user, cancellationToken);
-        await EnsureCategoryExistsAsync(request.VerificationCategoryId, cancellationToken);
+        await EnsureTeamExistsAsync(request.TeamOptionId, cancellationToken);
 
         var now = DateTime.UtcNow;
         var sequence = await _db.Database
@@ -40,7 +43,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         var entity = VerificationApplication.CreateDraft(
             Guid.NewGuid(),
             $"VA-{now:yyyyMMdd}-{sequence:D6}",
-            request.VerificationCategoryId,
+            request.TeamOptionId,
             NormalizeAccount(applicant.ApplicantAccount),
             Normalize(applicant.ApplicantName),
             Normalize(applicant.ApplicantEmail),
@@ -61,12 +64,12 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (request.VerificationCategoryId == Guid.Empty)
-            throw new ArgumentException("VerificationCategoryId is required.", nameof(request));
+        if (request.TeamOptionId == Guid.Empty)
+            throw new ArgumentException("TeamOptionId is required.", nameof(request));
         var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await FindApplicantApplicationRequiredAsync(id, account, cancellationToken);
-        await EnsureCategoryExistsAsync(request.VerificationCategoryId, cancellationToken);
-        entity.UpdateContent(request.VerificationCategoryId, MapContent(request), DateTime.UtcNow);
+        await EnsureTeamExistsAsync(request.TeamOptionId, cancellationToken);
+        entity.UpdateContent(request.TeamOptionId, MapContent(request), DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
         return Map(entity);
     }
@@ -75,7 +78,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     {
         var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await FindApplicantApplicationRequiredAsync(id, account, cancellationToken);
-        var routing = await ResolveRoutingAsync(entity.VerificationCategoryId, cancellationToken);
+        var routing = await ResolveRoutingAsync(entity.TeamOptionId, cancellationToken);
         entity.Submit(routing, DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
         return Map(entity);
@@ -254,22 +257,29 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         return new ApplicantSnapshot(appUser.Account, appUser.DisplayName, appUser.Email, appUser.Department, null);
     }
 
-    private Task<bool> CategoryExistsAsync(Guid id, CancellationToken cancellationToken) =>
-        _db.VerificationCategories.AnyAsync(x => x.Id == id, cancellationToken);
-
-    private async Task EnsureCategoryExistsAsync(Guid id, CancellationToken cancellationToken)
+    private async Task EnsureTeamExistsAsync(Guid id, CancellationToken cancellationToken)
     {
-        if (!await CategoryExistsAsync(id, cancellationToken))
-            throw new InvalidOperationException("Verification category does not exist.");
+        if (!await _systemOptions.TeamExistsAsync(id, cancellationToken))
+            throw new InvalidOperationException("Team does not exist.");
     }
 
-    private async Task<VerificationApplicationRouting> ResolveRoutingAsync(Guid? categoryId, CancellationToken cancellationToken)
+    private async Task<VerificationApplicationRouting> ResolveRoutingAsync(Guid? teamOptionId, CancellationToken cancellationToken)
     {
-        if (!categoryId.HasValue) throw new InvalidOperationException("Verification category is required before submit.");
-        var category = await _db.VerificationCategories.AsNoTracking().SingleOrDefaultAsync(x => x.Id == categoryId.Value, cancellationToken)
-            ?? throw new InvalidOperationException("Verification category does not exist.");
-        var module = await _db.Modules.AsNoTracking().FirstOrDefaultAsync(x => x.Code == category.ModuleCode, cancellationToken);
-        return VerificationApplicationRoutingRules.Resolve(category, module);
+        if (!teamOptionId.HasValue) throw new InvalidOperationException("Team is required before submit.");
+        var teamLeader = await _systemOptions.GetActiveTeamLeaderAsync(teamOptionId.Value, cancellationToken);
+        var moduleCode = await _db.Modules.AsNoTracking()
+            .Where(x => x.Code == VerificationApplicationWorkflow.ModuleCode && x.IsEnabled)
+            .Select(x => x.Code)
+            .FirstOrDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException("The Verification Application module is missing or disabled.");
+
+        return new VerificationApplicationRouting(
+            teamLeader.TeamOptionId,
+            teamLeader.TeamCode,
+            teamLeader.TeamName,
+            moduleCode,
+            teamLeader.LeaderAccount,
+            teamLeader.LeaderDisplayName);
     }
 
     private async Task<VerificationApplication> FindApplicantApplicationRequiredAsync(Guid id, string account, CancellationToken cancellationToken)
@@ -319,9 +329,9 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     {
         Id = entity.Id,
         ApplicationNo = entity.ApplicationNo,
-        VerificationCategoryId = entity.VerificationCategoryId,
-        CategoryCode = entity.CategoryCode,
-        CategoryName = entity.CategoryName,
+        TeamOptionId = entity.TeamOptionId,
+        TeamCode = entity.TeamCode ?? entity.CategoryCode,
+        TeamName = entity.TeamName ?? entity.CategoryName,
         ApplicantAccount = entity.ApplicantAccount,
         ApplicantName = entity.ApplicantName,
         ApplicantEmail = entity.ApplicantEmail,

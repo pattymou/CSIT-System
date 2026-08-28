@@ -32,3 +32,11 @@ public class SystemOption
     [Column("updated_at")]
     public DateTime UpdatedAt { get; set; }
 }
+
+public static class SystemOptionCategories
+{
+    public const string Team = "Team";
+    public const string Reservation = "Reservation";
+    public const string Customer = "Customer";
+    public const string SubPu = "SubPu";
+}

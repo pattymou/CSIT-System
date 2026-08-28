@@ -85,7 +85,9 @@ public class ApparatusService : IApparatusService
                 Number = x.Number,
                 ReservationStatus = x.ReservationStatus,
                 Place = x.Place,
-                Custodian = x.Custodian
+                Custodian = x.Custodian,
+                Agent = x.Agent,
+                Note = x.Note
             })
             .ToListAsync();
     }
@@ -231,6 +233,10 @@ public class ApparatusService : IApparatusService
     {
         moduleCode = NormalizeModuleCode(moduleCode);
 
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT 1 FROM apparatus WHERE \"Id\" = {id} FOR UPDATE");
+
         var entity = await _db.Apparatuses
             .Include(x => x.Files)
             .FirstOrDefaultAsync(x => x.ModuleCode == moduleCode && x.Id == id);
@@ -238,6 +244,14 @@ public class ApparatusService : IApparatusService
         if (entity == null)
         {
             return false;
+        }
+
+        if (await _db.ReservationItems
+                .AsNoTracking()
+                .AnyAsync(x => x.ApparatusId == id))
+        {
+            throw new InvalidOperationException(
+                "This apparatus has reservation history and cannot be deleted. Retain the apparatus record instead.");
         }
 
         foreach (var file in entity.Files)
@@ -249,6 +263,7 @@ public class ApparatusService : IApparatusService
         _db.Apparatuses.Remove(entity);
 
         await _db.SaveChangesAsync();
+        await transaction.CommitAsync();
 
         var folder = await GetApparatusFolderAsync(moduleCode, id);
         if (Directory.Exists(folder))

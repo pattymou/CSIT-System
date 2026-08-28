@@ -1,0 +1,667 @@
+@page "/reservations/new"
+@page "/reservations/{Id:guid}/edit"
+@layout RdLayout
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Authorize(Policy = SystemAuthorization.Policies.RdApplicant)]
+@using SIT.DepartmentSystem.Web.Entities
+@inject ReservationApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>@(_isEdit ? "修改設備預約" : "新增設備預約")</PageTitle>
+<h3 class="page-title">@(_isEdit ? "修改設備預約" : "新增設備預約")</h3>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="surface-card @(_isError ? "error-text" : "workflow-note")">
+        @_message
+        @if (_submitConflict && CanAutoAssign)
+        {
+            <div class="message-action"><button type="button" class="btn-primary" disabled="@_schedulerLoading" @onclick="AutoAssignAsync">重新自動配置</button></div>
+        }
+    </div>
+}
+
+@if (_loading)
+{
+    <div class="surface-card">載入中...</div>
+}
+else if (_canEdit)
+{
+    <div class="reservation-form">
+        <section class="surface-card reservation-section">
+            <div class="reservation-section-heading"><span>1</span><div><h4>選擇設備</h4><p>先選擇預約方式與設備，再填寫借用時間及用途。</p></div></div>
+            <div class="reservation-mode-cards" role="radiogroup" aria-label="設備配置方式">
+                <label class="reservation-mode-card @(_mode == ReservationMode.Direct ? "selected" : "")">
+                    <input class="reservation-mode-radio" type="radio" name="reservation-mode" checked="@(_mode == ReservationMode.Direct)" disabled="@_isEdit" @onchange="() => SetMode(ReservationMode.Direct)" />
+                    <span class="reservation-mode-copy"><strong class="reservation-mode-title">自行選擇設備</strong><small>自己指定本次要借用的實體設備</small></span>
+                </label>
+                <label class="reservation-mode-card @(_mode == ReservationMode.Environment ? "selected" : "")">
+                    <input class="reservation-mode-radio" type="radio" name="reservation-mode" checked="@(_mode == ReservationMode.Environment)" disabled="@_isEdit" @onchange="() => SetMode(ReservationMode.Environment)" />
+                    <span class="reservation-mode-copy"><strong class="reservation-mode-title">依測試環境配置</strong><small>依測試需求選擇設備，也可由系統自動配置</small></span>
+                </label>
+            </div>
+            @if (_isEdit) { <div class="hint-text mode-lock-note">草稿建立後不可切換預約方式。</div> }
+
+        @if (_mode == ReservationMode.Direct)
+        {
+            <div class="equipment-section">
+                <div class="section-heading">
+                    <div><h4>可選設備</h4><span class="hint-text">可選擇一台或多台目前可借用的設備。</span></div>
+                    <input class="equipment-search" @bind="_keyword" @bind:event="oninput" placeholder="搜尋名稱、財產編號、類型、品牌、型號、編號或地點" />
+                </div>
+                <div class="equipment-grid">
+                    @foreach (var item in FilteredEquipment)
+                    {
+                        <article class="equipment-card @(_directSelectedIds.Contains(item.Id) ? "selected" : "")">
+                            @EquipmentCard(item)
+                            <div class="equipment-card-actions"><button type="button" class="btn-secondary" disabled="@_saving" @onclick="() => OpenCalendar(item)">查看預約</button><button type="button" class="@(_directSelectedIds.Contains(item.Id) ? "btn-secondary" : "btn-primary")" disabled="@_saving" @onclick="() => ToggleDirect(item.Id)">@(_directSelectedIds.Contains(item.Id) ? "移除" : "選擇")</button></div>
+                        </article>
+                    }
+                </div>
+                @SelectedEquipmentBlock(_directSelectedIds, true)
+            </div>
+        }
+        else
+        {
+            <div class="environment-section">
+                <div class="environment-steps">
+                    <div class="form-row"><label>Step 1　測試環境 *</label>
+                        <select value="@(_environmentId?.ToString() ?? string.Empty)" @onchange="EnvironmentChanged">
+                            <option value="">請選擇測試環境</option>
+                            @foreach (var environment in _environmentOptions) { <option value="@environment.Id">@environment.Name (@environment.Code)</option> }
+                        </select>
+                    </div>
+                    <div class="form-row"><label>Step 2　測試用途 / 設備組合 *</label>
+                        <select value="@(_profileId?.ToString() ?? string.Empty)" disabled="@(!_environmentId.HasValue)" @onchange="ProfileChanged">
+                            <option value="">請選擇方案</option>
+                            @foreach (var profile in AvailableProfiles) { <option value="@profile.Id">@profile.TestCapabilityName / @profile.EquipmentGroupName</option> }
+                        </select>
+                    </div>
+                </div>
+
+                @if (SelectedProfile is not null)
+                {
+                    <div class="catalog-summary">
+                        <strong>@SelectedProfile.EquipmentGroupName</strong>
+                        <span>測試：@SelectedProfile.TestCapabilityName　方案：@SelectedProfile.Name</span>
+                    </div>
+                    <div class="scheduler-panel">
+                        <div>
+                            <h4>自動配置設備</h4>
+                            <div class="hint-text">依目前方案與預約時段尋找符合需求且可用的設備。</div>
+                            <div class="hint-text">自動配置結果僅為目前時點的建議，設備將在送出預約時再次確認可用性。</div>
+                        </div>
+                        <button type="button" class="btn-primary" disabled="@(!CanAutoAssign)" @onclick="AutoAssignAsync">
+                            @(_schedulerLoading ? "正在配置設備…" : _schedulerStale ? "重新自動配置" : "自動配置設備")
+                        </button>
+                    </div>
+                    @if (!HasValidLocalTimeRange())
+                    {
+                        <div class="scheduler-time-hint">請先完成借用時間後再自動配置設備。</div>
+                    }
+                    @if (_schedulerStale)
+                    {
+                        <div class="scheduler-warning">預約時間已變更，目前的自動配置結果可能已失效，請重新自動配置。</div>
+                    }
+                    @if (_schedulerApplied && !_schedulerStale)
+                    {
+                        <div class="scheduler-success">已依目前時間自動配置設備。</div>
+                    }
+                    @if (_lastProposal is not null && !_lastProposal.IsFeasible)
+                    {
+                        <div class="scheduler-result scheduler-failure">
+                            <strong>目前所選時段無法配置完整設備。</strong>
+                            @ProposalResultBlock(_lastProposal)
+                        </div>
+                    }
+                    else if (_lastProposal is not null && HasOptionalUnresolved(_lastProposal))
+                    {
+                        <div class="scheduler-result scheduler-warning">
+                            <strong>必要設備已配置完成，但部分選配設備目前無法配置。</strong>
+                            @ProposalResultBlock(_lastProposal)
+                        </div>
+                    }
+                    <div class="section-heading">
+                        <div><h4>Step 3–4　依需求指定實際設備</h4><span class="hint-text">可使用自動配置後人工檢查或調整；儲存與送出仍套用正式 Resource Matching 規則。</span></div>
+                        <input class="equipment-search" @bind="_keyword" @bind:event="oninput" placeholder="搜尋可借用設備" />
+                    </div>
+                    <div class="requirement-list">
+                        @foreach (var requirement in SelectedProfile.Requirements)
+                        {
+                            var selected = GetRequirementSelection(requirement.Id);
+                            <article class="requirement-card">
+                                <div class="requirement-head">
+                                    <div><strong>@requirement.ResourceType × @requirement.Quantity</strong><span>@(requirement.Required ? "必須" : "選填")</span></div>
+                                    <div>已選 @selected.Count / @requirement.Quantity</div>
+                                </div>
+                                @if (!string.IsNullOrWhiteSpace(requirement.CapabilityTag)) { <div>Capability Tag：@requirement.CapabilityTag</div> }
+                                @if (!string.IsNullOrWhiteSpace(requirement.PreferredEquipmentId))
+                                {
+                                    <div class="preferred">建議設備：@ReservationUi.Display(requirement.PreferredEquipmentName) (@requirement.PreferredEquipmentId) @(!requirement.AllowAlternative ? "－不可替換" : "")</div>
+                                }
+                                @if (!requirement.AllowAlternative && string.IsNullOrWhiteSpace(requirement.PreferredEquipmentId))
+                                {
+                                    <div class="error-text">Catalog 設定錯誤：不允許替換但未設定建議設備。</div>
+                                }
+                                <div class="requirement-equipment">
+                                    @foreach (var item in RequirementEquipment(requirement))
+                                    {
+                                        var chosen = selected.Contains(item.Id);
+                                        var usedElsewhere = IsSelectedElsewhere(requirement.Id, item.Id);
+                                        <div class="equipment-pick @(chosen ? "selected" : "")"><button type="button" class="equipment-pick-select" disabled="@(_saving || usedElsewhere)" @onclick="() => ToggleRequirement(requirement, item.Id)"><strong>@item.Name</strong><span>@ReservationUi.Display(item.ProductsId) · @ReservationUi.Display(item.Kind) · @ReservationUi.Display(item.Place)</span>@if (chosen && IsSchedulerSuggested(requirement.Id, item.Id)) { <small class="scheduler-badge">系統建議</small> } @if (usedElsewhere) { <small>已用於其他需求</small> }</button><button type="button" class="btn-secondary equipment-calendar-button" disabled="@_saving" @onclick="() => OpenCalendar(item, requirement)">查看預約</button></div>
+                                    }
+                                </div>
+                            </article>
+                        }
+                    </div>
+                    <h4>Step 5　本次實際選中的全部設備</h4>
+                    @SelectedEquipmentBlock(AllEnvironmentSelectedIds, false)
+                }
+            </div>
+        }
+
+        </section>
+
+        <section class="surface-card reservation-section">
+            <div class="reservation-section-heading"><span>2</span><div><h4>借用時間</h4><p>請以本地時間選擇設備實際借用期間。</p></div></div>
+            <div class="time-grid">
+                <div class="form-row"><label>開始時間（本地時間）*</label><div class="datetime-control"><input @ref="_startInput" class="datetime-input" type="datetime-local" value="@_startLocal" @onchange="StartTimeChanged" /><button type="button" class="picker-button" title="選擇開始時間" @onclick="OpenStartPickerAsync" aria-label="選擇開始時間">▣</button></div></div>
+                <div class="form-row"><label>結束時間（本地時間）*</label><div class="datetime-control"><input @ref="_endInput" class="datetime-input" type="datetime-local" value="@_endLocal" @onchange="EndTimeChanged" /><button type="button" class="picker-button" title="選擇結束時間" @onclick="OpenEndPickerAsync" aria-label="選擇結束時間">▣</button></div></div>
+            </div>
+            <div class="duration-hint">
+                @if (BorrowDuration is { } duration)
+                {
+                    <span>借用期間：@DurationText(duration)</span>
+                    @if (_policySettings is not null)
+                    {
+                        <span>單次借用上限：@_policySettings.MaxBorrowDays 天</span>
+                        @if (duration > TimeSpan.FromDays(_policySettings.MaxBorrowDays)) { <strong>借用期間已超過目前單次上限 @_policySettings.MaxBorrowDays 天。</strong> }
+                    }
+                }
+                else { <span>請選擇有效的開始與結束時間。</span> }
+            </div>
+        </section>
+
+        <section class="surface-card reservation-section">
+            <div class="reservation-section-heading"><span>3</span><div><h4>測試 / 專案資訊</h4><p>填寫此次設備借用的任務與專案資訊。</p></div></div>
+            <div class="reservation-data-grid project-data-grid">
+                <div class="form-row purpose-field"><label>任務名稱 / 預約用途 *</label><textarea @bind="_purpose" placeholder="請說明設備用途"></textarea></div>
+                <div class="form-row"><label>機種名稱 *</label><input @bind="_productModelName" maxlength="300" /></div>
+                <div class="form-row"><label>客戶 *</label>
+                    <select @bind="_customer">
+                        <option value="">請選擇客戶</option>
+                        @foreach (var option in CustomerOptions) { <option value="@option.Value">@option.Label</option> }
+                    </select>
+                    @if (_applicationOptions is not null && _applicationOptions.Customers.Count == 0) { <div class="option-warning">目前尚未設定客戶選項，請聯絡系統管理者。</div> }
+                </div>
+                <div class="form-row"><label>專案 / 機種 Sub-PU *</label>
+                    <select @bind="_projectSubPu">
+                        <option value="">請選擇 Sub-PU</option>
+                        @foreach (var option in SubPuOptions) { <option value="@option.Value">@option.Label</option> }
+                    </select>
+                    @if (_applicationOptions is not null && _applicationOptions.SubPus.Count == 0) { <div class="option-warning">目前尚未設定 Sub-PU 選項，請聯絡系統管理者。</div> }
+                </div>
+                <div class="form-row full-width"><label>Reservation 備註</label><textarea @bind="_note" maxlength="2000"></textarea></div>
+            </div>
+        </section>
+
+        <section class="surface-card reservation-section">
+            <div class="reservation-section-heading"><span>4</span><div><h4>申請 / 聯絡資訊</h4><p>申請人資料由登入身份自動保留；分機與代理聯絡人可填寫。</p></div></div>
+            <div class="reservation-data-grid applicant-data-grid">
+                <div class="snapshot-field"><span>申請人</span><strong>@DisplaySnapshot(_applicantName)</strong></div>
+                <div class="snapshot-field"><span>部門</span><strong>@DisplaySnapshot(_applicantDepartment)</strong></div>
+                <div class="snapshot-field"><span>Email</span><strong>@DisplaySnapshot(_applicantEmail)</strong></div>
+                <div class="form-row extension-field"><label>分機 *</label><input @bind="_applicantExtension" maxlength="30" placeholder="例如：1234" /></div>
+                <div class="form-row"><label>代理聯絡人姓名 *</label><input @bind="_applicantAgentName" maxlength="200" /></div>
+                <div class="form-row"><label>代理聯絡人分機 *</label><input @bind="_applicantAgentExtension" maxlength="30" /></div>
+                <div class="form-row"><label>代理聯絡人 Email *</label><input @bind="_applicantAgentEmail" maxlength="320" type="email" /></div>
+            </div>
+        </section>
+
+        <div class="form-actions reservation-actions">
+            <button type="button" class="btn-secondary" disabled="@_saving" @onclick="Back">取消 / 返回</button>
+            <button type="button" class="btn-secondary" disabled="@_saving" @onclick="() => SaveAsync(false)">儲存草稿</button>
+            <button type="button" class="btn-primary" disabled="@(_saving || !CanSubmitWithApplicationOptions)" @onclick="() => SaveAsync(true)">@(_saving ? "處理中..." : "送出預約")</button>
+            @if (_savedId.HasValue) { <button type="button" class="btn-secondary" @onclick="ViewSaved">查看已儲存草稿</button> }
+        </div>
+    </div>
+
+    @if (_calendarEquipment is not null)
+    {
+        <div class="reservation-calendar-backdrop" @onclick="CloseCalendar"></div>
+        <aside class="reservation-calendar-drawer" role="dialog" aria-label="設備預約">
+            <div class="reservation-calendar-drawer-head"><div><p>APPARATUS RESERVATION</p><h4>@_calendarEquipment.Name</h4><span>@ReservationUi.Display(_calendarEquipment.ProductsId) · @ReservationUi.Display(_calendarEquipment.Kind) · @ReservationUi.Display(_calendarEquipment.Brand) / @ReservationUi.Display(_calendarEquipment.Model) · @ReservationUi.Display(_calendarEquipment.Place)</span></div><button type="button" class="btn-secondary" @onclick="CloseCalendar">關閉</button></div>
+            <ApparatusReservationCalendar ApparatusId="_calendarEquipment.Id" />
+            <div class="reservation-calendar-drawer-actions">
+                @if (CalendarEquipmentSelected) { <span class="hint-text">已選擇此設備</span> }
+                else if (_mode == ReservationMode.Direct) { <button type="button" class="btn-primary" @onclick="SelectCalendarEquipment">選擇此設備</button> }
+            </div>
+        </aside>
+    }
+}
+
+@code {
+    [Parameter] public Guid? Id { get; set; }
+    [Parameter] public string BasePath { get; set; } = "/reservations";
+    private ElementReference _startInput;
+    private ElementReference _endInput;
+    private readonly HashSet<string> _directSelectedIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<Guid, HashSet<string>> _requirementSelections = [];
+    private readonly HashSet<(Guid RequirementId, string ApparatusId)> _schedulerSuggestions = [];
+    private ApparatusListItemDto? _calendarEquipment;
+    private ReservationRequirementOptionDto? _calendarRequirement;
+    private List<ApparatusListItemDto> _equipment = [];
+    private List<ReservationEnvironmentOptionDto> _environmentOptions = [];
+    private ReservationApplicationOptionsDto? _applicationOptions;
+    private ReservationMode _mode = ReservationMode.Direct;
+    private Guid? _environmentId;
+    private Guid? _profileId;
+    private string _purpose = string.Empty;
+    private string _productModelName = string.Empty, _customer = string.Empty, _projectSubPu = string.Empty, _note = string.Empty;
+    private string _applicantAgentName = string.Empty, _applicantAgentExtension = string.Empty, _applicantAgentEmail = string.Empty;
+    private string _applicantExtension = string.Empty;
+    private string _applicantName = string.Empty, _applicantDepartment = string.Empty, _applicantEmail = string.Empty;
+    private string _startLocal = string.Empty;
+    private string _endLocal = string.Empty;
+    private string _keyword = string.Empty;
+    private bool _loading = true, _saving, _schedulerLoading, _schedulerApplied, _schedulerStale, _submitConflict, _canEdit = true, _isError = true;
+    private string? _message;
+    private ResourceAssignmentProposal? _lastProposal;
+    private ReservationPolicySettings? _policySettings;
+    private Guid? _savedId;
+    private bool _isEdit => Id.HasValue;
+    private IEnumerable<ApparatusListItemDto> FilteredEquipment => string.IsNullOrWhiteSpace(_keyword) ? _equipment : _equipment.Where(MatchesKeyword);
+    private ReservationEnvironmentOptionDto? SelectedEnvironment => _environmentOptions.FirstOrDefault(x => x.Id == _environmentId);
+    private IEnumerable<ReservationProfileOptionDto> AvailableProfiles => SelectedEnvironment?.Profiles ?? [];
+    private IEnumerable<ReservationOptionDto> CustomerOptions => WithStoredOption(_applicationOptions?.Customers ?? [], _customer);
+    private IEnumerable<ReservationOptionDto> SubPuOptions => WithStoredOption(_applicationOptions?.SubPus ?? [], _projectSubPu);
+    private ReservationProfileOptionDto? SelectedProfile => AvailableProfiles.FirstOrDefault(x => x.Id == _profileId);
+    private HashSet<string> AllEnvironmentSelectedIds => _requirementSelections.Values.SelectMany(x => x).ToHashSet(StringComparer.Ordinal);
+    private bool CanAutoAssign => _mode == ReservationMode.Environment
+        && !_saving
+        && !_schedulerLoading
+        && SelectedProfile is { Requirements.Count: > 0 }
+        && HasValidLocalTimeRange();
+    private bool CanSubmitWithApplicationOptions => _applicationOptions is { Customers.Count: > 0, SubPus.Count: > 0 };
+    private TimeSpan? BorrowDuration => DateTime.TryParse(_startLocal, out var start)
+        && DateTime.TryParse(_endLocal, out var end)
+        && start < end ? end - start : null;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        try
+        {
+            _equipment = await Api.GetBookableApparatusAsync();
+            _environmentOptions = await Api.GetEnvironmentOptionsAsync();
+            _applicationOptions = await Api.GetApplicationOptionsAsync();
+            if (_isEdit)
+            {
+                var item = await Api.GetAsync(Id!.Value);
+                if (item.Status != ReservationStatus.Draft) { _canEdit = false; _message = "只有草稿狀態的設備預約可以修改。"; return; }
+                _purpose = item.Purpose;
+                _productModelName = item.ProductModelName ?? string.Empty; _customer = item.Customer ?? string.Empty; _projectSubPu = item.ProjectSubPu ?? string.Empty; _note = item.Note ?? string.Empty;
+                _applicantExtension = item.ApplicantExtension ?? string.Empty;
+                _applicantName = item.ApplicantName;
+                _applicantDepartment = item.ApplicantDepartment;
+                _applicantEmail = item.ApplicantEmail ?? string.Empty;
+                _applicantAgentName = item.ApplicantAgentName ?? string.Empty; _applicantAgentExtension = item.ApplicantAgentExtension ?? string.Empty; _applicantAgentEmail = item.ApplicantAgentEmail ?? string.Empty;
+                _startLocal = await Api.UtcToLocalInputAsync(item.StartTime);
+                _endLocal = await Api.UtcToLocalInputAsync(item.EndTime);
+                _mode = item.Mode;
+                if (_mode == ReservationMode.Direct)
+                {
+                    foreach (var apparatusId in item.Items.Select(x => x.ApparatusId)) _directSelectedIds.Add(apparatusId);
+                }
+                else
+                {
+                    _environmentId = item.TestEnvironmentId;
+                    _profileId = item.TestExecutionProfileId;
+                    InitializeRequirementSelections(false);
+                    foreach (var reservationItem in item.Items.Where(x => x.EquipmentGroupRequirementId.HasValue))
+                        GetRequirementSelection(reservationItem.EquipmentGroupRequirementId!.Value).Add(reservationItem.ApparatusId);
+                }
+            }
+            else
+            {
+                _applicantName = _applicationOptions.Applicant.Name;
+                _applicantDepartment = _applicationOptions.Applicant.Department;
+                _applicantEmail = _applicationOptions.Applicant.Email ?? string.Empty;
+                _startLocal = await Api.UtcToLocalInputAsync(DateTime.UtcNow.AddHours(1));
+                _endLocal = await Api.UtcToLocalInputAsync(DateTime.UtcNow.AddHours(2));
+            }
+            try { _policySettings = await Api.GetPolicySettingsAsync(); }
+            catch { _policySettings = null; }
+        }
+        catch (Exception ex) { _canEdit = false; _message = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private void SetMode(ReservationMode mode) { if (_isEdit) return; _mode = mode; _message = null; ResetSchedulerState(); }
+    private void EnvironmentChanged(ChangeEventArgs e)
+    {
+        _environmentId = Guid.TryParse(e.Value?.ToString(), out var id) ? id : null;
+        var profiles = AvailableProfiles.ToList();
+        _profileId = profiles.Count == 1 ? profiles[0].Id : null;
+        InitializeRequirementSelections(true);
+        ResetSchedulerState();
+    }
+    private void ProfileChanged(ChangeEventArgs e)
+    {
+        _profileId = Guid.TryParse(e.Value?.ToString(), out var id) ? id : null;
+        InitializeRequirementSelections(true);
+        ResetSchedulerState();
+    }
+
+    private void StartTimeChanged(ChangeEventArgs e)
+    {
+        _startLocal = e.Value?.ToString() ?? string.Empty;
+        MarkSchedulerStale();
+    }
+
+    private void EndTimeChanged(ChangeEventArgs e)
+    {
+        _endLocal = e.Value?.ToString() ?? string.Empty;
+        MarkSchedulerStale();
+    }
+
+    private Task OpenStartPickerAsync() => Api.ShowDateTimePickerAsync(_startInput);
+    private Task OpenEndPickerAsync() => Api.ShowDateTimePickerAsync(_endInput);
+
+    private async Task AutoAssignAsync()
+    {
+        if (!CanAutoAssign || SelectedProfile is null || !_profileId.HasValue) return;
+        if (AllEnvironmentSelectedIds.Count != 0
+            && !await Api.ConfirmAsync("自動配置將取代目前已選設備，是否繼續？")) return;
+
+        _schedulerLoading = true;
+        _submitConflict = false;
+        _message = null;
+        _lastProposal = null;
+        try
+        {
+            var proposal = await Api.ProposeResourcesAsync(new ResourceSchedulerProposalRequest
+            {
+                TestExecutionProfileId = _profileId.Value,
+                StartTime = await Api.LocalInputToUtcAsync(_startLocal),
+                EndTime = await Api.LocalInputToUtcAsync(_endLocal)
+            });
+            _lastProposal = proposal;
+            if (!proposal.IsFeasible) return;
+
+            _requirementSelections.Clear();
+            _schedulerSuggestions.Clear();
+            foreach (var requirement in SelectedProfile.Requirements)
+                GetRequirementSelection(requirement.Id);
+            foreach (var requirement in proposal.Requirements)
+            {
+                var selected = GetRequirementSelection(requirement.EquipmentGroupRequirementId);
+                // Environment Reservation accepts an Optional requirement as either complete or omitted.
+                // Keep a partially satisfiable Optional requirement unselected so Draft/Submit remain valid.
+                if (!requirement.Required && requirement.UnresolvedQuantity > 0) continue;
+                foreach (var apparatus in requirement.SelectedApparatus)
+                {
+                    selected.Add(apparatus.ApparatusId);
+                    _schedulerSuggestions.Add((requirement.EquipmentGroupRequirementId, apparatus.ApparatusId));
+                }
+            }
+            _schedulerApplied = true;
+            _schedulerStale = false;
+            _isError = false;
+        }
+        catch (ReservationApiException ex) when (ex.StatusCode == 403)
+        {
+            _isError = true;
+            _message = "您沒有權限使用自動配置設備。";
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"自動配置失敗：{ex.Message}";
+        }
+        finally { _schedulerLoading = false; }
+    }
+    private void InitializeRequirementSelections(bool preselectPreferred)
+    {
+        _requirementSelections.Clear();
+        if (SelectedProfile is null) return;
+        foreach (var requirement in SelectedProfile.Requirements)
+        {
+            var selected = GetRequirementSelection(requirement.Id);
+            if (preselectPreferred && requirement.PreferredEquipmentBookable && requirement.Quantity == 1
+                && !string.IsNullOrWhiteSpace(requirement.PreferredEquipmentId)
+                && !AllEnvironmentSelectedIds.Contains(requirement.PreferredEquipmentId))
+                selected.Add(requirement.PreferredEquipmentId);
+        }
+    }
+
+    private async Task SaveAsync(bool submit)
+    {
+        _message = null; _isError = true;
+        if (string.IsNullOrWhiteSpace(_applicantExtension)) { _message = "請輸入分機。"; return; }
+        if (string.IsNullOrWhiteSpace(_purpose)) { _message = "請輸入預約用途。"; return; }
+        if (submit && (string.IsNullOrWhiteSpace(_applicantAgentName)
+            || string.IsNullOrWhiteSpace(_applicantAgentExtension)
+            || string.IsNullOrWhiteSpace(_applicantAgentEmail)))
+        {
+            _message = "送出預約前，請完整填寫代理聯絡人姓名、分機與 Email。";
+            return;
+        }
+        if (_mode == ReservationMode.Direct && _directSelectedIds.Count == 0) { _message = "請至少選擇一台設備。"; return; }
+        if (_mode == ReservationMode.Environment && !ValidateEnvironmentSelections(out _message)) return;
+        _saving = true;
+        try
+        {
+            var startUtc = await Api.LocalInputToUtcAsync(_startLocal);
+            var endUtc = await Api.LocalInputToUtcAsync(_endLocal);
+            if (startUtc >= endUtc) throw new InvalidOperationException("結束時間必須晚於開始時間。");
+            var items = _mode == ReservationMode.Direct ? _directSelectedIds.Select(x => new ReservationItemRequest { ApparatusId = x }).ToList() : [];
+            var selections = _mode == ReservationMode.Environment
+                ? _requirementSelections.Select(x => new ReservationRequirementSelectionRequest { EquipmentGroupRequirementId = x.Key, ApparatusIds = x.Value.ToList() }).ToList()
+                : [];
+            var editId = Id ?? _savedId;
+            ReservationDetailDto saved = editId.HasValue
+                ? await Api.UpdateAsync(editId.Value, BuildUpdateRequest(startUtc, endUtc, items, selections))
+                : await Api.CreateAsync(BuildCreateRequest(startUtc, endUtc, items, selections));
+            _savedId = saved.Id;
+            if (!submit) { Nav.NavigateTo($"{BasePath}/{saved.Id}"); return; }
+            try { await Api.SubmitAsync(saved.Id); Nav.NavigateTo($"{BasePath}/{saved.Id}"); }
+            catch (ReservationApiException ex) when (ex.StatusCode == 409)
+            {
+                _submitConflict = true;
+                _message = "草稿已建立或更新，但部分設備已被其他人預約，請重新配置設備。";
+            }
+            catch (Exception ex) { _message = $"草稿已建立或更新，但送出失敗：{ex.Message}"; }
+        }
+        catch (Exception ex) { _message = ex.Message; }
+        finally { _saving = false; }
+    }
+
+    private bool ValidateEnvironmentSelections(out string? error)
+    {
+        error = null;
+        if (!_environmentId.HasValue || SelectedProfile is null) { error = "請選擇測試環境與設備組合方案。"; return false; }
+        foreach (var requirement in SelectedProfile.Requirements)
+        {
+            var count = GetRequirementSelection(requirement.Id).Count;
+            if (requirement.Required && count != requirement.Quantity) { error = $"{requirement.ResourceType} 必須選擇 {requirement.Quantity} 台設備。"; return false; }
+            if (!requirement.Required && count != 0 && count != requirement.Quantity) { error = $"選填需求 {requirement.ResourceType} 若選擇，必須選滿 {requirement.Quantity} 台。"; return false; }
+            if (!requirement.AllowAlternative && string.IsNullOrWhiteSpace(requirement.PreferredEquipmentId)) { error = $"Catalog 設定錯誤：{requirement.ResourceType} 不允許替換但未設定建議設備。"; return false; }
+        }
+        if (AllEnvironmentSelectedIds.Count == 0) { error = "請至少選擇一台設備。"; return false; }
+        return true;
+    }
+    private static IEnumerable<ReservationOptionDto> WithStoredOption(
+        IReadOnlyCollection<ReservationOptionDto> activeOptions,
+        string? storedValue)
+    {
+        if (string.IsNullOrWhiteSpace(storedValue)
+            || activeOptions.Any(x => string.Equals(x.Value, storedValue, StringComparison.Ordinal)))
+            return activeOptions;
+
+        return [new ReservationOptionDto
+        {
+            Value = storedValue,
+            Label = $"{storedValue}（原值，目前已停用）"
+        }, .. activeOptions];
+    }
+    private static string DisplaySnapshot(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private CreateReservationRequest BuildCreateRequest(DateTime start, DateTime end, List<ReservationItemRequest> items, List<ReservationRequirementSelectionRequest> selections) => new() { Mode = _mode, Purpose = _purpose, ApplicantExtension = _applicantExtension, StartTime = start, EndTime = end, Items = items, TestExecutionProfileId = _profileId, Selections = selections, ProductModelName = _productModelName, Customer = _customer, ProjectSubPu = _projectSubPu, Note = _note, ApplicantAgentName = _applicantAgentName, ApplicantAgentExtension = _applicantAgentExtension, ApplicantAgentEmail = _applicantAgentEmail };
+    private UpdateReservationRequest BuildUpdateRequest(DateTime start, DateTime end, List<ReservationItemRequest> items, List<ReservationRequirementSelectionRequest> selections) => new() { Mode = _mode, Purpose = _purpose, ApplicantExtension = _applicantExtension, StartTime = start, EndTime = end, Items = items, TestExecutionProfileId = _profileId, Selections = selections, ProductModelName = _productModelName, Customer = _customer, ProjectSubPu = _projectSubPu, Note = _note, ApplicantAgentName = _applicantAgentName, ApplicantAgentExtension = _applicantAgentExtension, ApplicantAgentEmail = _applicantAgentEmail };
+
+    private HashSet<string> GetRequirementSelection(Guid id) => _requirementSelections.TryGetValue(id, out var value) ? value : (_requirementSelections[id] = new(StringComparer.Ordinal));
+    private IEnumerable<ApparatusListItemDto> RequirementEquipment(ReservationRequirementOptionDto requirement)
+    {
+        var candidates = FilteredEquipment;
+        if (!requirement.AllowAlternative && !string.IsNullOrWhiteSpace(requirement.PreferredEquipmentId)) candidates = candidates.Where(x => x.Id == requirement.PreferredEquipmentId);
+        return candidates;
+    }
+    private bool IsSelectedElsewhere(Guid requirementId, string apparatusId) => _requirementSelections.Any(x => x.Key != requirementId && x.Value.Contains(apparatusId));
+    private void ToggleRequirement(ReservationRequirementOptionDto requirement, string apparatusId)
+    {
+        var selected = GetRequirementSelection(requirement.Id);
+        if (selected.Remove(apparatusId)) { _schedulerSuggestions.Remove((requirement.Id, apparatusId)); return; }
+        if (IsSelectedElsewhere(requirement.Id, apparatusId)) { _message = "同一台設備不可重複用於不同需求。"; return; }
+        if (selected.Count >= requirement.Quantity) { _message = $"{requirement.ResourceType} 最多選擇 {requirement.Quantity} 台設備。"; return; }
+        selected.Add(apparatusId); _schedulerSuggestions.Remove((requirement.Id, apparatusId)); _message = null;
+    }
+    private void ToggleDirect(string id) { if (!_directSelectedIds.Add(id)) _directSelectedIds.Remove(id); }
+    private bool MatchesKeyword(ApparatusListItemDto item) => new[] { item.ProductsId, item.Name, item.Kind, item.Brand, item.Model, item.Number, item.Place }.Any(x => x?.Contains(_keyword.Trim(), StringComparison.OrdinalIgnoreCase) == true);
+    private RenderFragment EquipmentCard(ApparatusListItemDto item) => @<div class="equipment-card-content">
+        <div class="equipment-card-head"><strong>@item.Name</strong><span>@item.ReservationStatus</span></div>
+        <div>@ReservationUi.Display(item.ProductsId) · @ReservationUi.Display(item.Kind)</div><div>@ReservationUi.Display(item.Brand) / @ReservationUi.Display(item.Model)</div>
+        <div>@ReservationUi.Display(item.Number) · @ReservationUi.Display(item.Place)</div><div>保管人：@ReservationUi.Display(item.Custodian)</div>
+    </div>;
+    private RenderFragment SelectedEquipmentBlock(HashSet<string> ids, bool removable) => @<div class="selected-equipment">
+        <div class="selected-equipment-heading"><strong>已選設備（@ids.Count）</strong><span>本次預約將使用以下設備</span></div>
+        @if (ids.Count == 0) { <div class="selected-empty">尚未選擇設備，請從上方搜尋結果加入設備。</div> }
+        else
+        {
+            <div class="selected-equipment-grid">
+                @foreach (var item in _equipment.Where(x => ids.Contains(x.Id)))
+                {
+                    <article class="selected-equipment-card">
+                        <div><strong>@item.Name</strong><span>@ReservationUi.Display(item.ProductsId) · @ReservationUi.Display(item.Kind)</span></div>
+                        <div>@ReservationUi.Display(item.Brand) / @ReservationUi.Display(item.Model) · @ReservationUi.Display(item.Place)</div>
+                        <div>保管人：@ReservationUi.Display(item.Custodian)　保管代理人：@ReservationUi.Display(item.Agent)</div>
+                        @if (!string.IsNullOrWhiteSpace(item.Note)) { <div>設備備註：@item.Note</div> }
+                        <div class="selected-equipment-actions"><button type="button" class="btn-secondary" disabled="@_saving" @onclick="() => OpenCalendar(item)">查看預約</button>@if (removable) { <button type="button" class="btn-secondary" disabled="@_saving" @onclick="() => ToggleDirect(item.Id)">移除</button> }</div>
+                    </article>
+                }
+            </div>
+        }
+    </div>;
+    private bool IsSchedulerSuggested(Guid requirementId, string apparatusId) => _schedulerSuggestions.Contains((requirementId, apparatusId));
+    private bool CalendarEquipmentSelected => _calendarEquipment is not null && (_mode == ReservationMode.Direct ? _directSelectedIds.Contains(_calendarEquipment.Id) : AllEnvironmentSelectedIds.Contains(_calendarEquipment.Id));
+    private void OpenCalendar(ApparatusListItemDto item, ReservationRequirementOptionDto? requirement = null) { _calendarEquipment = item; _calendarRequirement = requirement; }
+    private void CloseCalendar() { _calendarEquipment = null; _calendarRequirement = null; }
+    private void SelectCalendarEquipment()
+    {
+        if (_calendarEquipment is null) return;
+        if (_mode == ReservationMode.Direct) { if (!_directSelectedIds.Contains(_calendarEquipment.Id)) ToggleDirect(_calendarEquipment.Id); }
+        else if (_calendarRequirement is not null && !GetRequirementSelection(_calendarRequirement.Id).Contains(_calendarEquipment.Id)) ToggleRequirement(_calendarRequirement, _calendarEquipment.Id);
+        CloseCalendar();
+    }
+    private bool HasValidLocalTimeRange() => DateTime.TryParse(_startLocal, out var start) && DateTime.TryParse(_endLocal, out var end) && start < end;
+    private static string DurationText(TimeSpan duration) => $"{(int)duration.TotalDays} 天 {duration.Hours} 小時";
+    private static bool HasOptionalUnresolved(ResourceAssignmentProposal proposal) => proposal.Requirements.Any(x => !x.Required && x.UnresolvedQuantity > 0);
+    private void MarkSchedulerStale() { if (_schedulerApplied) _schedulerStale = true; _lastProposal = null; _submitConflict = false; }
+    private void ResetSchedulerState()
+    {
+        _schedulerSuggestions.Clear();
+        _schedulerApplied = false;
+        _schedulerStale = false;
+        _submitConflict = false;
+        _lastProposal = null;
+    }
+    private static string ProposalFailureText(ResourceAssignmentRequirementDto requirement)
+    {
+        if (string.IsNullOrWhiteSpace(requirement.FailureReason)) return requirement.UnresolvedQuantity > 0 ? "符合條件且可用的設備數量不足。" : string.Empty;
+        if (requirement.FailureReason.Contains("Catalog configuration", StringComparison.OrdinalIgnoreCase)) return "設備目錄設定不完整，請聯絡管理者。";
+        if (requirement.FailureReason.Contains("Only", StringComparison.OrdinalIgnoreCase)) return "符合條件且可用的設備數量不足。";
+        return requirement.FailureReason;
+    }
+    private RenderFragment ProposalResultBlock(ResourceAssignmentProposal proposal) => @<div class="proposal-requirements">
+        @if (!string.IsNullOrWhiteSpace(proposal.PolicyFailure))
+        {
+            <div><strong>部門設備額度：</strong>@proposal.PolicyFailure</div>
+        }
+        @foreach (var requirement in proposal.Requirements.Where(x => x.UnresolvedQuantity > 0 || !string.IsNullOrWhiteSpace(x.FailureReason)))
+        {
+            <div><strong>@requirement.ResourceType × @requirement.Quantity</strong>　已找到：@requirement.SelectedApparatus.Count　尚缺：@requirement.UnresolvedQuantity
+                @if (!string.IsNullOrWhiteSpace(ProposalFailureText(requirement))) { <span>－@ProposalFailureText(requirement)</span> }
+            </div>
+        }
+    </div>;
+    private void ViewSaved() => Nav.NavigateTo($"{BasePath}/{_savedId}");
+    private void Back() => Nav.NavigateTo(_isEdit && Id.HasValue ? $"{BasePath}/{Id}" : BasePath);
+}
+
+<style>
+    .reservation-form { width:min(100%,1240px); display:grid; gap:24px; }
+    .reservation-section { padding:24px; display:grid; gap:20px; }
+    .reservation-section-heading { display:flex; align-items:flex-start; gap:12px; border-bottom:1px solid rgba(148,163,184,.18); padding-bottom:16px; }
+    .reservation-section-heading > span { width:30px; height:30px; display:grid; place-items:center; flex:0 0 30px; border-radius:50%; background:rgba(20,184,166,.2); color:#5eead4; font-weight:700; }
+    .reservation-section-heading h4 { margin:1px 0 4px; font-size:1.12rem; }
+    .reservation-section-heading p { margin:0; color:#94a3b8; font-size:.9rem; }
+    .reservation-mode-cards { display:grid !important; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; width:100%; }
+    .reservation-mode-card { min-width:0; min-height:0 !important; height:auto !important; margin:0 !important; display:flex !important; align-items:flex-start; justify-content:flex-start; gap:12px; padding:18px; border:1px solid rgba(148,163,184,.28); border-radius:14px; background:rgba(15,23,42,.45); color:#e2e8f0; cursor:pointer; transition:border-color .15s ease,background .15s ease; }
+    .reservation-mode-card:hover { border-color:rgba(45,212,191,.72); background:rgba(13,148,136,.12); }
+    .reservation-mode-card.selected { border-color:#14b8a6; box-shadow:0 0 0 1px rgba(45,212,191,.34); background:rgba(13,148,136,.18); }
+    .reservation-mode-radio { width:18px !important; min-width:18px !important; height:18px !important; min-height:18px !important; flex:0 0 18px !important; margin:3px 0 0 !important; padding:0 !important; accent-color:#14b8a6; cursor:pointer; }
+    .reservation-mode-card:has(.reservation-mode-radio:disabled) { cursor:not-allowed; }
+    .reservation-mode-copy { display:block !important; width:auto !important; min-width:0; flex:1 1 auto; }
+    .reservation-mode-title { display:block; min-width:0; white-space:nowrap; overflow-wrap:normal; }
+    .reservation-mode-copy small { display:block; margin-top:6px; min-width:0; color:#94a3b8; line-height:1.45; overflow-wrap:break-word; word-break:normal; }
+    .mode-lock-note { margin-top:-8px; }
+    .equipment-section,.environment-section { display:grid; gap:16px; }
+    .section-heading,.requirement-head { display:flex; justify-content:space-between; gap:18px; align-items:end; }
+    .section-heading h4 { margin:0 0 4px; } .equipment-search { width:min(520px,100%); }
+    .selected-equipment,.catalog-summary { padding:16px; border-radius:12px; background:rgba(14,165,164,.10); border:1px solid rgba(45,212,191,.2); }
+    .selected-equipment-heading { display:flex; justify-content:space-between; gap:12px; align-items:baseline; }
+    .selected-equipment-heading span { color:#94a3b8; font-size:.88rem; }
+    .selected-empty { margin-top:12px; padding:16px; border:1px dashed rgba(148,163,184,.4); border-radius:10px; color:#cbd5e1; }
+    .selected-equipment-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:10px; margin-top:12px; }
+    .selected-equipment-card { display:grid; grid-template-columns:1fr auto; gap:8px 12px; padding:12px; border-radius:10px; background:rgba(15,23,42,.48); border:1px solid rgba(45,212,191,.2); }
+    .selected-equipment-card div { display:grid; gap:3px; color:#cbd5e1; font-size:.88rem; }
+    .selected-equipment-card div:first-child span { color:#94a3b8; }
+    .selected-equipment-card > div:nth-child(2) { grid-column:1/-1; }
+    .selected-equipment-card button { grid-column:2; grid-row:1; align-self:start; }
+    .equipment-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(245px,1fr)); gap:12px; max-height:520px; overflow:auto; }
+    .equipment-card,.requirement-card { padding:14px; border:1px solid rgba(148,163,184,.18); border-radius:14px; display:grid; gap:8px; background:rgba(15,23,42,.45); }.equipment-card-actions,.selected-equipment-actions { display:flex; flex-wrap:wrap; gap:8px; }
+    .equipment-card-content { display:contents; }
+    .equipment-card.selected,.equipment-pick.selected { border-color:#14b8a6; background:rgba(13,148,136,.18); } .equipment-card-head { display:flex; justify-content:space-between; }
+    .equipment-card-head span,.requirement-head span { color:#5eead4; font-size:.85rem; margin-left:8px; } .equipment-card button { justify-self:start; }
+    .environment-steps { display:grid; grid-template-columns:1fr 1fr; gap:16px; } .requirement-list { display:grid; gap:14px; }.equipment-pick { padding:10px; border:1px solid rgba(148,163,184,.18); border-radius:10px; background:rgba(15,23,42,.4); display:flex; gap:8px; align-items:flex-start; }.equipment-pick-select { flex:1; min-width:0; padding:0; border:0; background:transparent; color:#e2e8f0; text-align:left; box-shadow:none; }.equipment-pick-select:hover { transform:none; filter:none; }.equipment-pick-select span,.equipment-pick-select small { display:block; margin-top:4px; color:#94a3b8; }.equipment-calendar-button { flex:0 0 auto; padding:.55rem .7rem; font-size:.8rem; }
+    .scheduler-panel { display:flex; justify-content:space-between; gap:18px; align-items:center; padding:14px; margin:14px 0; border:1px solid rgba(45,212,191,.25); border-radius:12px; background:rgba(15,118,110,.10); }
+    .reservation-calendar-backdrop { position:fixed; inset:0; z-index:100; background:rgba(2,6,23,.58); }.reservation-calendar-drawer { position:fixed; z-index:101; top:0; right:0; width:min(620px,100vw); height:100vh; overflow:auto; padding:24px; border-left:1px solid rgba(148,163,184,.22); background:#111b28; box-shadow:-18px 0 42px rgba(2,6,23,.46); }.reservation-calendar-drawer-head { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; margin-bottom:20px; }.reservation-calendar-drawer-head p { margin:0 0 5px; color:#67e8f9; font-size:.72rem; font-weight:800; letter-spacing:.14em; }.reservation-calendar-drawer-head h4 { margin:0 0 5px; }.reservation-calendar-drawer-head span { color:#94a3b8; font-size:.84rem; }.reservation-calendar-drawer-actions { display:flex; justify-content:flex-end; align-items:center; gap:12px; margin-top:18px; }
+    .scheduler-panel h4 { margin:0 0 5px; } .scheduler-warning,.scheduler-success,.scheduler-result { padding:12px 14px; margin:10px 0; border-radius:10px; }
+    .scheduler-time-hint { margin-top:-6px; color:#fde68a; font-size:.9rem; }
+    .scheduler-warning { background:rgba(245,158,11,.14); color:#fde68a; } .scheduler-success { background:rgba(16,185,129,.14); color:#a7f3d0; }
+    .scheduler-failure { background:rgba(239,68,68,.12); color:#fecaca; } .proposal-requirements { display:grid; gap:6px; margin-top:8px; }
+    .scheduler-badge { color:#5eead4 !important; font-weight:700; } .message-action { margin-top:10px; }
+    .preferred { color:#5eead4; } .requirement-equipment { display:grid; grid-template-columns:repeat(auto-fill,minmax(210px,1fr)); gap:8px; }
+    .equipment-pick { text-align:left; display:grid; gap:3px; padding:10px; border:1px solid rgba(148,163,184,.22); border-radius:10px; background:rgba(15,23,42,.6); color:inherit; cursor:pointer; }
+    .equipment-pick span,.equipment-pick small { color:#94a3b8; } .equipment-pick:disabled { opacity:.55; cursor:not-allowed; }
+    .time-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
+    .datetime-control { display:flex; align-items:stretch; }
+    .datetime-input { min-width:0; width:100%; min-height:42px; cursor:pointer; color-scheme:dark; }
+    .datetime-input:hover { border-color:rgba(45,212,191,.72); }
+    .datetime-input:focus { outline:2px solid rgba(45,212,191,.42); outline-offset:1px; }
+    .datetime-input::-webkit-calendar-picker-indicator { cursor:pointer; opacity:1; filter:invert(85%) sepia(30%) saturate(490%) hue-rotate(122deg) brightness(98%); }
+    .picker-button { width:40px; min-width:40px; min-height:42px; margin-left:6px; border:1px solid rgba(45,212,191,.45); border-radius:8px; background:rgba(13,148,136,.2); color:#99f6e4; cursor:pointer; font-size:1rem; }
+    .picker-button:hover,.picker-button:focus { background:rgba(13,148,136,.38); outline:none; }
+    .duration-hint { display:flex; flex-wrap:wrap; gap:8px 18px; padding:12px 14px; border-radius:10px; background:rgba(14,165,164,.09); color:#cbd5e1; }
+    .duration-hint strong { color:#fde68a; }
+    .reservation-data-grid { display:grid; grid-template-columns:minmax(280px,380px) minmax(0,1fr); gap:18px; align-items:start; }
+    .project-data-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .project-data-grid .purpose-field { grid-column:1/-1; }
+    .purpose-field textarea { min-height:112px; }
+    .option-warning { margin-top:7px; color:#fde68a; font-size:.88rem; }
+    .applicant-data-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    .snapshot-field { min-height:76px; padding:12px 14px; display:grid; align-content:center; gap:5px; border:1px solid rgba(148,163,184,.2); border-radius:10px; background:rgba(15,23,42,.32); }
+    .snapshot-field span { color:#94a3b8; font-size:.84rem; }
+    .snapshot-field strong { color:#e2e8f0; overflow-wrap:anywhere; }
+    .reservation-actions { justify-content:flex-end; margin-top:0; padding:18px 0 4px; border-top:1px solid rgba(148,163,184,.18); }
+    @@media(max-width:760px){ .reservation-section { padding:18px; } .reservation-mode-cards,.time-grid,.environment-steps,.reservation-data-grid,.project-data-grid,.applicant-data-grid { grid-template-columns:1fr; } .section-heading,.catalog-summary,.scheduler-panel { align-items:stretch; flex-direction:column; } .equipment-search { width:100%; } .selected-equipment-heading { align-items:flex-start; flex-direction:column; } .reservation-actions { justify-content:stretch; } .reservation-actions button { flex:1 1 auto; } }
+</style>

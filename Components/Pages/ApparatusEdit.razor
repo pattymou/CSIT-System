@@ -2,6 +2,7 @@
 @page "/apparatus/{Id}/edit"
 @page "/assets/{ModuleCode}/new"
 @page "/assets/{ModuleCode}/{Id}/edit"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode InteractiveServer
 @using global::System.Net.Http.Json
 @using Microsoft.AspNetCore.Components.Forms

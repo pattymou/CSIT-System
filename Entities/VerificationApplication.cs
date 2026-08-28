@@ -1,10 +1,11 @@
 namespace SIT.DepartmentSystem.Web.Entities;
 
-// Resolved only from active VerificationCategory data at Submit/Resubmit time.
+// Team/Leader comes from the system Team master; ModuleCode comes from the workflow rule.
+// Both are resolved and snapshotted at Submit/Resubmit time.
 public sealed record VerificationApplicationRouting(
-    Guid VerificationCategoryId,
-    string CategoryCode,
-    string CategoryName,
+    Guid TeamOptionId,
+    string TeamCode,
+    string TeamName,
     string ModuleCode,
     string AssignedLeaderAccount,
     string? AssignedLeaderDisplayName);
@@ -38,6 +39,10 @@ public class VerificationApplication
     public Guid Id { get; private set; }
     public string ApplicationNo { get; private set; } = string.Empty;
     public string? ModuleCode { get; private set; }
+    public Guid? TeamOptionId { get; private set; }
+    public string? TeamCode { get; private set; }
+    public string? TeamName { get; private set; }
+    // Deprecated VerificationCategory snapshot columns are retained for historical rows.
     public Guid? VerificationCategoryId { get; private set; }
     public string? CategoryCode { get; private set; }
     public string? CategoryName { get; private set; }
@@ -82,13 +87,12 @@ public class VerificationApplication
     public DateTime UpdatedAt { get; private set; }
 
     public ModuleRecord? ModuleRecord { get; private set; }
-    public VerificationCategory? VerificationCategory { get; private set; }
     public ICollection<VerificationApplicationFile> Files { get; private set; } = new List<VerificationApplicationFile>();
 
     public static VerificationApplication CreateDraft(
         Guid id,
         string applicationNo,
-        Guid verificationCategoryId,
+        Guid teamOptionId,
         string applicantAccount,
         string applicantName,
         string applicantEmail,
@@ -101,7 +105,7 @@ public class VerificationApplication
         {
             Id = id,
             ApplicationNo = applicationNo,
-            VerificationCategoryId = verificationCategoryId,
+            TeamOptionId = teamOptionId,
             ApplicantAccount = applicantAccount,
             ApplicantName = applicantName,
             ApplicantEmail = applicantEmail,
@@ -114,10 +118,10 @@ public class VerificationApplication
         return entity;
     }
 
-    public void UpdateContent(Guid verificationCategoryId, VerificationApplicationContent content, DateTime now)
+    public void UpdateContent(Guid teamOptionId, VerificationApplicationContent content, DateTime now)
     {
         EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
-        VerificationCategoryId = verificationCategoryId;
+        TeamOptionId = teamOptionId;
         ApplyContent(content);
         UpdatedAt = now;
     }
@@ -126,10 +130,10 @@ public class VerificationApplication
     {
         EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
         ArgumentNullException.ThrowIfNull(routing);
-        if (VerificationCategoryId != routing.VerificationCategoryId)
-            throw new InvalidOperationException("Resolved verification category does not match the application.");
-        CategoryCode = RequiredRoutingValue(routing.CategoryCode, nameof(routing.CategoryCode));
-        CategoryName = RequiredRoutingValue(routing.CategoryName, nameof(routing.CategoryName));
+        if (TeamOptionId != routing.TeamOptionId)
+            throw new InvalidOperationException("Resolved Team does not match the application.");
+        TeamCode = RequiredRoutingValue(routing.TeamCode, nameof(routing.TeamCode));
+        TeamName = RequiredRoutingValue(routing.TeamName, nameof(routing.TeamName));
         ModuleCode = RequiredRoutingValue(routing.ModuleCode, nameof(routing.ModuleCode));
         AssignedLeaderAccount = RequiredRoutingValue(routing.AssignedLeaderAccount, nameof(routing.AssignedLeaderAccount));
         AssignedLeaderDisplayName = Clean(routing.AssignedLeaderDisplayName);
@@ -189,9 +193,9 @@ public class VerificationApplication
         AddIfMissing(missing, ProductModel, nameof(ProductModel));
         AddIfMissing(missing, ValidationRequirement, nameof(ValidationRequirement));
         if (!RequestedFinishDate.HasValue) missing.Add(nameof(RequestedFinishDate));
-        if (!VerificationCategoryId.HasValue) missing.Add(nameof(VerificationCategoryId));
-        AddIfMissing(missing, CategoryCode, nameof(CategoryCode));
-        AddIfMissing(missing, CategoryName, nameof(CategoryName));
+        if (!TeamOptionId.HasValue) missing.Add(nameof(TeamOptionId));
+        AddIfMissing(missing, TeamCode, nameof(TeamCode));
+        AddIfMissing(missing, TeamName, nameof(TeamName));
         AddIfMissing(missing, ModuleCode, nameof(ModuleCode));
         AddIfMissing(missing, AssignedLeaderAccount, nameof(AssignedLeaderAccount));
 

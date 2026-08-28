@@ -1,0 +1,140 @@
+@inject ISystemOptionService SystemOptions
+@using SIT.DepartmentSystem.Web.Entities
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="@(_isError ? "system-option-message error" : "system-option-message success")">@_message</div>
+}
+
+<div class="surface-card option-panel">
+    <div class="option-section-title">
+        <div>
+            <h3>@(_editingId.HasValue ? "修改 Team Leader" : "新增 Team Leader")</h3>
+            <p>設定各 Team 的系統共用 Leader，此設定可供整個 CSIT workflow 使用。</p>
+        </div>
+        <span class="editing-badge @(_editingId.HasValue ? null : "normal")">@(_editingId.HasValue ? "編輯模式" : "新增模式")</span>
+    </div>
+
+    <div class="edit-grid option-form-grid">
+        <div class="form-row">
+            <label>Team <span class="required">*</span></label>
+            <select @bind="_form.TeamOptionId">
+                <option value="@Guid.Empty">請選擇</option>
+                @foreach (var team in _teams)
+                {
+                    <option value="@team.Id">@team.Name (@team.Value)@(!team.IsEnabled ? " - 已停用" : "")</option>
+                }
+            </select>
+        </div>
+        <div class="form-row">
+            <label>Leader Account <span class="required">*</span></label>
+            <input @bind="_form.LeaderAccount" placeholder="例如：leadertest" />
+        </div>
+        <div class="form-row">
+            <label>Leader Display Name <span class="required">*</span></label>
+            <input @bind="_form.LeaderDisplayName" placeholder="例如：Verification Leader Test" />
+        </div>
+        <div class="form-row checkbox-row">
+            <label>啟用</label>
+            <label class="switch-line">
+                <input type="checkbox" @bind="_form.IsEnabled" />
+                <span>@(_form.IsEnabled ? "啟用中" : "已停用")</span>
+            </label>
+        </div>
+    </div>
+
+    <div class="form-actions">
+        <button type="button" class="btn-primary" @onclick="SaveAsync">@(_editingId.HasValue ? "儲存修改" : "新增設定")</button>
+        <button type="button" class="btn-secondary" @onclick="Clear">清空</button>
+    </div>
+</div>
+
+<div class="surface-card option-panel">
+    <div class="option-section-title">
+        <div><h3>Team Leader 清單</h3><p>同一個 Team 在所有 CSIT workflow 共用同一位 Leader。</p></div>
+    </div>
+    <div class="project-table-wrap">
+        <table class="project-table">
+            <thead><tr><th>Team</th><th>Leader</th><th>狀態</th><th>操作</th></tr></thead>
+            <tbody>
+            @if (_items.Count == 0)
+            {
+                <tr><td colspan="4" class="empty-row">目前尚無 Team Leader 設定。</td></tr>
+            }
+            else
+            {
+                @foreach (var item in _items)
+                {
+                    <tr>
+                        <td><strong>@item.TeamName</strong><div class="hint-text">@item.TeamCode</div></td>
+                        <td>@item.LeaderDisplayName<div class="hint-text">@item.LeaderAccount</div></td>
+                        <td><span class="status-pill @(item.IsEnabled && item.TeamIsEnabled ? "on" : "off")">@(item.IsEnabled && item.TeamIsEnabled ? "啟用" : "停用")</span></td>
+                        <td><button type="button" class="table-link-btn" @onclick="() => Edit(item)">編輯</button></td>
+                    </tr>
+                }
+            }
+            </tbody>
+        </table>
+    </div>
+</div>
+
+@code {
+    private List<SystemOptionDto> _teams = [];
+    private List<TeamRoutingDto> _items = [];
+    private TeamRoutingUpsertRequest _form = NewForm();
+    private Guid? _editingId;
+    private string? _message;
+    private bool _isError;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _teams = await SystemOptions.GetAllAsync(SystemOptionCategories.Team);
+        _items = await SystemOptions.GetTeamRoutingsAsync();
+    }
+
+    private void Edit(TeamRoutingDto item)
+    {
+        _editingId = item.Id;
+        _form = new TeamRoutingUpsertRequest
+        {
+            TeamOptionId = item.TeamOptionId,
+            LeaderAccount = item.LeaderAccount,
+            LeaderDisplayName = item.LeaderDisplayName,
+            IsEnabled = item.IsEnabled
+        };
+        _message = null;
+    }
+
+    private async Task SaveAsync()
+    {
+        _message = null;
+        _isError = false;
+        try
+        {
+            if (_editingId.HasValue)
+                await SystemOptions.UpdateTeamRoutingAsync(_editingId.Value, _form);
+            else
+                await SystemOptions.CreateTeamRoutingAsync(_form);
+            Clear();
+            await LoadAsync();
+            _message = "儲存成功。";
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = ex.Message;
+        }
+    }
+
+    private void Clear()
+    {
+        _editingId = null;
+        _form = NewForm();
+        _message = null;
+        _isError = false;
+    }
+
+    private static TeamRoutingUpsertRequest NewForm() => new() { IsEnabled = true };
+}

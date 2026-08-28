@@ -20,8 +20,8 @@
                          .OrderBy(x => x.SortOrder)
                          .ThenBy(x => x.Title))
             {
-                <NavLink class="nav-link-custom" href="@item.RoutePath" Match="NavLinkMatch.Prefix">
-                    @item.Icon @item.Title
+                <NavLink class="nav-link-custom" href="@DisplayRoute(item)" Match="NavLinkMatch.Prefix">
+                    @item.Icon @DisplayTitle(item)
                 </NavLink>
             }
         </div>
@@ -31,6 +31,16 @@
 @code {
     private List<MenuSectionDto> _sections = [];
     private List<MenuItemDto> _items = [];
+
+    private static string DisplayTitle(MenuItemDto item) =>
+        string.Equals(item.RoutePath, "/reservation-review", StringComparison.OrdinalIgnoreCase)
+            ? "設備預約管理"
+            : item.Title;
+
+    private static string DisplayRoute(MenuItemDto item) =>
+        string.Equals(item.RoutePath, "/reservation-review", StringComparison.OrdinalIgnoreCase)
+            ? "/staff/reservations"
+            : item.RoutePath;
 
     protected override async Task OnInitializedAsync()
     {

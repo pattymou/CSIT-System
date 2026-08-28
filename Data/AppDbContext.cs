@@ -19,6 +19,7 @@ public class AppDbContext : DbContext
     public DbSet<Apparatus> Apparatuses => Set<Apparatus>();
     public DbSet<ApparatusFile> ApparatusFiles => Set<ApparatusFile>();
     public DbSet<SystemOption> SystemOptions => Set<SystemOption>();
+    public DbSet<TeamRouting> TeamRoutings => Set<TeamRouting>();
     public DbSet<VerificationApplication> VerificationApplications => Set<VerificationApplication>();
     public DbSet<VerificationApplicationFile> VerificationApplicationFiles => Set<VerificationApplicationFile>();
     public DbSet<VerificationCategory> VerificationCategories => Set<VerificationCategory>();
@@ -30,11 +31,19 @@ public class AppDbContext : DbContext
     public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
     public DbSet<TestExecutionProfile> TestExecutionProfiles => Set<TestExecutionProfile>();
     public DbSet<PlannedTestItem> PlannedTestItems => Set<PlannedTestItem>();
+    public DbSet<Reservation> Reservations => Set<Reservation>();
+    public DbSet<ReservationItem> ReservationItems => Set<ReservationItem>();
+    public DbSet<ApparatusResourceCapability> ApparatusResourceCapabilities => Set<ApparatusResourceCapability>();
+    public DbSet<ReservationExtensionRequest> ReservationExtensionRequests => Set<ReservationExtensionRequest>();
+    public DbSet<ReservationAuditEvent> ReservationAuditEvents => Set<ReservationAuditEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ConfigureTestCatalog();
         modelBuilder.ConfigureVerificationApplicationRouting();
+        modelBuilder.ConfigureSystemMasterData();
+        modelBuilder.ConfigureReservations();
+        modelBuilder.ConfigureApparatusResourceCapabilities();
 
         modelBuilder.Entity<ModuleEntity>(entity =>
         {
@@ -122,6 +131,9 @@ public class AppDbContext : DbContext
             entity.Property(x => x.Id).HasColumnName("id");
             entity.Property(x => x.ApplicationNo).HasColumnName("application_no").HasMaxLength(32).IsRequired();
             entity.Property(x => x.ModuleCode).HasColumnName("module_code").HasMaxLength(100);
+            entity.Property(x => x.TeamOptionId).HasColumnName("team_option_id");
+            entity.Property(x => x.TeamCode).HasColumnName("team_code").HasMaxLength(200);
+            entity.Property(x => x.TeamName).HasColumnName("team_name").HasMaxLength(200);
             entity.Property(x => x.VerificationCategoryId).HasColumnName("verification_category_id");
             entity.Property(x => x.CategoryCode).HasColumnName("category_code").HasMaxLength(100);
             entity.Property(x => x.CategoryName).HasColumnName("category_name").HasMaxLength(200);
@@ -167,15 +179,11 @@ public class AppDbContext : DbContext
             entity.HasIndex(x => new { x.Status, x.SubmittedAt });
             entity.HasIndex(x => new { x.ApplicantAccount, x.Status });
             entity.HasIndex(x => new { x.AssignedLeaderAccount, x.Status });
-            entity.HasIndex(x => new { x.VerificationCategoryId, x.Status });
+            entity.HasIndex(x => new { x.TeamOptionId, x.Status });
 
             entity.HasOne(x => x.ModuleRecord)
                 .WithOne()
                 .HasForeignKey<VerificationApplication>(x => x.ModuleRecordId)
-                .OnDelete(DeleteBehavior.Restrict);
-            entity.HasOne(x => x.VerificationCategory)
-                .WithMany(x => x.Applications)
-                .HasForeignKey(x => x.VerificationCategoryId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

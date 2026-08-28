@@ -1,7 +1,7 @@
 @page "/rd"
 @layout RdLayout
 @rendermode InteractiveServer
-@attribute [Authorize]
+@attribute [Authorize(Policy = SystemAuthorization.Policies.RdApplicant)]
 @using Microsoft.AspNetCore.Authorization
 @inject NavigationManager Nav
 
@@ -21,7 +21,8 @@
 @code {
     private static readonly RdServiceEntry[] Services =
     [
-        new("系統驗證申請單", "新增驗證申請，或查看已提交與退回的申請進度。", "查看我的申請", "/verification-applications")
+        new("系統驗證申請單", "新增驗證申請，或查看已提交與退回的申請進度。", "查看我的申請", "/verification-applications"),
+        new("設備預約", "查看設備借用狀況、建立設備預約與查看我的預約。", "進入設備預約", "/reservations")
     ];
 
     private void Open(string route) => Nav.NavigateTo(route);
