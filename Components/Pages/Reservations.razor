@@ -17,21 +17,34 @@
     @if (StaffWorkspace)
     {
         <button type="button" class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-review")'>預約審核</button>
+        <button type="button" class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-overdue")'>
+            <span>逾期管理</span>
+            @if (_overdueCount > 0)
+            {
+                <span class="overdue-count">@_overdueCount</span>
+            }
+        </button>
     }
 </div>
 
 <div class="form-actions reservation-toolbar">
     <div class="form-row">
         <label>狀態</label>
-        <select @bind="_statusFilter">
-            <option value="">全部</option>
-            @foreach (var status in Enum.GetValues<ReservationStatus>())
+        <select value="@_statusFilter" @onchange="StatusFilterChangedAsync">
+            @if (StaffWorkspace)
             {
-                <option value="@status">@ReservationUi.StatusText(status)</option>
+                <option value="active">使用中</option>
             }
+            <option value="">全部</option>
+            <option value="Pending">待審核</option>
+            <option value="Approved">已核准</option>
+            <option value="Borrowed">借用中（舊資料）</option>
+            <option value="Returned">已歸還</option>
+            <option value="Rejected">已拒絕</option>
+            <option value="Cancelled">已取消</option>
+            <option value="Draft">草稿</option>
         </select>
     </div>
-    <button type="button" class="btn-primary" @onclick="Create">新增設備預約</button>
 </div>
 
 @if (!string.IsNullOrWhiteSpace(_message))
@@ -51,13 +64,13 @@ else
                     <tr><th>預約編號</th><th>預約時間</th><th>用途</th><th>設備</th><th>狀態</th><th>建立時間</th></tr>
                 </thead>
                 <tbody>
-                    @if (!FilteredItems.Any())
+                    @if (!_items.Any())
                     {
                         <tr><td colspan="6" class="empty-row">目前沒有符合條件的設備預約。</td></tr>
                     }
                     else
                     {
-                        @foreach (var item in FilteredItems)
+                        @foreach (var item in _items)
                         {
                             <tr class="clickable-row" @onclick="() => Open(item.Id)">
                                 <td><strong>@item.ReservationNo</strong></td>
@@ -76,26 +89,48 @@ else
 }
 
 <style>
-    .reservation-toolbar { align-items:end; justify-content:space-between; }
+    .reservation-toolbar { align-items:end; }
     .reservation-toolbar .form-row { min-width:180px; margin:0; }
     .equipment-summary { display:inline-block; max-width:340px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; vertical-align:bottom; }
+    .overdue-count { display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; margin-left:6px; padding:0 6px; border-radius:999px; color:#fed7aa; background:rgba(194,65,12,.28); font-size:.72rem; font-weight:800; }
 </style>
 
 @code {
     [Parameter] public string BasePath { get; set; } = "/reservations";
     [Parameter] public bool StaffWorkspace { get; set; }
     private List<ReservationListDto> _items = [];
-    private ReservationStatus? _statusFilter;
+    private string _statusFilter = string.Empty;
+    private int _overdueCount;
     private bool _loading = true;
     private string? _message;
-    private IEnumerable<ReservationListDto> FilteredItems =>
-        _statusFilter.HasValue ? _items.Where(x => x.Status == _statusFilter.Value) : _items;
-
     protected override async Task OnInitializedAsync()
     {
-        try { _items = await Api.ListAsync(); }
+        _statusFilter = StaffWorkspace ? "active" : string.Empty;
+        try
+        {
+            await LoadListAsync();
+            if (StaffWorkspace)
+                _overdueCount = (await Api.OverdueAsync()).TotalCount;
+        }
         catch (Exception ex) { _message = ex.Message; }
         finally { _loading = false; }
+    }
+
+    private async Task StatusFilterChangedAsync(ChangeEventArgs args)
+    {
+        _statusFilter = args.Value?.ToString() ?? string.Empty;
+        _loading = true;
+        _message = null;
+        try { await LoadListAsync(); }
+        catch (Exception ex) { _message = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private async Task LoadListAsync()
+    {
+        var active = string.Equals(_statusFilter, "active", StringComparison.Ordinal);
+        var status = Enum.TryParse<ReservationStatus>(_statusFilter, out var parsed) ? parsed : (ReservationStatus?)null;
+        _items = await Api.ListAsync(status, active);
     }
 
     private void Create() => Nav.NavigateTo($"{BasePath}/new");

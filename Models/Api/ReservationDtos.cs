@@ -80,6 +80,51 @@ public sealed class ReservationListDto
     public DateTime? BorrowedAt { get; set; }
 }
 
+public enum ReservationOverdueCategory
+{
+    OverdueUnreturned
+}
+
+public sealed class ReservationOverdueResponseDto
+{
+    public int TotalCount { get; set; }
+    public int OverdueReturnCount { get; set; }
+    public List<ReservationOverdueItemDto> Items { get; set; } = new();
+}
+
+public sealed class ReservationOverdueItemDto
+{
+    public Guid ReservationId { get; set; }
+    public string ReservationNo { get; set; } = string.Empty;
+    public ReservationOverdueCategory Category { get; set; }
+    public ReservationStatus ReservationStatus { get; set; }
+    public string ApplicantName { get; set; } = string.Empty;
+    public string ApplicantDepartment { get; set; } = string.Empty;
+    public string? ApplicantExtension { get; set; }
+    public string Purpose { get; set; } = string.Empty;
+    public DateTime StartTime { get; set; }
+    public DateTime EndTime { get; set; }
+    public DateTime? BorrowedAt { get; set; }
+    public List<ReservationOverdueApparatusDto> VisibleApparatus { get; set; } = new();
+    public int TotalReservationItemCount { get; set; }
+    public int VisibleApparatusCount { get; set; }
+}
+
+public sealed class ReservationOverdueApparatusDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? ProductsId { get; set; }
+    public string? Kind { get; set; }
+    public string? Brand { get; set; }
+    public string? Model { get; set; }
+    public string? Place { get; set; }
+    public string? Custodian { get; set; }
+    public string? CustodianAccount { get; set; }
+    public Guid? OwnerTeamOptionId { get; set; }
+    public string? OwnerTeamName { get; set; }
+}
+
 public sealed class ReservationDetailDto
 {
     public Guid Id { get; set; }
@@ -218,6 +263,16 @@ public sealed class ReservationOverviewQuery
     public ReservationStatus? Status { get; set; }
     public string? Borrower { get; set; }
     public bool IncludeHistory { get; set; }
+    public int Page { get; set; } = 1;
+    public int PageSize { get; set; } = 50;
+}
+
+public sealed class ReservationOverviewPageDto
+{
+    public int TotalCount { get; set; }
+    public int Page { get; set; }
+    public int PageSize { get; set; }
+    public List<ReservationOverviewDto> Items { get; set; } = new();
 }
 
 public sealed class ReservationOverviewDto
@@ -227,6 +282,7 @@ public sealed class ReservationOverviewDto
     public DateTime StartTime { get; set; }
     public DateTime EndTime { get; set; }
     public ReservationStatus Status { get; set; }
+    public string ApplicantAccount { get; set; } = string.Empty;
     public string ApplicantDepartment { get; set; } = string.Empty;
     public string ApplicantName { get; set; } = string.Empty;
     public string? ApplicantExtension { get; set; }
@@ -236,6 +292,7 @@ public sealed class ReservationOverviewDto
     public string? TestEnvironmentName { get; set; }
     public string? EquipmentGroupName { get; set; }
     public string? TestExecutionProfileName { get; set; }
+    public DateTime CreatedAt { get; set; }
     public List<ReservationOverviewApparatusDto> Apparatus { get; set; } = new();
 }
 

@@ -49,6 +49,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
 
+                    b.Property<string>("CustodianAccount")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<string>("CustodianDepartment")
                         .HasColumnType("text");
 
@@ -102,6 +106,9 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Property<string>("Number")
                         .HasColumnType("text");
 
+                    b.Property<Guid?>("OwnerTeamOptionId")
+                        .HasColumnType("uuid");
+
                     b.Property<string>("Os")
                         .HasColumnType("text");
 
@@ -146,7 +153,21 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("CustodianAccount");
+
+                    b.HasIndex("OwnerTeamOptionId");
+
                     b.ToTable("apparatus", (string)null);
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.Apparatus", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.SystemOption", "OwnerTeamOption")
+                        .WithMany()
+                        .HasForeignKey("OwnerTeamOptionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("OwnerTeamOption");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ApparatusFile", b =>

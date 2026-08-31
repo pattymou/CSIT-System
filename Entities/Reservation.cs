@@ -163,7 +163,9 @@ public class Reservation
 
     public void Return(string account, DateTime now)
     {
-        EnsureStatus(ReservationStatus.Borrowed);
+        if (Status is not ReservationStatus.Approved and not ReservationStatus.Borrowed)
+            throw new InvalidOperationException(
+                $"Cannot transition reservation from {Status}; expected Approved or Borrowed.");
         Status = ReservationStatus.Returned;
         ReturnedAt = now;
         ReturnedBy = account;

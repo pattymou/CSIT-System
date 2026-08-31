@@ -4,32 +4,130 @@
 @inject ReservationApiClient Api
 @inject NavigationManager Nav
 
-<PageTitle>逾期未歸還</PageTitle>
-<h3 class="page-title">逾期未歸還</h3>
-@if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
-else if (_loading) { <div class="surface-card">載入中...</div> }
-else
-{
-    <div class="surface-card"><div class="project-table-wrap"><table class="project-table">
-        <thead><tr><th>預約</th><th>借用人 / 部門 / 分機</th><th>設備</th><th>借出時間</th><th>應歸還</th><th>逾期</th></tr></thead>
-        <tbody>
-        @if (_items.Count == 0) { <tr><td colspan="6" class="empty-row">目前沒有逾期未歸還設備。</td></tr> }
-        @foreach (var item in _items)
-        {
-            <tr class="clickable-row" @onclick="() => Open(item.Id)"><td>@item.ReservationNo</td>
-                <td>@item.ApplicantName<br /><span class="hint-text">@item.ApplicantDepartment / #@item.ApplicantExtension</span></td>
-                <td>@ReservationUi.EquipmentSummary(item.ApparatusNames, item.ItemCount)</td><td>@if (item.BorrowedAt.HasValue) { <LocalDateTime Value="item.BorrowedAt" /> }</td>
-                <td><LocalDateTime Value="item.EndTime" /></td><td>@OverdueText(item.EndTime)</td></tr>
-        }
-        </tbody></table></div>
-        <div class="form-actions"><button class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-review")'>返回管理</button></div>
-    </div>
-}
+<PageTitle>設備預約逾期管理</PageTitle>
+
+<div class="overdue-page">
+    <header class="overdue-header">
+        <div>
+            <p>RESERVATION OVERDUE MANAGEMENT</p>
+            <h3 class="page-title">設備預約逾期管理</h3>
+            <span>集中查看已逾期但尚未完成歸還或後續處理的設備預約。</span>
+        </div>
+        <button type="button" class="btn-secondary" @onclick='() => Nav.NavigateTo("/staff/reservations")'>返回設備預約管理</button>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="surface-card error-text">@_message</div>
+    }
+    else if (_loading)
+    {
+        <div class="surface-card">載入中...</div>
+    }
+    else
+    {
+        <div class="overdue-summary">
+            <div class="summary-tab strong-warning active">
+                <span>逾期未歸還</span><strong>@_result.OverdueReturnCount</strong>
+            </div>
+        </div>
+
+        <section class="surface-card overdue-list-card">
+            <div class="project-table-wrap">
+                <table class="project-table overdue-table">
+                    <thead>
+                        <tr>
+                            <th>類型</th>
+                            <th>預約編號</th>
+                            <th>借用人 / 部門 / 分機</th>
+                            <th>與我相關設備</th>
+                            <th>預約期間</th>
+                            <th>應歸還</th>
+                            <th>逾期時間</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (!_result.Items.Any())
+                        {
+                            <tr><td colspan="8" class="empty-row">目前沒有符合條件的逾期管理案件。</td></tr>
+                        }
+                        else
+                        {
+                            @foreach (var item in _result.Items)
+                            {
+                                <tr>
+                                    <td><span class="overdue-badge overdue-unreturned">逾期未歸還</span></td>
+                                    <td><strong>@item.ReservationNo</strong><div class="hint-text">@item.Purpose</div></td>
+                                    <td>@item.ApplicantName<div class="hint-text">@item.ApplicantDepartment / @ExtensionText(item.ApplicantExtension)</div></td>
+                                    <td>
+                                        <div class="visible-equipment-list">
+                                            @foreach (var apparatus in item.VisibleApparatus)
+                                            {
+                                                <div><strong>@apparatus.Name</strong><span>@EquipmentMeta(apparatus)</span></div>
+                                            }
+                                        </div>
+                                        <div class="hint-text">可管理 @item.VisibleApparatusCount / 全部 @item.TotalReservationItemCount 台</div>
+                                    </td>
+                                    <td><LocalDateTime Value="item.StartTime" /> ～<br /><LocalDateTime Value="item.EndTime" /></td>
+                                    <td><LocalDateTime Value="item.EndTime" /></td>
+                                    <td><strong class="overdue-duration">@OverdueText(item.EndTime)</strong></td>
+                                    <td><button type="button" class="btn-secondary compact-action" @onclick="() => Open(item.ReservationId)">查看預約</button></td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    }
+</div>
+
+<style>
+    .overdue-page { max-width:1440px; margin:0 auto; }
+    .overdue-header { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; margin-bottom:20px; }
+    .overdue-header p { margin:0 0 5px; color:#67e8f9; font-size:.72rem; font-weight:800; letter-spacing:.14em; }
+    .overdue-header h3 { margin:0 0 6px; }
+    .overdue-header span { color:#94a3b8; }
+    .overdue-summary { display:grid; grid-template-columns:minmax(220px,360px); gap:12px; margin-bottom:16px; }
+    .summary-tab { display:flex; justify-content:space-between; align-items:center; min-height:62px; padding:14px 17px; border:1px solid rgba(148,163,184,.2); border-radius:12px; color:#cbd5e1; background:rgba(15,23,42,.55); text-align:left; }
+    .summary-tab strong { font-size:1.35rem; color:#f8fafc; }
+    .summary-tab.strong-warning.active { border-color:#fb923c; background:rgba(154,52,18,.16); }
+    .overdue-list-card { padding:0; overflow:hidden; }
+    .overdue-table th,.overdue-table td { vertical-align:top; }
+    .overdue-badge { display:inline-flex; padding:5px 9px; border-radius:999px; white-space:nowrap; font-size:.76rem; font-weight:800; }
+    .overdue-badge.overdue-unreturned { color:#fed7aa; background:rgba(194,65,12,.2); border:1px solid rgba(251,146,60,.35); }
+    .visible-equipment-list { display:grid; gap:7px; min-width:210px; margin-bottom:6px; }
+    .visible-equipment-list div { display:grid; }
+    .visible-equipment-list span { color:#94a3b8; font-size:.78rem; }
+    .overdue-duration { color:#fdba74; white-space:nowrap; }
+    .compact-action { padding:7px 11px; white-space:nowrap; }
+    @@media(max-width:900px) { .overdue-header { flex-direction:column; }.overdue-summary { grid-template-columns:1fr; } }
+</style>
+
 @code {
-    private List<ReservationListDto> _items = [];
+    private ReservationOverdueResponseDto _result = new();
     private bool _loading = true;
     private string? _message;
-    protected override async Task OnInitializedAsync() { try { _items = await Api.OverdueAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _loading = false; } }
-    private static string OverdueText(DateTime end) { var span = DateTime.UtcNow - end; return span.TotalDays >= 1 ? $"{(int)span.TotalDays} 天 {span.Hours} 小時" : $"{Math.Max(0, (int)span.TotalHours)} 小時"; }
-    private void Open(Guid id) => Nav.NavigateTo($"/reservation-review/{id}");
+
+    protected override async Task OnInitializedAsync()
+    {
+        try { _result = await Api.OverdueAsync(); }
+        catch (Exception ex) { _message = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private static string ExtensionText(string? value) => string.IsNullOrWhiteSpace(value) ? "無分機" : $"#{value}";
+    private static string EquipmentMeta(ReservationOverdueApparatusDto item) => string.Join(" · ", new[] { item.ProductsId, item.Kind, item.OwnerTeamName }.Where(x => !string.IsNullOrWhiteSpace(x)));
+
+    private static string OverdueText(DateTime endTime)
+    {
+        var span = DateTime.UtcNow - endTime;
+        if (span < TimeSpan.Zero) span = TimeSpan.Zero;
+        return span.TotalHours >= 24
+            ? $"{(int)span.TotalDays} 天 {span.Hours} 小時"
+            : $"{(int)span.TotalHours} 小時 {span.Minutes} 分";
+    }
+
+    private void Open(Guid id) => Nav.NavigateTo($"/reservation-review/{id}?from=overdue");
 }

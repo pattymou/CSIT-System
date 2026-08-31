@@ -5,6 +5,7 @@ namespace SIT.DepartmentSystem.Web.Services.Interfaces;
 public interface IApparatusService
 {
     Task<string> GenerateNewIdAsync();
+    Task<ApparatusOwnershipOptionsDto> GetOwnershipOptionsAsync(CancellationToken cancellationToken = default);
 
     Task<List<ApparatusListItemDto>> GetListAsync(string moduleCode, string? keyword, string? kind);
     Task<ApparatusDetailDto?> GetByIdAsync(string moduleCode, string id);

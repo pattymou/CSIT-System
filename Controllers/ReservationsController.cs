@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
@@ -79,11 +80,14 @@ public class ReservationsController : ControllerBase
 
     [HttpGet]
     [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
-    public async Task<IActionResult> List(CancellationToken cancellationToken)
+    public async Task<IActionResult> List(
+        [FromQuery] ReservationStatus? status,
+        [FromQuery] bool active,
+        CancellationToken cancellationToken)
     {
         try
         {
-            return Ok(await _reservationService.GetListAsync(User, cancellationToken));
+            return Ok(await _reservationService.GetListAsync(User, status, active, cancellationToken));
         }
         catch (Exception ex) when (IsExpected(ex))
         {

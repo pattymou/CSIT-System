@@ -156,6 +156,28 @@
         </div>
 
         <div class="form-row">
+            <label>設備所屬 Team</label>
+            <select @bind="_form.OwnerTeamOptionId">
+                <option value="">請選擇設備所屬 Team</option>
+                @foreach (var team in _ownershipOptions.Teams)
+                {
+                    <option value="@team.Id">@team.Name / @team.Value</option>
+                }
+            </select>
+        </div>
+
+        <div class="form-row">
+            <label>保管人帳號</label>
+            <select value="@_form.CustodianAccount" @onchange="OnCustodianAccountChanged">
+                <option value="">請選擇保管人帳號</option>
+                @foreach (var user in _ownershipOptions.Users)
+                {
+                    <option value="@user.Account">@user.DisplayName (@user.Account)</option>
+                }
+            </select>
+        </div>
+
+        <div class="form-row">
             <label>保管人 *</label>
             <input @bind="_form.Custodian" />
         </div>
@@ -280,6 +302,7 @@
 
     private List<SystemOptionDto> _apparatusKindOptions = new();
     private List<SystemOptionDto> _departmentOptions = new();
+    private ApparatusOwnershipOptionsDto _ownershipOptions = new();
 
     protected override async Task OnParametersSetAsync()
     {
@@ -326,6 +349,8 @@
                     PriceUse = detail.PriceUse,
                     CustodianDepartment = detail.CustodianDepartment,
                     Custodian = detail.Custodian,
+                    CustodianAccount = detail.CustodianAccount,
+                    OwnerTeamOptionId = detail.OwnerTeamOptionId,
                     Agent = detail.Agent,
                     ReservationStatus = string.IsNullOrWhiteSpace(detail.ReservationStatus) ? "可借用" : detail.ReservationStatus,
                     Feature = detail.Feature,
@@ -626,11 +651,23 @@
 
         _apparatusKindOptions = await LoadOptionCategoryAsync("ApparatusKind");
         _departmentOptions = await LoadOptionCategoryAsync("Department");
+        _ownershipOptions = await Http.GetFromJsonAsync<ApparatusOwnershipOptionsDto>(
+            "/api/assets/ownership-options") ?? new();
 
         EnsureCurrentOption(_apparatusKindOptions, _form.Kind);
         EnsureCurrentOption(_departmentOptions, _form.CustodianDepartment);
 
         Console.WriteLine($"[ApparatusEdit] LoadOptions done. kind={_apparatusKindOptions.Count}, dept={_departmentOptions.Count}");
+    }
+
+    private void OnCustodianAccountChanged(ChangeEventArgs args)
+    {
+        var account = args.Value?.ToString()?.Trim();
+        _form.CustodianAccount = string.IsNullOrWhiteSpace(account) ? null : account.ToLowerInvariant();
+        var selected = _ownershipOptions.Users.FirstOrDefault(x =>
+            string.Equals(x.Account, _form.CustodianAccount, StringComparison.OrdinalIgnoreCase));
+        if (selected is not null)
+            _form.Custodian = selected.DisplayName;
     }
 
     private async Task<List<SystemOptionDto>> LoadOptionCategoryAsync(string category)
@@ -722,6 +759,26 @@
         public string Id { get; set; } = "";
     }
 
+    public sealed class ApparatusOwnershipOptionsDto
+    {
+        public List<ApparatusOwnerTeamOptionDto> Teams { get; set; } = new();
+        public List<ApparatusCustodianOptionDto> Users { get; set; } = new();
+    }
+
+    public sealed class ApparatusOwnerTeamOptionDto
+    {
+        public Guid Id { get; set; }
+        public string Value { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+    }
+
+    public sealed class ApparatusCustodianOptionDto
+    {
+        public string Account { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public string Department { get; set; } = string.Empty;
+    }
+
     public class ApparatusFileDto
     {
         public Guid Id { get; set; }
@@ -765,6 +822,8 @@
         public string? PriceUse { get; set; }
         public string? CustodianDepartment { get; set; }
         public string? Custodian { get; set; }
+        public string? CustodianAccount { get; set; }
+        public Guid? OwnerTeamOptionId { get; set; }
         public string? Agent { get; set; }
         public string? ReservationStatus { get; set; }
         public string? Feature { get; set; }

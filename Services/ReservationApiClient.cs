@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Components;
 using Microsoft.JSInterop;
+using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 
@@ -19,25 +20,39 @@ public sealed class ReservationApiClient(IJSRuntime js) : IAsyncDisposable
     public Task<ReservationDetailDto> UpdateAsync(Guid id, UpdateReservationRequest request) =>
         SendAsync<ReservationDetailDto>("PUT", $"/api/reservations/{id}", request);
 
-    public Task<List<ReservationListDto>> ListAsync() =>
-        SendAsync<List<ReservationListDto>>("GET", "/api/reservations", null);
+    public Task<List<ReservationListDto>> ListAsync(ReservationStatus? status = null, bool active = false)
+    {
+        var query = active
+            ? "?active=true"
+            : status.HasValue ? $"?status={status.Value}" : string.Empty;
+        return SendAsync<List<ReservationListDto>>("GET", "/api/reservations" + query, null);
+    }
 
     public Task<List<ReservationListDto>> StaffListAsync() =>
         SendAsync<List<ReservationListDto>>("GET", "/api/reservations/review", null);
 
-    public Task<List<ReservationOverviewDto>> OverviewAsync(ReservationOverviewQuery query)
+    public async Task<List<ReservationOverviewDto>> OverviewAsync(ReservationOverviewQuery query)
+    {
+        query.Page = 1;
+        query.PageSize = 200;
+        return (await OverviewPageAsync(query)).Items;
+    }
+
+    public Task<ReservationOverviewPageDto> OverviewPageAsync(ReservationOverviewQuery query)
     {
         var values = new List<string>
         {
             $"from={Uri.EscapeDataString(query.From.ToUniversalTime().ToString("O"))}",
             $"to={Uri.EscapeDataString(query.To.ToUniversalTime().ToString("O"))}",
-            $"includeHistory={query.IncludeHistory.ToString().ToLowerInvariant()}"
+            $"includeHistory={query.IncludeHistory.ToString().ToLowerInvariant()}",
+            $"page={query.Page}",
+            $"pageSize={query.PageSize}"
         };
         if (!string.IsNullOrWhiteSpace(query.ApparatusId)) values.Add($"apparatusId={Uri.EscapeDataString(query.ApparatusId)}");
         if (!string.IsNullOrWhiteSpace(query.Department)) values.Add($"department={Uri.EscapeDataString(query.Department)}");
         if (query.Status.HasValue) values.Add($"status={query.Status.Value}");
         if (!string.IsNullOrWhiteSpace(query.Borrower)) values.Add($"borrower={Uri.EscapeDataString(query.Borrower)}");
-        return SendAsync<List<ReservationOverviewDto>>("GET", "/api/reservations/overview?" + string.Join("&", values), null);
+        return SendAsync<ReservationOverviewPageDto>("GET", "/api/reservations/overview?" + string.Join("&", values), null);
     }
 
     public Task<ReservationPolicySettings> GetPolicySettingsAsync() =>
@@ -46,8 +61,8 @@ public sealed class ReservationApiClient(IJSRuntime js) : IAsyncDisposable
     public Task<List<ReservationExtensionRequestDto>> PendingExtensionsAsync() =>
         SendAsync<List<ReservationExtensionRequestDto>>("GET", "/api/reservations/extensions/pending", null);
 
-    public Task<List<ReservationListDto>> OverdueAsync() =>
-        SendAsync<List<ReservationListDto>>("GET", "/api/reservations/overdue", null);
+    public Task<ReservationOverdueResponseDto> OverdueAsync() =>
+        SendAsync<ReservationOverdueResponseDto>("GET", "/api/reservations/overdue", null);
 
     public Task<ReservationExtensionRequestDto> RequestExtensionAsync(Guid id, DateTime requestedEndTime) =>
         SendAsync<ReservationExtensionRequestDto>("POST", $"/api/reservations/{id}/extensions", new ReservationExtensionCreateRequest { RequestedEndTime = requestedEndTime });

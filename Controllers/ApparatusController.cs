@@ -17,6 +17,12 @@ public class ApparatusController : ControllerBase
         _service = service;
     }
 
+    [HttpGet("api/assets/ownership-options")]
+    public async Task<ActionResult<ApparatusOwnershipOptionsDto>> GetOwnershipOptions(CancellationToken cancellationToken)
+    {
+        return Ok(await _service.GetOwnershipOptionsAsync(cancellationToken));
+    }
+
     // 舊設備管理相容路由：固定 equipment
     [HttpGet("api/apparatus/new-id")]
     [HttpGet("api/assets/{moduleCode}/new-id")]

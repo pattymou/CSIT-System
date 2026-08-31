@@ -265,12 +265,18 @@ public sealed class ReservationService : IReservationService
 
     public async Task<IReadOnlyList<ReservationListDto>> GetListAsync(
         ClaimsPrincipal user,
+        ReservationStatus? status = null,
+        bool active = false,
         CancellationToken cancellationToken = default)
     {
         EnsureReservationUser(user);
         var account = GetAccount(user);
         var query = _db.Reservations.AsNoTracking().AsQueryable();
         query = query.Where(x => x.ApplicantAccount == account);
+        if (active)
+            query = query.Where(x => x.Status == ReservationStatus.Approved || x.Status == ReservationStatus.Borrowed);
+        else if (status.HasValue)
+            query = query.Where(x => x.Status == status.Value);
 
         return await MapList(query).ToListAsync(cancellationToken);
     }
@@ -306,7 +312,7 @@ public sealed class ReservationService : IReservationService
                 ,BorrowedAt = x.BorrowedAt
             });
 
-    public async Task<IReadOnlyList<ReservationOverviewDto>> GetOverviewAsync(
+    public async Task<ReservationOverviewPageDto> GetOverviewAsync(
         ReservationOverviewQuery query,
         CancellationToken cancellationToken = default)
     {
@@ -314,6 +320,8 @@ public sealed class ReservationService : IReservationService
         ValidateTimeRange(query.From, query.To);
         if (query.To - query.From > TimeSpan.FromDays(93))
             throw new InvalidOperationException("Overview range cannot exceed 93 days.");
+        if (query.Page < 1) throw new InvalidOperationException("Page must be at least 1.");
+        if (query.PageSize is < 1 or > 200) throw new InvalidOperationException("PageSize must be between 1 and 200.");
 
         var statuses = query.IncludeHistory
             ? Enum.GetValues<ReservationStatus>()
@@ -328,18 +336,22 @@ public sealed class ReservationService : IReservationService
         }
         if (!string.IsNullOrWhiteSpace(query.Department))
         {
-            var department = query.Department.Trim();
-            source = source.Where(x => x.ApplicantDepartment == department);
+            var department = query.Department.Trim().ToLower();
+            source = source.Where(x => x.ApplicantDepartment.ToLower().Contains(department));
         }
         if (!string.IsNullOrWhiteSpace(query.Borrower))
         {
             var borrower = query.Borrower.Trim().ToLower();
             source = source.Where(x => x.ApplicantName.ToLower().Contains(borrower)
-                || x.ApplicantAccount.ToLower().Contains(borrower));
+                || x.ApplicantAccount.ToLower().Contains(borrower)
+                || (x.ApplicantExtension != null && x.ApplicantExtension.ToLower().Contains(borrower)));
         }
 
         var now = DateTime.UtcNow;
-        return await source.OrderBy(x => x.StartTime).ThenBy(x => x.ReservationNo)
+        var totalCount = await source.CountAsync(cancellationToken);
+        var items = await source.OrderBy(x => x.StartTime).ThenBy(x => x.ReservationNo)
+            .Skip((query.Page - 1) * query.PageSize)
+            .Take(query.PageSize)
             .Select(x => new ReservationOverviewDto
             {
                 ReservationId = x.Id,
@@ -347,15 +359,18 @@ public sealed class ReservationService : IReservationService
                 StartTime = x.StartTime,
                 EndTime = x.EndTime,
                 Status = x.Status,
+                ApplicantAccount = x.ApplicantAccount,
                 ApplicantDepartment = x.ApplicantDepartment,
                 ApplicantName = x.ApplicantName,
                 ApplicantExtension = x.ApplicantExtension,
                 Purpose = x.Purpose,
-                IsOverdue = x.Status == ReservationStatus.Borrowed && x.EndTime < now,
+                IsOverdue = (x.Status == ReservationStatus.Approved || x.Status == ReservationStatus.Borrowed)
+                    && x.EndTime < now,
                 Mode = x.TestExecutionProfileId.HasValue ? ReservationMode.Environment : ReservationMode.Direct,
                 TestEnvironmentName = x.TestEnvironmentNameSnapshot,
                 EquipmentGroupName = x.EquipmentGroupNameSnapshot,
                 TestExecutionProfileName = x.TestExecutionProfileNameSnapshot,
+                CreatedAt = x.CreatedAt,
                 Apparatus = x.Items.OrderBy(i => i.ApparatusId).Select(i => new ReservationOverviewApparatusDto
                 {
                     Id = i.ApparatusId,
@@ -366,6 +381,14 @@ public sealed class ReservationService : IReservationService
                     Model = i.Model
                 }).ToList()
             }).ToListAsync(cancellationToken);
+
+        return new ReservationOverviewPageDto
+        {
+            TotalCount = totalCount,
+            Page = query.Page,
+            PageSize = query.PageSize,
+            Items = items
+        };
     }
 
     public Task<ReservationPolicySettings> GetPolicySettingsAsync(CancellationToken cancellationToken = default) =>
@@ -515,14 +538,85 @@ public sealed class ReservationService : IReservationService
         return items.Select(x => MapExtension(x, x.Reservation)).ToList();
     }
 
-    public async Task<IReadOnlyList<ReservationListDto>> GetOverdueAsync(
+    public async Task<ReservationOverdueResponseDto> GetOverdueAsync(
         ClaimsPrincipal user, CancellationToken cancellationToken = default)
     {
         EnsureScope(user, SystemAuthorization.AccessScopes.CsitStaff);
+        var account = GetAccount(user);
+        var isAdmin = user.IsInRole("Admin");
         var now = DateTime.UtcNow;
-        return await MapList(_db.Reservations.AsNoTracking()
-            .Where(x => x.Status == ReservationStatus.Borrowed && x.EndTime < now))
+        var leaderTeamIds = isAdmin
+            ? []
+            : await _db.TeamRoutings.AsNoTracking()
+                .Where(x => x.IsEnabled && x.LeaderAccount.ToLower() == account)
+                .Select(x => x.TeamOptionId)
+                .ToListAsync(cancellationToken);
+
+        var source = _db.Reservations.AsNoTracking()
+            .Where(x => (x.Status == ReservationStatus.Borrowed || x.Status == ReservationStatus.Approved)
+                && x.EndTime < now);
+
+        if (!isAdmin)
+        {
+            source = source.Where(x => x.Items.Any(i =>
+                (i.Apparatus.CustodianAccount != null
+                    && i.Apparatus.CustodianAccount.ToLower() == account)
+                || (i.Apparatus.OwnerTeamOptionId.HasValue
+                    && leaderTeamIds.Contains(i.Apparatus.OwnerTeamOptionId.Value))));
+        }
+
+        var items = await source
+            .OrderBy(x => x.EndTime)
+            .ThenBy(x => x.ReservationNo)
+            .Select(x => new ReservationOverdueItemDto
+            {
+                ReservationId = x.Id,
+                ReservationNo = x.ReservationNo,
+                Category = ReservationOverdueCategory.OverdueUnreturned,
+                ReservationStatus = x.Status,
+                ApplicantName = x.ApplicantName,
+                ApplicantDepartment = x.ApplicantDepartment,
+                ApplicantExtension = x.ApplicantExtension,
+                Purpose = x.Purpose,
+                StartTime = x.StartTime,
+                EndTime = x.EndTime,
+                BorrowedAt = x.BorrowedAt,
+                TotalReservationItemCount = x.Items.Count,
+                VisibleApparatus = x.Items
+                    .Where(i => isAdmin
+                        || (i.Apparatus.CustodianAccount != null
+                            && i.Apparatus.CustodianAccount.ToLower() == account)
+                        || (i.Apparatus.OwnerTeamOptionId.HasValue
+                            && leaderTeamIds.Contains(i.Apparatus.OwnerTeamOptionId.Value)))
+                    .OrderBy(i => i.ApparatusId)
+                    .Select(i => new ReservationOverdueApparatusDto
+                    {
+                        Id = i.Apparatus.Id,
+                        Name = i.Apparatus.Name,
+                        ProductsId = i.Apparatus.ProductsId,
+                        Kind = i.Apparatus.Kind,
+                        Brand = i.Apparatus.Brand,
+                        Model = i.Apparatus.Model,
+                        Place = i.Apparatus.Place,
+                        Custodian = i.Apparatus.Custodian,
+                        CustodianAccount = i.Apparatus.CustodianAccount,
+                        OwnerTeamOptionId = i.Apparatus.OwnerTeamOptionId,
+                        OwnerTeamName = i.Apparatus.OwnerTeamOption == null
+                            ? null
+                            : i.Apparatus.OwnerTeamOption.Name
+                    }).ToList()
+            })
             .ToListAsync(cancellationToken);
+
+        foreach (var item in items)
+            item.VisibleApparatusCount = item.VisibleApparatus.Count;
+
+        return new ReservationOverdueResponseDto
+        {
+            TotalCount = items.Count,
+            OverdueReturnCount = items.Count,
+            Items = items
+        };
     }
 
     public async Task<ReservationDetailDto> SubmitAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
@@ -1026,7 +1120,8 @@ public sealed class ReservationService : IReservationService
         BorrowedBy = x.BorrowedBy,
         ReturnedAt = x.ReturnedAt,
         ReturnedBy = x.ReturnedBy,
-        IsOverdue = x.Status == ReservationStatus.Borrowed && x.EndTime < DateTime.UtcNow,
+        IsOverdue = (x.Status == ReservationStatus.Approved || x.Status == ReservationStatus.Borrowed)
+            && x.EndTime < DateTime.UtcNow,
         Items = x.Items.OrderBy(i => i.ApparatusId).Select(i => new ReservationItemDto
         {
             Id = i.Id,

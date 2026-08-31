@@ -38,6 +38,9 @@ public class Apparatus
 
     public string? CustodianDepartment { get; set; }
     public string Custodian { get; set; } = string.Empty;
+    public string? CustodianAccount { get; set; }
+    public Guid? OwnerTeamOptionId { get; set; }
+    public SystemOption? OwnerTeamOption { get; set; }
     public string? Agent { get; set; }
 
     public string ReservationStatus { get; set; } = "可借用";

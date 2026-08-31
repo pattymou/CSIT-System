@@ -7,49 +7,216 @@
 @inject NavigationManager Nav
 
 <PageTitle>設備預約總覽</PageTitle>
-<div class="reservation-overview-page">
-    <div class="reservation-overview-header"><div><p>RESERVATION OVERVIEW</p><h3 class="page-title">設備預約總覽</h3></div><div class="form-actions"><button class="btn-secondary" @onclick='() => Nav.NavigateTo(BasePath)'>我的預約</button><button class="btn-primary" @onclick='() => Nav.NavigateTo($"{BasePath}/new")'>新增預約</button>@if (StaffWorkspace) { <button class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-review")'>設備預約管理</button> }</div></div>
 
-    <section class="surface-card apparatus-picker-card">
-        <div class="form-row"><label>設備 *</label><input @bind="_keyword" @bind:event="oninput" placeholder="搜尋名稱、財產編號、類型、品牌、型號、編號或地點" /></div>
-        <div class="form-row"><label>選擇設備</label><select @bind="_apparatusId"><option value="">請選擇要查看的設備</option>@foreach (var item in FilteredEquipment) { <option value="@item.Id">@item.Name · @ReservationUi.Display(item.ProductsId) · @ReservationUi.Display(item.Kind) · @ReservationUi.Display(item.Place)</option> }</select></div>
-        <label class="history-toggle"><input type="checkbox" @bind="_includeHistory" /> 顯示歷史預約</label>
-        @if (SelectedApparatus is not null) { <div class="apparatus-summary"><strong>@SelectedApparatus.Name</strong><span>@ReservationUi.Display(SelectedApparatus.ProductsId) · @ReservationUi.Display(SelectedApparatus.Kind) · @ReservationUi.Display(SelectedApparatus.Brand) / @ReservationUi.Display(SelectedApparatus.Model) · @ReservationUi.Display(SelectedApparatus.Place)</span></div> }
+<div class="reservation-overview-page">
+    <header class="reservation-overview-header">
+        <div><p>RESERVATION OVERVIEW</p><h3 class="page-title">設備預約總覽</h3><span>依日期、設備與申請資訊查詢設備預約。</span></div>
+        <div class="form-actions">
+            <button type="button" class="btn-secondary" @onclick='() => Nav.NavigateTo(BasePath)'>我的預約</button>
+            <button type="button" class="btn-primary" @onclick='() => Nav.NavigateTo($"{BasePath}/new")'>新增預約</button>
+            @if (StaffWorkspace)
+            {
+                <button type="button" class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-review")'>設備預約管理</button>
+            }
+        </div>
+    </header>
+
+    <section class="surface-card overview-filter-card">
+        <div class="overview-filter-grid">
+            <div class="form-row"><label>開始日期</label><input type="date" value="@_fromDate" @onchange="FromDateChanged" /></div>
+            <div class="form-row"><label>結束日期</label><input type="date" value="@_toDate" @onchange="ToDateChanged" /></div>
+            <div class="form-row equipment-search"><label>設備搜尋</label><input @bind="_equipmentKeyword" @bind:event="oninput" placeholder="名稱、財產編號、類型或型號" /></div>
+            <div class="form-row equipment-select"><label>設備</label><select @bind="_apparatusId"><option value="">全部設備</option>@foreach (var item in FilteredEquipment) { <option value="@item.Id">@EquipmentOptionText(item)</option> }</select></div>
+            <div class="form-row"><label>部門</label><input @bind="_department" placeholder="輸入申請部門" /></div>
+            <div class="form-row"><label>狀態</label><select @bind="_status"><option value="">全部</option>@foreach (var status in Enum.GetValues<ReservationStatus>()) { <option value="@status">@ReservationUi.StatusText(status)</option> }</select></div>
+            <div class="form-row"><label>借用人</label><input @bind="_borrower" placeholder="姓名、帳號或分機" /></div>
+        </div>
+        <div class="overview-filter-actions">
+            <button type="button" class="btn-primary" disabled="@_loading" @onclick="SearchAsync">查詢</button>
+            <button type="button" class="btn-secondary" disabled="@_loading" @onclick="Clear">清除條件</button>
+        </div>
     </section>
 
-    @if (_loading) { <div class="surface-card">載入設備中...</div> }
-    else if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
-    else if (SelectedApparatus is null) { <div class="surface-card overview-empty">請先選擇要查看的設備。</div> }
-    else { <section class="surface-card"><ApparatusReservationCalendar ApparatusId="@SelectedApparatus.Id" IncludeHistory="@_includeHistory" EventSelected="@ShowQuickDetail" /></section> }
-
-    @if (_selected is not null)
+    @if (!string.IsNullOrWhiteSpace(_message))
     {
-        <div class="overview-drawer-backdrop" @onclick="CloseQuickDetail"></div>
-        <aside class="overview-quick-drawer" role="dialog" aria-label="預約快速明細">
-            <div class="overview-drawer-head"><div><p>RESERVATION QUICK DETAIL</p><h4>@_selected.ReservationNo</h4></div><button class="btn-secondary" @onclick="CloseQuickDetail">關閉</button></div>
-            <div class="overview-quick-grid"><div><span>狀態</span><strong>@ReservationUi.StatusText(_selected.Status)</strong></div><div><span>部門</span><strong>@_selected.ApplicantDepartment</strong></div><div><span>借用人 / 分機</span><strong>@_selected.ApplicantName　#@ReservationUi.Display(_selected.ApplicantExtension)</strong></div><div><span>期間</span><strong><LocalDateTime Value="_selected.StartTime" /> ～ <LocalDateTime Value="_selected.EndTime" /></strong></div><div><span>用途</span><strong>@ReservationUi.Display(_selected.Purpose)</strong></div><div><span>目前設備</span><strong>@SelectedApparatus?.Name</strong></div></div>
-            <button class="btn-primary" @onclick="ViewDetail">查看完整明細</button>
-        </aside>
+        <div class="surface-card error-text">@_message</div>
+    }
+    else if (_loading)
+    {
+        <div class="surface-card">載入預約資料中...</div>
+    }
+    else if (!_hasSearched)
+    {
+        <section class="surface-card overview-empty-state">請設定查詢條件後按『查詢』</section>
+    }
+    else
+    {
+        <section class="surface-card overview-results-card">
+            <div class="overview-results-head"><strong>結果共 @_result.TotalCount 筆</strong><span>每頁 @_pageSize 筆</span></div>
+            @if (!_result.Items.Any())
+            {
+                <div class="overview-no-results">查無符合條件的設備預約。</div>
+            }
+            else
+            {
+                <div class="project-table-wrap">
+                    <table class="project-table overview-table">
+                        <thead><tr><th>預約編號</th><th>預約期間</th><th>借用人 / 部門 / 分機</th><th>用途</th><th>設備</th><th>狀態</th><th>建立時間</th></tr></thead>
+                        <tbody>
+                            @foreach (var item in _result.Items)
+                            {
+                                <tr class="clickable-row" @onclick="() => Open(item.ReservationId)">
+                                    <td><strong>@item.ReservationNo</strong></td>
+                                    <td><LocalDateTime Value="item.StartTime" /> ～<br /><LocalDateTime Value="item.EndTime" /></td>
+                                    <td>@item.ApplicantName<div class="hint-text">@item.ApplicantDepartment / @ExtensionText(item.ApplicantExtension)</div></td>
+                                    <td><span class="purpose-text" title="@item.Purpose">@item.Purpose</span></td>
+                                    <td><span class="equipment-summary" title="@EquipmentTitle(item)">@EquipmentSummary(item)</span></td>
+                                    <td><span class="record-status-pill">@ReservationUi.StatusText(item.Status)</span></td>
+                                    <td><LocalDateTime Value="item.CreatedAt" /></td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+            @if (_result.TotalCount > 0)
+            {
+                <div class="overview-pagination">
+                    <button type="button" class="btn-secondary" disabled="@(_loading || _page <= 1)" @onclick="PreviousPageAsync">上一頁</button>
+                    <span>第 @_page / @TotalPages 頁</span>
+                    <button type="button" class="btn-secondary" disabled="@(_loading || _page >= TotalPages)" @onclick="NextPageAsync">下一頁</button>
+                </div>
+            }
+        </section>
     }
 </div>
 
 <style>
-    .reservation-overview-page { max-width:1280px; margin:0 auto; }.reservation-overview-header { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:18px; }.reservation-overview-header p,.overview-drawer-head p { margin:0 0 5px; color:#67e8f9; font-size:.72rem; font-weight:800; letter-spacing:.14em; }.reservation-overview-header .page-title { margin:0; }.apparatus-picker-card { display:grid; grid-template-columns:minmax(240px,1fr) minmax(300px,1.2fr) auto; gap:14px; align-items:end; margin-bottom:16px; }.apparatus-picker-card .form-row { margin:0; }.history-toggle { padding:13px 0; white-space:nowrap; }.apparatus-summary { grid-column:1/-1; display:flex; flex-wrap:wrap; gap:8px 14px; color:#cbd5e1; font-size:.88rem; }.apparatus-summary strong { color:#f1f5f9; }.overview-empty { padding:34px; color:#94a3b8; text-align:center; }.overview-drawer-backdrop { position:fixed; inset:0; z-index:100; background:rgba(2,6,23,.56); }.overview-quick-drawer { position:fixed; z-index:101; top:0; right:0; width:min(500px,100vw); height:100vh; overflow:auto; padding:24px; border-left:1px solid rgba(148,163,184,.2); background:#111b28; box-shadow:-18px 0 42px rgba(2,6,23,.45); }.overview-drawer-head { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; margin-bottom:22px; }.overview-drawer-head h4 { margin:0; font-size:1.15rem; }.overview-quick-grid { display:grid; gap:15px; margin-bottom:22px; }.overview-quick-grid div { padding-bottom:12px; border-bottom:1px solid rgba(148,163,184,.13); }.overview-quick-grid span { display:block; margin-bottom:4px; color:#94a3b8; font-size:.8rem; }.overview-quick-grid strong { display:block; color:#e8edf7; overflow-wrap:anywhere; }
-    @@media(max-width:800px) { .reservation-overview-header { flex-direction:column; }.apparatus-picker-card { grid-template-columns:1fr; }.history-toggle { padding:0; } }
+    .reservation-overview-page { max-width:1440px; margin:0 auto; padding-bottom:28px; }
+    .reservation-overview-header { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; margin-bottom:18px; }
+    .reservation-overview-header p { margin:0 0 5px; color:#67e8f9; font-size:.72rem; font-weight:800; letter-spacing:.14em; }
+    .reservation-overview-header h3 { margin:0 0 6px; }.reservation-overview-header span { color:#94a3b8; }
+    .overview-filter-card { margin-bottom:16px; }.overview-filter-grid { display:grid; grid-template-columns:repeat(4,minmax(170px,1fr)); gap:14px; align-items:end; }
+    .overview-filter-grid .form-row { min-width:0; margin:0; }.equipment-search,.equipment-select { grid-column:span 2; }
+    .overview-filter-actions { display:flex; gap:10px; margin-top:16px; }
+    .overview-empty-state,.overview-no-results { padding:28px 20px; color:#94a3b8; text-align:center; }
+    .overview-results-card { padding:0; overflow:hidden; }.overview-results-head { display:flex; justify-content:space-between; gap:12px; padding:16px 18px; border-bottom:1px solid rgba(148,163,184,.13); }.overview-results-head span { color:#94a3b8; font-size:.86rem; }
+    .overview-table th,.overview-table td { vertical-align:top; }.purpose-text,.equipment-summary { display:inline-block; max-width:280px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; vertical-align:bottom; }
+    .overview-pagination { display:flex; justify-content:flex-end; align-items:center; gap:12px; padding:15px 18px; border-top:1px solid rgba(148,163,184,.13); }.overview-pagination span { min-width:100px; color:#cbd5e1; text-align:center; }
+    @@media(max-width:1050px) { .overview-filter-grid { grid-template-columns:repeat(2,minmax(180px,1fr)); }.equipment-search,.equipment-select { grid-column:span 1; } }
+    @@media(max-width:760px) { .reservation-overview-header { flex-direction:column; }.overview-filter-grid { grid-template-columns:1fr; }.overview-filter-actions button { flex:1; }.overview-results-head { align-items:flex-start; flex-direction:column; }.overview-pagination { justify-content:center; } }
 </style>
 
 @code {
     [Parameter] public string BasePath { get; set; } = "/reservations";
     [Parameter] public bool StaffWorkspace { get; set; }
+
+    private const int _pageSize = 50;
     private List<ApparatusListItemDto> _equipment = [];
-    private string _keyword = string.Empty, _apparatusId = string.Empty;
-    private bool _includeHistory, _loading = true;
+    private ReservationOverviewPageDto _result = new() { Page = 1, PageSize = _pageSize };
+    private string _fromDate = FirstDayOfCurrentMonth().ToString("yyyy-MM-dd", global::System.Globalization.CultureInfo.InvariantCulture);
+    private string _toDate = LastDayOfCurrentMonth().ToString("yyyy-MM-dd", global::System.Globalization.CultureInfo.InvariantCulture);
+    private string _equipmentKeyword = string.Empty;
+    private string _apparatusId = string.Empty;
+    private string _department = string.Empty;
+    private string _borrower = string.Empty;
+    private ReservationStatus? _status;
+    private int _page = 1;
+    private bool _loading = true;
+    private bool _hasSearched;
     private string? _message;
-    private ReservationOverviewDto? _selected;
-    private IEnumerable<ApparatusListItemDto> FilteredEquipment => _equipment.Where(x => new[] { x.Name, x.ProductsId, x.Kind, x.Brand, x.Model, x.Number, x.Place }.Any(v => v?.Contains(_keyword.Trim(), StringComparison.OrdinalIgnoreCase) == true));
-    private ApparatusListItemDto? SelectedApparatus => _equipment.FirstOrDefault(x => x.Id == _apparatusId);
-    protected override async Task OnInitializedAsync() { try { _equipment = await Api.GetBookableApparatusAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _loading = false; } }
-    private void ShowQuickDetail(ReservationOverviewDto item) => _selected = item;
-    private void CloseQuickDetail() => _selected = null;
-    private void ViewDetail() { if (_selected is not null) Nav.NavigateTo($"{BasePath}/{_selected.ReservationId}"); }
+
+    private IEnumerable<ApparatusListItemDto> FilteredEquipment => _equipment.Where(x =>
+        string.IsNullOrWhiteSpace(_equipmentKeyword)
+        || new[] { x.Name, x.ProductsId, x.Kind, x.Brand, x.Model, x.Number, x.Place }
+            .Any(value => value?.Contains(_equipmentKeyword.Trim(), StringComparison.OrdinalIgnoreCase) == true));
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_result.TotalCount / (double)_pageSize));
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _equipment = await Api.GetBookableApparatusAsync();
+        }
+        catch (Exception ex) { _message = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private async Task SearchAsync()
+    {
+        _page = 1;
+        _hasSearched = true;
+        _result = new ReservationOverviewPageDto { Page = 1, PageSize = _pageSize };
+        await LoadAsync();
+    }
+    private void FromDateChanged(ChangeEventArgs e) => _fromDate = e.Value?.ToString() ?? string.Empty;
+    private void ToDateChanged(ChangeEventArgs e) => _toDate = e.Value?.ToString() ?? string.Empty;
+
+    private void Clear()
+    {
+        _fromDate = FirstDayOfCurrentMonth().ToString("yyyy-MM-dd", global::System.Globalization.CultureInfo.InvariantCulture);
+        _toDate = LastDayOfCurrentMonth().ToString("yyyy-MM-dd", global::System.Globalization.CultureInfo.InvariantCulture);
+        _equipmentKeyword = _apparatusId = _department = _borrower = string.Empty;
+        _status = null;
+        _page = 1;
+        _hasSearched = false;
+        _result = new ReservationOverviewPageDto { Page = 1, PageSize = _pageSize };
+        _message = null;
+    }
+
+    private async Task PreviousPageAsync() { if (_page > 1) { _page--; await LoadAsync(); } }
+    private async Task NextPageAsync() { if (_page < TotalPages) { _page++; await LoadAsync(); } }
+
+    private async Task LoadAsync()
+    {
+        _message = null;
+        if (!DateOnly.TryParseExact(_fromDate, "yyyy-MM-dd", global::System.Globalization.CultureInfo.InvariantCulture, global::System.Globalization.DateTimeStyles.None, out var fromDate)
+            || !DateOnly.TryParseExact(_toDate, "yyyy-MM-dd", global::System.Globalization.CultureInfo.InvariantCulture, global::System.Globalization.DateTimeStyles.None, out var toDate))
+        {
+            _message = "請輸入有效的開始與結束日期。";
+            return;
+        }
+        if (fromDate > toDate)
+        {
+            _message = "開始日期不可晚於結束日期。";
+            return;
+        }
+
+        _loading = true;
+        _message = null;
+        try
+        {
+            var rangeStart = await Api.LocalInputToUtcAsync($"{fromDate:yyyy-MM-dd}T00:00");
+            var rangeEndExclusive = await Api.LocalInputToUtcAsync($"{toDate.AddDays(1):yyyy-MM-dd}T00:00");
+            _result = await Api.OverviewPageAsync(new ReservationOverviewQuery
+            {
+                From = rangeStart,
+                To = rangeEndExclusive,
+                ApparatusId = Clean(_apparatusId),
+                Department = Clean(_department),
+                Status = _status,
+                Borrower = Clean(_borrower),
+                IncludeHistory = true,
+                Page = _page,
+                PageSize = _pageSize
+            });
+            if (_page > TotalPages) { _page = TotalPages; await LoadAsync(); }
+        }
+        catch (Exception ex) { _message = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private void Open(Guid id) => Nav.NavigateTo($"{BasePath}/{id}");
+    private static string ExtensionText(string? value) => string.IsNullOrWhiteSpace(value) ? "無分機" : $"#{value}";
+    private static string EquipmentSummary(ReservationOverviewDto item) => item.Apparatus.Count switch
+    {
+        0 => "無設備",
+        1 => item.Apparatus[0].Name,
+        _ => $"{item.Apparatus[0].Name} +{item.Apparatus.Count - 1}"
+    };
+    private static string EquipmentTitle(ReservationOverviewDto item) => string.Join("、", item.Apparatus.Select(x => x.Name));
+    private static string EquipmentOptionText(ApparatusListItemDto item) => $"{item.Name} · {ReservationUi.Display(item.ProductsId)} · {ReservationUi.Display(item.Kind)} · {ReservationUi.Display(item.Model)}";
+    private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static DateOnly FirstDayOfCurrentMonth() => new(DateTime.Today.Year, DateTime.Today.Month, 1);
+    private static DateOnly LastDayOfCurrentMonth() => FirstDayOfCurrentMonth().AddMonths(1).AddDays(-1);
 }

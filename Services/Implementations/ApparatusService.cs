@@ -47,6 +47,35 @@ public class ApparatusService : IApparatusService
         return fallbackId;
     }
 
+    public async Task<ApparatusOwnershipOptionsDto> GetOwnershipOptionsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var teams = await _db.SystemOptions.AsNoTracking()
+            .Where(x => x.Category == SystemOptionCategories.Team && x.IsEnabled)
+            .OrderBy(x => x.Sort)
+            .ThenBy(x => x.Name)
+            .Select(x => new ApparatusOwnerTeamOptionDto
+            {
+                Id = x.Id,
+                Value = x.Value,
+                Name = x.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        var users = await _db.Users.AsNoTracking()
+            .OrderBy(x => x.DisplayName)
+            .ThenBy(x => x.Account)
+            .Select(x => new ApparatusCustodianOptionDto
+            {
+                Account = x.Account,
+                DisplayName = x.DisplayName,
+                Department = x.Department
+            })
+            .ToListAsync(cancellationToken);
+
+        return new ApparatusOwnershipOptionsDto { Teams = teams, Users = users };
+    }
+
     public async Task<List<ApparatusListItemDto>> GetListAsync(string moduleCode, string? keyword, string? kind)
     {
         moduleCode = NormalizeModuleCode(moduleCode);
@@ -86,6 +115,9 @@ public class ApparatusService : IApparatusService
                 ReservationStatus = x.ReservationStatus,
                 Place = x.Place,
                 Custodian = x.Custodian,
+                CustodianAccount = x.CustodianAccount,
+                OwnerTeamOptionId = x.OwnerTeamOptionId,
+                OwnerTeamName = x.OwnerTeamOption == null ? null : x.OwnerTeamOption.Name,
                 Agent = x.Agent,
                 Note = x.Note
             })
@@ -98,6 +130,7 @@ public class ApparatusService : IApparatusService
 
         var entity = await _db.Apparatuses
             .Include(x => x.Files)
+            .Include(x => x.OwnerTeamOption)
             .FirstOrDefaultAsync(x => x.ModuleCode == moduleCode && x.Id == id);
 
         Console.WriteLine($"[ApparatusService] GetById. moduleCode={moduleCode}, id={id}, found={entity != null}");
@@ -110,6 +143,7 @@ public class ApparatusService : IApparatusService
         moduleCode = NormalizeModuleCode(moduleCode);
 
         ValidateUpsert(request);
+        var ownership = await ValidateOwnershipAsync(request, CancellationToken.None);
 
         var id = string.IsNullOrWhiteSpace(request.Id)
             ? await GenerateNewIdAsync()
@@ -148,6 +182,8 @@ public class ApparatusService : IApparatusService
             PriceUse = request.PriceUse,
             CustodianDepartment = request.CustodianDepartment,
             Custodian = request.Custodian!.Trim(),
+            CustodianAccount = ownership.CustodianAccount,
+            OwnerTeamOptionId = ownership.OwnerTeamOptionId,
             Agent = request.Agent,
             ReservationStatus = string.IsNullOrWhiteSpace(request.ReservationStatus) ? "可借用" : request.ReservationStatus,
             Feature = request.Feature,
@@ -180,6 +216,7 @@ public class ApparatusService : IApparatusService
         }
 
         ValidateUpsert(request);
+        var ownership = await ValidateOwnershipAsync(request, CancellationToken.None);
         ApplyConcurrencyToken(entity, request.RowVersion);
 
         entity.ModuleCode = moduleCode;
@@ -206,6 +243,8 @@ public class ApparatusService : IApparatusService
         entity.PriceUse = request.PriceUse;
         entity.CustodianDepartment = request.CustodianDepartment;
         entity.Custodian = request.Custodian!.Trim();
+        entity.CustodianAccount = ownership.CustodianAccount;
+        entity.OwnerTeamOptionId = ownership.OwnerTeamOptionId;
         entity.Agent = request.Agent;
         entity.ReservationStatus = request.ReservationStatus;
         entity.Feature = request.Feature;
@@ -669,6 +708,9 @@ public class ApparatusService : IApparatusService
             PriceUse = x.PriceUse,
             CustodianDepartment = x.CustodianDepartment,
             Custodian = x.Custodian,
+            CustodianAccount = x.CustodianAccount,
+            OwnerTeamOptionId = x.OwnerTeamOptionId,
+            OwnerTeamName = x.OwnerTeamOption?.Name,
             Agent = x.Agent,
             ReservationStatus = x.ReservationStatus,
             Feature = x.Feature,
@@ -711,6 +753,34 @@ public class ApparatusService : IApparatusService
         {
             throw new InvalidOperationException("保管人不可空白");
         }
+    }
+
+    private async Task<(string? CustodianAccount, Guid? OwnerTeamOptionId)> ValidateOwnershipAsync(
+        ApparatusUpsertRequest request,
+        CancellationToken cancellationToken)
+    {
+        string? custodianAccount = null;
+        if (!string.IsNullOrWhiteSpace(request.CustodianAccount))
+        {
+            custodianAccount = request.CustodianAccount.Trim().ToLowerInvariant();
+            var exists = await _db.Users.AsNoTracking()
+                .AnyAsync(x => x.Account.ToLower() == custodianAccount, cancellationToken);
+            if (!exists)
+                throw new InvalidOperationException($"保管人帳號不存在：{request.CustodianAccount.Trim()}。");
+        }
+
+        if (request.OwnerTeamOptionId.HasValue)
+        {
+            var teamExists = await _db.SystemOptions.AsNoTracking().AnyAsync(
+                x => x.Id == request.OwnerTeamOptionId.Value
+                    && x.Category == SystemOptionCategories.Team
+                    && x.IsEnabled,
+                cancellationToken);
+            if (!teamExists)
+                throw new InvalidOperationException("設備所屬 Team 必須是啟用中的 Team 選項。");
+        }
+
+        return (custodianAccount, request.OwnerTeamOptionId);
     }
 
     private static string NormalizeModuleCode(string? moduleCode)
