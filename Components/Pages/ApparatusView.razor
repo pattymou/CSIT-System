@@ -1,10 +1,9 @@
 ﻿@page "/apparatus/{Id}"
 @page "/assets/{ModuleCode}/{Id}"
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
-@rendermode InteractiveServer
-@using global::System.Net.Http.Json
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @using SIT.DepartmentSystem.Web.Services.Interfaces
-@inject HttpClient Http
+@inject BrowserApiClient Api
 @inject NavigationManager Nav
 @inject IMenuManagementService MenuService
 
@@ -117,23 +116,36 @@ else
 
     private ApparatusDetailDto? _item;
     private string? _message;
+    private bool _reloadRequested;
 
     // ⭐ 新增：頁面標題
     private string PageTitle = "";
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
     {
+        _reloadRequested = true;
+        _item = null;
+        _message = null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_reloadRequested) return;
+        _reloadRequested = false;
+
         await LoadMenuTitle(); // ⭐ 新增
 
         try
         {
-            _item = await Http.GetFromJsonAsync<ApparatusDetailDto>(
+            _item = await Api.GetAsync<ApparatusDetailDto>(
                 $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(Id)}");
         }
         catch (Exception ex)
         {
             _message = $"載入資料失敗：{ex.Message}";
         }
+
+        StateHasChanged();
     }
 
     // ⭐ 核心：抓「子選單名稱」
@@ -186,7 +198,7 @@ else
 
     private async Task DeleteAsync()
     {
-        var response = await Http.DeleteAsync(
+        var response = await Api.DeleteAsync(
             $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(Id)}");
 
         if (response.IsSuccessStatusCode)
@@ -195,8 +207,7 @@ else
             return;
         }
 
-        var error = await response.Content.ReadAsStringAsync();
-        _message = $"刪除失敗：{response.StatusCode} {error}";
+        _message = $"刪除失敗：{response.StatusCode} {response.Body}";
     }
 
     private static string Display(string? value)

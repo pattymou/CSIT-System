@@ -3,12 +3,11 @@
 @page "/assets/{ModuleCode}/new"
 @page "/assets/{ModuleCode}/{Id}/edit"
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
-@rendermode InteractiveServer
-@using global::System.Net.Http.Json
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @using Microsoft.AspNetCore.Components.Forms
 @using SIT.DepartmentSystem.Web.Models.Api
 @using SIT.DepartmentSystem.Web.Services.Interfaces
-@inject HttpClient Http
+@inject BrowserApiClient Api
 @inject NavigationManager Nav
 @inject IMenuManagementService MenuService
 
@@ -19,6 +18,12 @@
     <div class="form-card error-text">@_message</div>
 }
 
+@if (_loading)
+{
+    <div class="form-card">載入中...</div>
+}
+
+<div hidden="@_loading">
 <div class="form-card">
     <div class="case-card-head">
         <div>
@@ -229,7 +234,7 @@
         </button>
     </div>
 
-    <div class="upload-box">
+    <div class="upload-box" @ref="_fileInputContainer">
         <InputFile OnChange="OnFilesSelected" multiple />
         <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案。</span>
     </div>
@@ -273,6 +278,7 @@
         回上一頁
     </button>
 </div>
+</div>
 
 @code {
     [Parameter] public string? ModuleCode { get; set; }
@@ -291,6 +297,9 @@
     private bool _uploading;
     private string? _message;
     private bool _hasCreatedRecord;
+    private ElementReference _fileInputContainer;
+    private bool _reloadRequested;
+    private bool _loading = true;
 
     private ApparatusUpsertRequest _form = new()
     {
@@ -304,9 +313,43 @@
     private List<SystemOptionDto> _departmentOptions = new();
     private ApparatusOwnershipOptionsDto _ownershipOptions = new();
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
+    {
+        _reloadRequested = true;
+        _loading = true;
+        _message = null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_reloadRequested) return;
+        _reloadRequested = false;
+
+        try
+        {
+            await InitializeAsync();
+        }
+        catch (Exception ex)
+        {
+            _message = $"載入資料失敗：{ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task InitializeAsync()
     {
         _message = null;
+        _hasCreatedRecord = false;
+        _form = new ApparatusUpsertRequest { ReservationStatus = "可借用" };
+        _selectedFiles = new();
+        _files = new();
+        _apparatusKindOptions = new();
+        _departmentOptions = new();
+        _ownershipOptions = new();
 
         await LoadPageMetaAsync();
         await LoadOptionsAsync();
@@ -317,7 +360,7 @@
 
             Console.WriteLine($"[ApparatusEdit] Edit load start. moduleCode={EffectiveModuleCode}, id={Id}");
 
-            var detail = await Http.GetFromJsonAsync<ApparatusDetailDto>(
+            var detail = await Api.GetAsync<ApparatusDetailDto>(
                 $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Id}");
 
             if (detail != null)
@@ -370,7 +413,7 @@
             return;
         }
 
-        var newId = await Http.GetFromJsonAsync<NewApparatusIdResponse>(
+        var newId = await Api.GetAsync<NewApparatusIdResponse>(
             $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/new-id");
 
         _form.Id = newId?.Id ?? "";
@@ -461,20 +504,20 @@
 
         try
         {
-            HttpResponseMessage response;
+            BrowserApiResponse response;
 
             if (_isEdit || _hasCreatedRecord)
             {
                 Console.WriteLine($"[ApparatusEdit] Update start. moduleCode={EffectiveModuleCode}, id={_form.Id}, name={_form.Name}, kind={_form.Kind}");
-                response = await Http.PutAsJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}", _form);
+                response = await Api.PutJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}", _form);
             }
             else
             {
                 Console.WriteLine($"[ApparatusEdit] Create start. moduleCode={EffectiveModuleCode}, id={_form.Id}, name={_form.Name}, kind={_form.Kind}");
-                response = await Http.PostAsJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}", _form);
+                response = await Api.PostJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}", _form);
             }
 
-            var body = await response.Content.ReadAsStringAsync();
+            var body = response.Body;
 
             if (response.IsSuccessStatusCode)
             {
@@ -497,22 +540,17 @@
         }
     }
 
-    private async Task OnFilesSelected(InputFileChangeEventArgs e)
+    private void OnFilesSelected(InputFileChangeEventArgs e)
     {
         _selectedFiles.Clear();
 
         foreach (var file in e.GetMultipleFiles(20))
         {
-            await using var stream = file.OpenReadStream(200_000_000);
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms);
-
             _selectedFiles.Add(new SelectedUploadFile
             {
                 FileName = file.Name,
                 ContentType = file.ContentType,
-                Size = file.Size,
-                Content = ms.ToArray()
+                Size = file.Size
             });
         }
 
@@ -553,8 +591,8 @@
             {
                 Console.WriteLine($"[ApparatusEdit] Create before upload start. moduleCode={EffectiveModuleCode}, id={_form.Id}");
 
-                var createResponse = await Http.PostAsJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}", _form);
-                var createText = await createResponse.Content.ReadAsStringAsync();
+                var createResponse = await Api.PostJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}", _form);
+                var createText = createResponse.Body;
 
                 if (!createResponse.IsSuccessStatusCode)
                 {
@@ -567,25 +605,12 @@
                 Console.WriteLine($"[ApparatusEdit] Create before upload success. id={_form.Id}");
             }
 
-            using var content = new MultipartFormDataContent();
-
-            foreach (var file in _selectedFiles)
-            {
-                var streamContent = new StreamContent(new MemoryStream(file.Content));
-
-                if (!string.IsNullOrWhiteSpace(file.ContentType))
-                {
-                    streamContent.Headers.ContentType =
-                        new global::System.Net.Http.Headers.MediaTypeHeaderValue(file.ContentType);
-                }
-
-                content.Add(streamContent, "files", file.FileName);
-            }
-
             Console.WriteLine($"[ApparatusEdit] Upload start. moduleCode={EffectiveModuleCode}, id={_form.Id}, count={_selectedFiles.Count}");
 
-            var response = await Http.PostAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files", content);
-            var responseText = await response.Content.ReadAsStringAsync();
+            var response = await Api.UploadFilesAsync(
+                $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files",
+                _fileInputContainer);
+            var responseText = response.Body;
 
             if (response.IsSuccessStatusCode)
             {
@@ -620,8 +645,8 @@
 
         Console.WriteLine($"[ApparatusEdit] LoadFiles start. moduleCode={EffectiveModuleCode}, id={_form.Id}");
 
-        _files = await Http.GetFromJsonAsync<List<ApparatusFileDto>>(
-            $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files") ?? new();
+        _files = await Api.GetAsync<List<ApparatusFileDto>>(
+            $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files");
 
         Console.WriteLine($"[ApparatusEdit] LoadFiles done. id={_form.Id}, count={_files.Count}");
     }
@@ -630,8 +655,8 @@
     {
         Console.WriteLine($"[ApparatusEdit] DeleteFile start. fileId={fileId}");
 
-        var response = await Http.DeleteAsync($"/api/assets/files/{fileId}");
-        var body = await response.Content.ReadAsStringAsync();
+        var response = await Api.DeleteAsync($"/api/assets/files/{fileId}");
+        var body = response.Body;
 
         if (response.IsSuccessStatusCode)
         {
@@ -651,8 +676,8 @@
 
         _apparatusKindOptions = await LoadOptionCategoryAsync("ApparatusKind");
         _departmentOptions = await LoadOptionCategoryAsync("Department");
-        _ownershipOptions = await Http.GetFromJsonAsync<ApparatusOwnershipOptionsDto>(
-            "/api/assets/ownership-options") ?? new();
+        _ownershipOptions = await Api.GetAsync<ApparatusOwnershipOptionsDto>(
+            "/api/assets/ownership-options");
 
         EnsureCurrentOption(_apparatusKindOptions, _form.Kind);
         EnsureCurrentOption(_departmentOptions, _form.CustodianDepartment);
@@ -678,7 +703,7 @@
 
             Console.WriteLine($"[ApparatusEdit] LoadOptionCategory start. category={category}, url={url}");
 
-            var result = await Http.GetFromJsonAsync<List<SystemOptionDto>>(url) ?? new();
+            var result = await Api.GetAsync<List<SystemOptionDto>>(url);
 
             var list = result
                 .Where(x => x.IsEnabled)
@@ -740,7 +765,6 @@
         public string FileName { get; set; } = "";
         public string? ContentType { get; set; }
         public long Size { get; set; }
-        public byte[] Content { get; set; } = [];
     }
 
     public class SystemOptionDto

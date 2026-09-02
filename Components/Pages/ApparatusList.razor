@@ -1,11 +1,10 @@
 @page "/apparatus"
 @page "/assets/{ModuleCode}"
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
-@rendermode InteractiveServer
-@using global::System.Net.Http.Json
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @using SIT.DepartmentSystem.Web.Models.Api
 @using SIT.DepartmentSystem.Web.Services.Interfaces
-@inject HttpClient Http
+@inject BrowserApiClient Api
 @inject NavigationManager Nav
 @inject IMenuManagementService MenuService
 
@@ -44,7 +43,11 @@
 }
 
 <div class="form-card">
-    @if (_items.Count == 0)
+    @if (_loading)
+    {
+        <div class="record-empty-box"><strong>載入中...</strong></div>
+    }
+    else if (_items.Count == 0)
     {
         <div class="record-empty-box">
             <strong>目前沒有資料</strong>
@@ -107,17 +110,31 @@
     private string? _message;
     private List<ApparatusListItemDto> _items = new();
     private CancellationTokenSource? _searchCts;
+    private bool _reloadRequested;
+    private bool _loading = true;
 
-    protected override async Task OnInitializedAsync()
+    protected override void OnParametersSet()
     {
-        await LoadPageMetaAsync();
-        await LoadAsync();
+        _reloadRequested = true;
+        _loading = true;
+        _message = null;
+        _items = new();
     }
 
-    protected override async Task OnParametersSetAsync()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        await LoadPageMetaAsync();
-        await LoadAsync();
+        if (!_reloadRequested) return;
+        _reloadRequested = false;
+        try
+        {
+            await LoadPageMetaAsync();
+            await LoadAsync();
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
     }
 
     private async Task LoadPageMetaAsync()
@@ -177,19 +194,7 @@
 
             Console.WriteLine($"[AssetList] Load url: {url}");
 
-            var response = await Http.GetAsync(url);
-            var text = await response.Content.ReadAsStringAsync();
-
-            if (!response.IsSuccessStatusCode)
-            {
-                _items = new();
-                _message = $"載入清單失敗：{response.StatusCode}\n{text}";
-                Console.WriteLine($"[AssetList] Load failed: {response.StatusCode} {text}");
-                return;
-            }
-
-            var result = await response.Content.ReadFromJsonAsync<List<ApparatusListItemDto>>();
-            _items = result ?? new();
+            _items = await Api.GetAsync<List<ApparatusListItemDto>>(url);
 
             Console.WriteLine($"[AssetList] Load success. moduleCode={EffectiveModuleCode}, count={_items.Count}");
         }
@@ -213,7 +218,7 @@
 
     private async Task DeleteAsync(string id)
     {
-        var response = await Http.DeleteAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(id)}");
+        var response = await Api.DeleteAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(id)}");
 
         if (response.IsSuccessStatusCode)
         {
@@ -223,9 +228,8 @@
         }
         else
         {
-            var error = await response.Content.ReadAsStringAsync();
-            _message = $"刪除失敗：{response.StatusCode} {error}";
-            Console.WriteLine($"[AssetList] Delete failed. moduleCode={EffectiveModuleCode}, id={id}, status={response.StatusCode}, body={error}");
+            _message = $"刪除失敗：{response.StatusCode} {response.Body}";
+            Console.WriteLine($"[AssetList] Delete failed. moduleCode={EffectiveModuleCode}, id={id}, status={response.StatusCode}, body={response.Body}");
         }
     }
 

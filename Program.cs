@@ -57,6 +57,7 @@ builder.Services.AddScoped<IApparatusAvailabilityService, ApparatusAvailabilityS
 builder.Services.AddScoped<IApparatusResourceCapabilityService, ApparatusResourceCapabilityService>();
 builder.Services.AddScoped<IResourceSchedulerService, ResourceSchedulerService>();
 builder.Services.AddScoped<ReservationApiClient>();
+builder.Services.AddScoped<BrowserApiClient>();
 builder.Services.AddScoped<ITestCatalogService, TestCatalogService>();
 builder.Services.AddScoped<IPlannedTestItemService, PlannedTestItemService>();
 builder.Services.AddScoped<IModuleCaseService, ModuleCaseService>();
