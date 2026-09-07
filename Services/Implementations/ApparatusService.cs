@@ -119,7 +119,27 @@ public class ApparatusService : IApparatusService
                 OwnerTeamOptionId = x.OwnerTeamOptionId,
                 OwnerTeamName = x.OwnerTeamOption == null ? null : x.OwnerTeamOption.Name,
                 Agent = x.Agent,
-                Note = x.Note
+                Note = x.Note,
+                EnvironmentGroupDeviceId = x.EnvironmentGroupDevices
+                    .OrderByDescending(d => d.IsInEnvironment)
+                    .ThenByDescending(d => d.PresenceUpdatedAt ?? d.AddedAt)
+                    .Select(d => (Guid?)d.Id)
+                    .FirstOrDefault(),
+                EnvironmentGroupId = x.EnvironmentGroupDevices
+                    .OrderByDescending(d => d.IsInEnvironment)
+                    .ThenByDescending(d => d.PresenceUpdatedAt ?? d.AddedAt)
+                    .Select(d => (Guid?)d.EquipmentGroupId)
+                    .FirstOrDefault(),
+                EnvironmentGroupName = x.EnvironmentGroupDevices
+                    .OrderByDescending(d => d.IsInEnvironment)
+                    .ThenByDescending(d => d.PresenceUpdatedAt ?? d.AddedAt)
+                    .Select(d => d.EquipmentGroup.Name)
+                    .FirstOrDefault(),
+                IsInEnvironment = x.EnvironmentGroupDevices
+                    .OrderByDescending(d => d.IsInEnvironment)
+                    .ThenByDescending(d => d.PresenceUpdatedAt ?? d.AddedAt)
+                    .Select(d => (bool?)d.IsInEnvironment)
+                    .FirstOrDefault()
             })
             .ToListAsync();
     }
@@ -131,6 +151,7 @@ public class ApparatusService : IApparatusService
         var entity = await _db.Apparatuses
             .Include(x => x.Files)
             .Include(x => x.OwnerTeamOption)
+            .Include(x => x.EnvironmentGroupDevices).ThenInclude(x => x.EquipmentGroup)
             .FirstOrDefaultAsync(x => x.ModuleCode == moduleCode && x.Id == id);
 
         Console.WriteLine($"[ApparatusService] GetById. moduleCode={moduleCode}, id={id}, found={entity != null}");
@@ -291,6 +312,12 @@ public class ApparatusService : IApparatusService
         {
             throw new InvalidOperationException(
                 "This apparatus has reservation history and cannot be deleted. Retain the apparatus record instead.");
+        }
+
+        if (await _db.EquipmentGroupDevices.AsNoTracking().AnyAsync(x => x.ApparatusId == id))
+        {
+            throw new InvalidOperationException(
+                "This apparatus belongs to a test environment group and cannot be deleted. Remove the group membership first.");
         }
 
         foreach (var file in entity.Files)
@@ -680,6 +707,10 @@ public class ApparatusService : IApparatusService
 
     private static ApparatusDetailDto ToDetailDto(Apparatus x)
     {
+        var environmentAssignment = x.EnvironmentGroupDevices
+            .OrderByDescending(d => d.IsInEnvironment)
+            .ThenByDescending(d => d.PresenceUpdatedAt ?? d.AddedAt)
+            .FirstOrDefault();
         return new ApparatusDetailDto
         {
             Id = x.Id,
@@ -716,6 +747,10 @@ public class ApparatusService : IApparatusService
             Feature = x.Feature,
             Spec = x.Spec,
             Note = x.Note,
+            EnvironmentGroupDeviceId = environmentAssignment?.Id,
+            EnvironmentGroupId = environmentAssignment?.EquipmentGroupId,
+            EnvironmentGroupName = environmentAssignment?.EquipmentGroup.Name,
+            IsInEnvironment = environmentAssignment?.IsInEnvironment,
             Files = x.Files
                 .OrderByDescending(f => f.CreatedAt)
                 .Select(ToFileDto)

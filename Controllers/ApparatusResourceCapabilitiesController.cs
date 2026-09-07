@@ -25,6 +25,10 @@ public sealed class ApparatusResourceCapabilitiesController : ControllerBase
         catch (Exception ex) when (IsExpected(ex)) { return ToError(ex); }
     }
 
+    [HttpGet("/api/apparatus/resource-capabilities/catalog-values")]
+    public async Task<IActionResult> GetCatalogValues(CancellationToken cancellationToken) =>
+        Ok(await _service.GetCatalogValuesAsync(cancellationToken));
+
     [HttpPut]
     public async Task<IActionResult> Replace(
         string apparatusId,

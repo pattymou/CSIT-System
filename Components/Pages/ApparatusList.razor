@@ -14,6 +14,13 @@
         <h3>@PageTitle</h3>
     </div>
 
+    @if (string.Equals(EffectiveModuleCode, "equipment", StringComparison.OrdinalIgnoreCase))
+    {
+        <button type="button" class="btn-secondary" @onclick="OpenTestEnvironmentSettings">
+            測試環境群組設定
+        </button>
+    }
+
     <button class="primary-btn" @onclick="Create">
         + 新增
     </button>
@@ -67,6 +74,7 @@
                         <th>名稱</th>
                         <th>保管人</th>
                         <th>狀態</th>
+                        @if (IsEquipment) { <th>測試環境</th> }
                         <th>操作</th>
                     </tr>
                 </thead>
@@ -81,6 +89,22 @@
                             <td>@item.Name</td>
                             <td>@Display(item.Custodian)</td>
                             <td>@Display(item.ReservationStatus)</td>
+                            @if (IsEquipment)
+                            {
+                                <td>
+                                    @if (string.IsNullOrWhiteSpace(item.EnvironmentGroupName))
+                                    {
+                                        <span>—</span>
+                                    }
+                                    else
+                                    {
+                                        <div class="environment-assignment-cell">
+                                            <strong>@item.EnvironmentGroupName</strong>
+                                            <small>@(item.IsInEnvironment == true ? "固定於測試環境" : "已移出")</small>
+                                        </div>
+                                    }
+                                </td>
+                            }
                             <td class="action-cell">
                                 <button type="button"
                                         class="table-chip-btn danger"
@@ -101,6 +125,7 @@
     [Parameter] public string? ModuleCode { get; set; }
 
     private string EffectiveModuleCode => string.IsNullOrWhiteSpace(ModuleCode) ? "equipment" : ModuleCode.Trim();
+    private bool IsEquipment => string.Equals(EffectiveModuleCode, "equipment", StringComparison.OrdinalIgnoreCase);
 
     private string PageTitle { get; set; } = "資產管理";
     private string PageKicker { get; set; } = "ASSET MANAGEMENT";
@@ -211,6 +236,11 @@
         Nav.NavigateTo($"/assets/{EffectiveModuleCode}/new");
     }
 
+    private void OpenTestEnvironmentSettings()
+    {
+        Nav.NavigateTo("/test-environment-settings");
+    }
+
     private void View(string id)
     {
         Nav.NavigateTo($"/assets/{EffectiveModuleCode}/{id}");
@@ -280,18 +310,9 @@
         }
     }
 
-    public class ApparatusListItemDto
-    {
-        public string Id { get; set; } = "";
-        public string ModuleCode { get; set; } = "equipment";
-        public string? ProductsId { get; set; }
-        public string Name { get; set; } = "";
-        public string? Kind { get; set; }
-        public string? Brand { get; set; }
-        public string? Model { get; set; }
-        public string? Number { get; set; }
-        public string? ReservationStatus { get; set; }
-        public string? Place { get; set; }
-        public string? Custodian { get; set; }
-    }
 }
+
+<style>
+    .environment-assignment-cell { display:grid; gap:.15rem; }
+    .environment-assignment-cell small { color:var(--text-muted,#64748b); white-space:nowrap; }
+</style>

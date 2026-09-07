@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using SIT.DepartmentSystem.Web.Models.Api;
 
 namespace SIT.DepartmentSystem.Web.Services.Interfaces;
@@ -9,14 +10,16 @@ public interface ITestCatalogService
     Task<TestEnvironmentDto?> GetTestEnvironmentAsync(Guid id, CancellationToken cancellationToken = default);
     Task<List<TestEnvironmentDto>> ListTestEnvironmentsAsync(CancellationToken cancellationToken = default);
 
-    Task<Guid> CreateEquipmentGroupAsync(EquipmentGroupUpsertRequest request, CancellationToken cancellationToken = default);
-    Task<bool> UpdateEquipmentGroupAsync(Guid id, EquipmentGroupUpsertRequest request, CancellationToken cancellationToken = default);
-    Task<EquipmentGroupDto?> GetEquipmentGroupAsync(Guid id, CancellationToken cancellationToken = default);
-    Task<List<EquipmentGroupDto>> ListEquipmentGroupsAsync(CancellationToken cancellationToken = default);
-    Task<Guid> AddEquipmentGroupRequirementAsync(Guid equipmentGroupId, EquipmentGroupRequirementUpsertRequest request, CancellationToken cancellationToken = default);
-    Task<bool> UpdateEquipmentGroupRequirementAsync(Guid id, EquipmentGroupRequirementUpsertRequest request, CancellationToken cancellationToken = default);
-    Task<bool> DeleteEquipmentGroupRequirementAsync(Guid id, CancellationToken cancellationToken = default);
-    Task<List<EquipmentGroupRequirementDto>> ListEquipmentGroupRequirementsAsync(Guid equipmentGroupId, CancellationToken cancellationToken = default);
+    Task<Guid> CreateEquipmentGroupAsync(EquipmentGroupUpsertRequest request, ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<bool> UpdateEquipmentGroupAsync(Guid id, EquipmentGroupUpsertRequest request, ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<EquipmentGroupDto?> GetEquipmentGroupAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<List<EquipmentGroupDto>> ListEquipmentGroupsAsync(ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<EquipmentGroupManagementOptionsDto> GetEquipmentGroupManagementOptionsAsync(ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<List<EquipmentGroupEquipmentOptionDto>> ListMatchingEquipmentAsync(string resourceType, string? capabilityTag, ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<Guid> AddEquipmentGroupRequirementAsync(Guid equipmentGroupId, EquipmentGroupRequirementUpsertRequest request, ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<bool> UpdateEquipmentGroupRequirementAsync(Guid id, EquipmentGroupRequirementUpsertRequest request, ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<bool> DeleteEquipmentGroupRequirementAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<List<EquipmentGroupRequirementDto>> ListEquipmentGroupRequirementsAsync(Guid equipmentGroupId, ClaimsPrincipal user, CancellationToken cancellationToken = default);
 
     Task<Guid> CreateTestCapabilityAsync(TestCapabilityUpsertRequest request, CancellationToken cancellationToken = default);
     Task<bool> UpdateTestCapabilityAsync(Guid id, TestCapabilityUpsertRequest request, CancellationToken cancellationToken = default);

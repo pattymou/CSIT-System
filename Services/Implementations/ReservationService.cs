@@ -15,17 +15,20 @@ public sealed class ReservationService : IReservationService
     private readonly IApparatusAvailabilityService _availability;
     private readonly IApparatusResourceCapabilityService _resourceCapabilities;
     private readonly IReservationPolicyService _policy;
+    private readonly IEnvironmentGroupDeviceService _environmentGroupDevices;
 
     public ReservationService(
         AppDbContext db,
         IApparatusAvailabilityService availability,
         IApparatusResourceCapabilityService resourceCapabilities,
-        IReservationPolicyService policy)
+        IReservationPolicyService policy,
+        IEnvironmentGroupDeviceService environmentGroupDevices)
     {
         _db = db;
         _availability = availability;
         _resourceCapabilities = resourceCapabilities;
         _policy = policy;
+        _environmentGroupDevices = environmentGroupDevices;
     }
 
     public async Task<IReadOnlyList<ReservationEnvironmentOptionDto>> GetEnvironmentOptionsAsync(
@@ -462,6 +465,8 @@ public sealed class ReservationService : IReservationService
             var apparatusIds = entity.Items.Select(x => x.ApparatusId).OrderBy(x => x, StringComparer.Ordinal).ToArray();
             await LockApparatusAsync(apparatusIds, cancellationToken);
             await LoadAndValidateApparatusAsync(apparatusIds, cancellationToken);
+            if (!entity.TestExecutionProfileId.HasValue)
+                await _environmentGroupDevices.EnsureDirectReservationAllowedAsync(apparatusIds, cancellationToken);
             await _availability.EnsureBookableAsync(apparatusIds, cancellationToken);
             await _availability.EnsureNoOverlapAsync(
                 apparatusIds, entity.EndTime, request.RequestedEndTime, entity.Id, cancellationToken);
@@ -636,6 +641,8 @@ public sealed class ReservationService : IReservationService
             if (apparatusIds.Length == 0) throw new InvalidOperationException("A reservation must contain at least one apparatus.");
             await LockApparatusAsync(apparatusIds, cancellationToken);
             await LoadAndValidateApparatusAsync(apparatusIds, cancellationToken);
+            if (!entity.TestExecutionProfileId.HasValue)
+                await _environmentGroupDevices.EnsureDirectReservationAllowedAsync(apparatusIds, cancellationToken);
             await _availability.EnsureBookableAsync(apparatusIds, cancellationToken);
             await _availability.EnsureNoOverlapAsync(apparatusIds, entity.StartTime, entity.EndTime, entity.Id, cancellationToken);
             await _policy.EnsureDepartmentQuotaAsync(
@@ -725,6 +732,17 @@ public sealed class ReservationService : IReservationService
         {
             var entity = await FindRequiredForUpdateAsync(id, cancellationToken);
             var fromStatus = entity.Status;
+            if (action == ReservationAuditActions.Approved)
+            {
+                var apparatusIds = entity.Items
+                    .Select(x => x.ApparatusId)
+                    .OrderBy(x => x, StringComparer.Ordinal)
+                    .ToArray();
+                await LockApparatusAsync(apparatusIds, cancellationToken);
+                await LoadAndValidateApparatusAsync(apparatusIds, cancellationToken);
+                if (!entity.TestExecutionProfileId.HasValue)
+                    await _environmentGroupDevices.EnsureDirectReservationAllowedAsync(apparatusIds, cancellationToken);
+            }
             var now = DateTime.UtcNow;
             transition(entity, account, now);
             AddAudit(entity, NewAudit(entity.Id, action, fromStatus, entity.Status,
@@ -882,6 +900,7 @@ public sealed class ReservationService : IReservationService
             var ids = NormalizeApparatusIds(directItems);
             await LockApparatusAsync(ids, cancellationToken);
             var directApparatuses = await LoadAndValidateApparatusAsync(ids, cancellationToken);
+            await _environmentGroupDevices.EnsureDirectReservationAllowedAsync(ids, cancellationToken);
             await _availability.EnsureBookableAsync(ids, cancellationToken);
             return new PreparedReservation(null, directApparatuses.Select(x => ToReservationItem(x, null)).ToList());
         }

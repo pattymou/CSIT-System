@@ -58,4 +58,5 @@ public class Apparatus
 
     public List<ApparatusFile> Files { get; set; } = new();
     public List<ApparatusResourceCapability> ResourceCapabilities { get; set; } = new();
+    public List<EquipmentGroupDevice> EnvironmentGroupDevices { get; set; } = new();
 }

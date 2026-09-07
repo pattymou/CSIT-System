@@ -52,9 +52,9 @@ else if (_canEdit)
                 <div class="equipment-grid">
                     @foreach (var item in FilteredEquipment)
                     {
-                        <article class="equipment-card @(_directSelectedIds.Contains(item.Id) ? "selected" : "")">
+                        <article class="equipment-card @(_directSelectedIds.Contains(item.Id) ? "selected" : "") @(item.IsDirectReservationLocked ? "environment-locked" : "")">
                             @EquipmentCard(item)
-                            <div class="equipment-card-actions"><button type="button" class="btn-secondary" disabled="@_saving" @onclick="() => OpenCalendar(item)">查看預約</button><button type="button" class="@(_directSelectedIds.Contains(item.Id) ? "btn-secondary" : "btn-primary")" disabled="@_saving" @onclick="() => ToggleDirect(item.Id)">@(_directSelectedIds.Contains(item.Id) ? "移除" : "選擇")</button></div>
+                            <div class="equipment-card-actions"><button type="button" class="btn-secondary" disabled="@_saving" @onclick="() => OpenCalendar(item)">查看預約</button><button type="button" class="@(_directSelectedIds.Contains(item.Id) ? "btn-secondary" : "btn-primary")" disabled="@(_saving || (item.IsDirectReservationLocked && !_directSelectedIds.Contains(item.Id)))" @onclick="() => ToggleDirect(item.Id)">@(item.IsDirectReservationLocked && !_directSelectedIds.Contains(item.Id) ? "不可單獨預約" : _directSelectedIds.Contains(item.Id) ? "移除" : "選擇")</button></div>
                         </article>
                     }
                 </div>
@@ -234,7 +234,7 @@ else if (_canEdit)
             <ApparatusReservationCalendar ApparatusId="@_calendarEquipment.Id" />
             <div class="reservation-calendar-drawer-actions">
                 @if (CalendarEquipmentSelected) { <span class="hint-text">已選擇此設備</span> }
-                else if (_mode == ReservationMode.Direct) { <button type="button" class="btn-primary" @onclick="SelectCalendarEquipment">選擇此設備</button> }
+                else if (_mode == ReservationMode.Direct) { <button type="button" class="btn-primary" disabled="@(_calendarEquipment.IsDirectReservationLocked && !_directSelectedIds.Contains(_calendarEquipment.Id))" @onclick="SelectCalendarEquipment">@(_calendarEquipment.IsDirectReservationLocked ? "不可單獨預約" : "選擇此設備")</button> }
             </div>
         </aside>
     }
@@ -525,12 +525,26 @@ else if (_canEdit)
         if (selected.Count >= requirement.Quantity) { _message = $"{requirement.ResourceType} 最多選擇 {requirement.Quantity} 台設備。"; return; }
         selected.Add(apparatusId); _schedulerSuggestions.Remove((requirement.Id, apparatusId)); _message = null;
     }
-    private void ToggleDirect(string id) { if (!_directSelectedIds.Add(id)) _directSelectedIds.Remove(id); }
+    private void ToggleDirect(string id)
+    {
+        if (_directSelectedIds.Remove(id)) return;
+        var item = _equipment.FirstOrDefault(x => x.Id == id);
+        if (item?.IsDirectReservationLocked == true)
+        {
+            _message = $"設備 {ReservationUi.Display(item.ProductsId)} 固定於測試環境 {item.EnvironmentGroupName}，目前不可單獨預約。";
+            return;
+        }
+        _directSelectedIds.Add(id);
+    }
     private bool MatchesKeyword(ApparatusListItemDto item) => new[] { item.ProductsId, item.Name, item.Kind, item.Brand, item.Model, item.Number, item.Place }.Any(x => x?.Contains(_keyword.Trim(), StringComparison.OrdinalIgnoreCase) == true);
     private RenderFragment EquipmentCard(ApparatusListItemDto item) => @<div class="equipment-card-content">
         <div class="equipment-card-head"><strong>@item.Name</strong><span>@item.ReservationStatus</span></div>
         <div>@ReservationUi.Display(item.ProductsId) · @ReservationUi.Display(item.Kind)</div><div>@ReservationUi.Display(item.Brand) / @ReservationUi.Display(item.Model)</div>
         <div>@ReservationUi.Display(item.Number) · @ReservationUi.Display(item.Place)</div><div>保管人：@ReservationUi.Display(item.Custodian)</div>
+        @if (_mode == ReservationMode.Direct && item.IsDirectReservationLocked)
+        {
+            <div class="environment-lock-message">🔒 固定於測試環境：@item.EnvironmentGroupName<br />不可單獨預約</div>
+        }
     </div>;
     private RenderFragment SelectedEquipmentBlock(HashSet<string> ids, bool removable) => @<div class="selected-equipment">
         <div class="selected-equipment-heading"><strong>已選設備（@ids.Count）</strong><span>本次預約將使用以下設備</span></div>
@@ -558,6 +572,7 @@ else if (_canEdit)
     private void SelectCalendarEquipment()
     {
         if (_calendarEquipment is null) return;
+        if (_mode == ReservationMode.Direct && _calendarEquipment.IsDirectReservationLocked && !_directSelectedIds.Contains(_calendarEquipment.Id)) return;
         if (_mode == ReservationMode.Direct) { if (!_directSelectedIds.Contains(_calendarEquipment.Id)) ToggleDirect(_calendarEquipment.Id); }
         else if (_calendarRequirement is not null && !GetRequirementSelection(_calendarRequirement.Id).Contains(_calendarEquipment.Id)) ToggleRequirement(_calendarRequirement, _calendarEquipment.Id);
         CloseCalendar();
@@ -630,6 +645,8 @@ else if (_canEdit)
     .equipment-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(245px,1fr)); gap:12px; max-height:520px; overflow:auto; }
     .equipment-card,.requirement-card { padding:14px; border:1px solid rgba(148,163,184,.18); border-radius:14px; display:grid; gap:8px; background:rgba(15,23,42,.45); }.equipment-card-actions,.selected-equipment-actions { display:flex; flex-wrap:wrap; gap:8px; }
     .equipment-card-content { display:contents; }
+    .equipment-card.environment-locked { border-color:rgba(245,158,11,.45); background:rgba(120,53,15,.12); }
+    .environment-lock-message { padding:8px 10px; border-radius:8px; color:#fde68a; background:rgba(245,158,11,.12); font-size:.86rem; font-weight:700; line-height:1.45; }
     .equipment-card.selected,.equipment-pick.selected { border-color:#14b8a6; background:rgba(13,148,136,.18); } .equipment-card-head { display:flex; justify-content:space-between; }
     .equipment-card-head span,.requirement-head span { color:#5eead4; font-size:.85rem; margin-left:8px; } .equipment-card button { justify-self:start; }
     .environment-steps { display:grid; grid-template-columns:1fr 1fr; gap:16px; } .requirement-list { display:grid; gap:14px; }.equipment-pick { padding:10px; border:1px solid rgba(148,163,184,.18); border-radius:10px; background:rgba(15,23,42,.4); display:flex; gap:8px; align-items:flex-start; }.equipment-pick-select { flex:1; min-width:0; padding:0; border:0; background:transparent; color:#e2e8f0; text-align:left; box-shadow:none; }.equipment-pick-select:hover { transform:none; filter:none; }.equipment-pick-select span,.equipment-pick-select small { display:block; margin-top:4px; color:#94a3b8; }.equipment-calendar-button { flex:0 0 auto; padding:.55rem .7rem; font-size:.8rem; }

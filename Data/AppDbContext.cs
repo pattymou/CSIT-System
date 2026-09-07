@@ -25,6 +25,7 @@ public class AppDbContext : DbContext
     public DbSet<VerificationCategory> VerificationCategories => Set<VerificationCategory>();
     public DbSet<TestEnvironment> TestEnvironments => Set<TestEnvironment>();
     public DbSet<EquipmentGroup> EquipmentGroups => Set<EquipmentGroup>();
+    public DbSet<EquipmentGroupDevice> EquipmentGroupDevices => Set<EquipmentGroupDevice>();
     public DbSet<EquipmentGroupRequirement> EquipmentGroupRequirements => Set<EquipmentGroupRequirement>();
     public DbSet<TestCapability> TestCapabilities => Set<TestCapability>();
     public DbSet<TestPlanTemplate> TestPlanTemplates => Set<TestPlanTemplate>();

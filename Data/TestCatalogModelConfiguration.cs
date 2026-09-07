@@ -37,11 +37,46 @@ internal static class TestCatalogModelConfiguration
             entity.Property(x => x.Id).HasColumnName("id");
             entity.Property(x => x.Code).HasColumnName("code").HasMaxLength(100).IsRequired();
             entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(200).IsRequired();
+            entity.Property(x => x.OwnerTeamOptionId).HasColumnName("owner_team_option_id");
+            entity.Property(x => x.Site).HasColumnName("site").HasMaxLength(100).IsRequired();
             entity.Property(x => x.Description).HasColumnName("description");
             entity.Property(x => x.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(20).IsRequired();
             entity.Property(x => x.CreatedAt).HasColumnName("created_at");
             entity.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             entity.HasIndex(x => x.Code).IsUnique();
+            entity.HasIndex(x => x.OwnerTeamOptionId);
+            entity.HasOne(x => x.OwnerTeamOption)
+                .WithMany()
+                .HasForeignKey(x => x.OwnerTeamOptionId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<EquipmentGroupDevice>(entity =>
+        {
+            entity.ToTable("equipment_group_devices");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.EquipmentGroupId).HasColumnName("equipment_group_id");
+            entity.Property(x => x.ApparatusId).HasColumnName("apparatus_id").HasMaxLength(30).IsRequired();
+            entity.Property(x => x.IsInEnvironment).HasColumnName("is_in_environment").HasDefaultValue(true);
+            entity.Property(x => x.AddedAt).HasColumnName("added_at");
+            entity.Property(x => x.AddedBy).HasColumnName("added_by").HasMaxLength(100).IsRequired();
+            entity.Property(x => x.PresenceUpdatedAt).HasColumnName("presence_updated_at");
+            entity.Property(x => x.PresenceUpdatedBy).HasColumnName("presence_updated_by").HasMaxLength(100);
+            entity.Property(x => x.Note).HasColumnName("note");
+            entity.HasIndex(x => x.EquipmentGroupId);
+            entity.HasIndex(x => new { x.EquipmentGroupId, x.ApparatusId }).IsUnique();
+            entity.HasIndex(x => x.ApparatusId)
+                .IsUnique()
+                .HasFilter("is_in_environment = true");
+            entity.HasOne(x => x.EquipmentGroup)
+                .WithMany(x => x.Devices)
+                .HasForeignKey(x => x.EquipmentGroupId)
+                .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.Apparatus)
+                .WithMany(x => x.EnvironmentGroupDevices)
+                .HasForeignKey(x => x.ApparatusId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<EquipmentGroupRequirement>(entity =>

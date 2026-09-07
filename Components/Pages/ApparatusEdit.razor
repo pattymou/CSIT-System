@@ -220,6 +220,117 @@
     </div>
 </div>
 
+@if (IsEquipment && _isEdit)
+{
+    <div class="form-card environment-membership-card">
+        <div class="case-card-head">
+            <div>
+                <div class="case-kicker">TEST ENVIRONMENT</div>
+                <h3>測試環境</h3>
+            </div>
+        </div>
+        @if (_environmentAssignment is null)
+        {
+            <div class="record-empty-box"><strong>未加入測試環境群組</strong></div>
+        }
+        else
+        {
+            <div class="environment-membership-grid">
+                <div><span>測試環境</span><strong>@_environmentAssignment.EquipmentGroupName</strong><small>@_environmentAssignment.EquipmentGroupCode</small></div>
+                <div><span>管理 Team</span><strong>@_environmentAssignment.OwnerTeamName</strong></div>
+                <div><span>環境狀態</span><strong class="@(_environmentAssignment.IsInEnvironment ? "present" : "away")">@(_environmentAssignment.IsInEnvironment ? "在測試環境" : "已移出測試環境")</strong></div>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_environmentAssignment.Warning))
+            {
+                <div class="environment-warning">⚠ @_environmentAssignment.Warning</div>
+            }
+            @if (_environmentAssignment.CanUpdatePresence)
+            {
+                <div class="form-actions environment-actions">
+                    <button type="button" class="btn-secondary" disabled="@_savingEnvironmentPresence" @onclick="ToggleEnvironmentPresenceAsync">
+                        @(_savingEnvironmentPresence ? "處理中..." : _environmentAssignment.IsInEnvironment ? "移出測試環境" : "放回測試環境")
+                    </button>
+                </div>
+            }
+        }
+    </div>
+}
+
+@if (IsEquipment)
+{
+    <div class="form-card">
+        <div class="case-card-head">
+            <div>
+                <div class="case-kicker">RESERVATION RESOURCE</div>
+                <h3>預約資源能力</h3>
+            </div>
+            @if (_isEdit && _resourceCatalog.Count > 0)
+            {
+                <button type="button" class="primary-btn" @onclick="AddResourceCapability">新增能力</button>
+            }
+        </div>
+
+        @if (!_isEdit)
+        {
+            <div class="record-empty-box">
+                <strong>請先建立設備</strong>
+                <span>建立完成後即可設定預約資源能力。</span>
+            </div>
+        }
+        else if (_resourceCatalog.Count == 0)
+        {
+            <div class="record-empty-box">
+                <strong>目前尚未建立設備組合需求</strong>
+                <span>請先至「測試環境設定」建立設備組合與需求。</span>
+                <button type="button" class="btn-secondary" @onclick="OpenTestEnvironmentSettings">前往測試環境設定</button>
+            </div>
+        }
+        else
+        {
+            @if (_resourceMappings.Count == 0)
+            {
+                <p class="empty-text">目前尚未設定預約資源能力。</p>
+            }
+            @for (var i = 0; i < _resourceMappings.Count; i++)
+            {
+                var index = i;
+                var mapping = _resourceMappings[index];
+                <div class="form-grid resource-capability-row">
+                    <div class="form-row">
+                        <label>ResourceType</label>
+                        <select value="@mapping.ResourceType" @onchange="e => OnResourceTypeChanged(index, e)">
+                            <option value="">請選擇</option>
+                            @foreach (var type in ResourceTypes)
+                            {
+                                <option value="@type">@type</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <label>CapabilityTag</label>
+                        <select @bind="mapping.CapabilityTag">
+                            <option value="">無（僅 ResourceType）</option>
+                            @foreach (var tag in CapabilityTags(mapping.ResourceType))
+                            {
+                                <option value="@tag">@tag</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="form-row resource-remove">
+                        <label>操作</label>
+                        <button type="button" class="table-chip-btn danger" @onclick="() => RemoveResourceCapability(index)">刪除能力</button>
+                    </div>
+                </div>
+            }
+            <div class="form-actions">
+                <button type="button" class="primary-btn" disabled="@_savingResourceCapabilities" @onclick="SaveResourceCapabilitiesAsync">
+                    @(_savingResourceCapabilities ? "儲存中..." : "儲存能力")
+                </button>
+            </div>
+        }
+    </div>
+}
+
 <div class="form-card">
     <div class="case-card-head">
         <div>
@@ -291,6 +402,7 @@
     private string PageKicker => $"ASSET / {EffectiveModuleCode.ToUpperInvariant()}";
     private string PageFileTitle => $"{AssetDisplayName}檔案";
     private string AssetDisplayName => GetAssetDisplayName();
+    private bool IsEquipment => string.Equals(EffectiveModuleCode, "equipment", StringComparison.OrdinalIgnoreCase);
 
     private bool _isEdit => !string.IsNullOrWhiteSpace(Id);
     private bool _saving;
@@ -300,6 +412,12 @@
     private ElementReference _fileInputContainer;
     private bool _reloadRequested;
     private bool _loading = true;
+    private bool _savingResourceCapabilities;
+    private bool _savingEnvironmentPresence;
+    private ApparatusEnvironmentAssignmentDto? _environmentAssignment;
+    private List<ResourceMatchingCatalogValueDto> _resourceCatalog = new();
+    private List<ApparatusResourceCapabilityInput> _resourceMappings = new();
+    private IEnumerable<string> ResourceTypes => _resourceCatalog.Select(x => x.ResourceType).Distinct(StringComparer.Ordinal).OrderBy(x => x);
 
     private ApparatusUpsertRequest _form = new()
     {
@@ -350,6 +468,9 @@
         _apparatusKindOptions = new();
         _departmentOptions = new();
         _ownershipOptions = new();
+        _resourceCatalog = new();
+        _resourceMappings = new();
+        _environmentAssignment = null;
 
         await LoadPageMetaAsync();
         await LoadOptionsAsync();
@@ -402,6 +523,12 @@
                 };
 
                 _files = detail.Files ?? new();
+
+                if (IsEquipment)
+                {
+                    await LoadResourceCapabilitiesAsync();
+                    await LoadEnvironmentAssignmentAsync();
+                }
 
                 EnsureCurrentOption(_apparatusKindOptions, _form.Kind);
                 EnsureCurrentOption(_departmentOptions, _form.CustodianDepartment);
@@ -685,6 +812,41 @@
         Console.WriteLine($"[ApparatusEdit] LoadOptions done. kind={_apparatusKindOptions.Count}, dept={_departmentOptions.Count}");
     }
 
+    private async Task LoadEnvironmentAssignmentAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_form.Id))
+        {
+            _environmentAssignment = null;
+            return;
+        }
+        _environmentAssignment = await Api.GetOptionalAsync<ApparatusEnvironmentAssignmentDto>(
+            $"/api/apparatus/{Uri.EscapeDataString(_form.Id)}/environment-assignment");
+    }
+
+    private async Task ToggleEnvironmentPresenceAsync()
+    {
+        if (_environmentAssignment is null) return;
+        _savingEnvironmentPresence = true;
+        try
+        {
+            var target = !_environmentAssignment.IsInEnvironment;
+            var response = await Api.PutJsonAsync(
+                $"/api/test-catalog/equipment-group-devices/{_environmentAssignment.MembershipId}/presence",
+                new UpdateEquipmentGroupDevicePresenceRequest { IsInEnvironment = target });
+            response.EnsureSuccess();
+            await LoadEnvironmentAssignmentAsync();
+            _message = target ? "設備已放回測試環境。" : "設備已移出測試環境。";
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+        }
+        finally
+        {
+            _savingEnvironmentPresence = false;
+        }
+    }
+
     private void OnCustodianAccountChanged(ChangeEventArgs args)
     {
         var account = args.Value?.ToString()?.Trim();
@@ -781,6 +943,78 @@
     public class NewApparatusIdResponse
     {
         public string Id { get; set; } = "";
+    }
+
+    private async Task LoadResourceCapabilitiesAsync()
+    {
+        _resourceCatalog = await Api.GetAsync<List<ResourceMatchingCatalogValueDto>>(
+            "/api/apparatus/resource-capabilities/catalog-values");
+        var existing = await Api.GetAsync<List<ApparatusResourceCapabilityDto>>(
+            $"/api/apparatus/{Uri.EscapeDataString(_form.Id ?? string.Empty)}/resource-capabilities");
+        _resourceMappings = existing.Select(x => new ApparatusResourceCapabilityInput
+        {
+            ResourceType = x.ResourceType,
+            CapabilityTag = x.CapabilityTag
+        }).ToList();
+    }
+
+    private IEnumerable<string> CapabilityTags(string? resourceType) => _resourceCatalog
+        .Where(x => string.Equals(x.ResourceType, resourceType, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(x.CapabilityTag))
+        .Select(x => x.CapabilityTag!)
+        .Distinct(StringComparer.Ordinal)
+        .OrderBy(x => x);
+
+    private void AddResourceCapability()
+    {
+        _resourceMappings.Add(new ApparatusResourceCapabilityInput
+        {
+            ResourceType = ResourceTypes.FirstOrDefault() ?? string.Empty
+        });
+    }
+
+    private void RemoveResourceCapability(int index)
+    {
+        if (index >= 0 && index < _resourceMappings.Count)
+            _resourceMappings.RemoveAt(index);
+    }
+
+    private void OnResourceTypeChanged(int index, ChangeEventArgs args)
+    {
+        if (index < 0 || index >= _resourceMappings.Count) return;
+        _resourceMappings[index].ResourceType = args.Value?.ToString() ?? string.Empty;
+        _resourceMappings[index].CapabilityTag = null;
+    }
+
+    private async Task SaveResourceCapabilitiesAsync()
+    {
+        _savingResourceCapabilities = true;
+        _message = null;
+        try
+        {
+            var response = await Api.PutJsonAsync(
+                $"/api/apparatus/{Uri.EscapeDataString(_form.Id ?? string.Empty)}/resource-capabilities",
+                new ReplaceApparatusResourceCapabilitiesRequest { Mappings = _resourceMappings });
+            if (!response.IsSuccessStatusCode)
+            {
+                _message = $"儲存預約資源能力失敗：{response.Body}";
+                return;
+            }
+            await LoadResourceCapabilitiesAsync();
+            _message = "預約資源能力已儲存。";
+        }
+        catch (Exception ex)
+        {
+            _message = $"儲存預約資源能力失敗：{ex.Message}";
+        }
+        finally
+        {
+            _savingResourceCapabilities = false;
+        }
+    }
+
+    private void OpenTestEnvironmentSettings()
+    {
+        Nav.NavigateTo("/test-environment-settings");
     }
 
     public sealed class ApparatusOwnershipOptionsDto

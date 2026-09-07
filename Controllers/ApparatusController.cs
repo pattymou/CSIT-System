@@ -11,10 +11,12 @@ namespace SIT.DepartmentSystem.Web.Controllers;
 public class ApparatusController : ControllerBase
 {
     private readonly IApparatusService _service;
+    private readonly IEnvironmentGroupDeviceService _environmentGroupDevices;
 
-    public ApparatusController(IApparatusService service)
+    public ApparatusController(IApparatusService service, IEnvironmentGroupDeviceService environmentGroupDevices)
     {
         _service = service;
+        _environmentGroupDevices = environmentGroupDevices;
     }
 
     [HttpGet("api/assets/ownership-options")]
@@ -64,6 +66,13 @@ public class ApparatusController : ControllerBase
     public Task<IActionResult> GetLegacyById(string id)
     {
         return GetById("equipment", id);
+    }
+
+    [HttpGet("api/apparatus/{id}/environment-assignment")]
+    public async Task<IActionResult> GetEnvironmentAssignment(string id, CancellationToken cancellationToken)
+    {
+        var result = await _environmentGroupDevices.GetApparatusAssignmentAsync(id, User, cancellationToken);
+        return result is null ? NotFound() : Ok(result);
     }
 
     [HttpGet("api/assets/{moduleCode}/{id}")]

@@ -320,6 +320,16 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("name");
 
+                    b.Property<Guid>("OwnerTeamOptionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_team_option_id");
+
+                    b.Property<string>("Site")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("site");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -335,10 +345,72 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.HasIndex("Code")
                         .IsUnique();
 
+                    b.HasIndex("OwnerTeamOptionId");
+
                     b.ToTable("equipment_groups", null, t =>
                         {
                             t.HasCheckConstraint("ck_equipment_groups_status", "status IN ('Active', 'Disabled')");
                         });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroupDevice", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("AddedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("added_at");
+
+                    b.Property<string>("AddedBy")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("added_by");
+
+                    b.Property<string>("ApparatusId")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("apparatus_id");
+
+                    b.Property<Guid>("EquipmentGroupId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("equipment_group_id");
+
+                    b.Property<bool>("IsInEnvironment")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("is_in_environment");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("text")
+                        .HasColumnName("note");
+
+                    b.Property<DateTime?>("PresenceUpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("presence_updated_at");
+
+                    b.Property<string>("PresenceUpdatedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("presence_updated_by");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ApparatusId")
+                        .IsUnique()
+                        .HasFilter("is_in_environment = true");
+
+                    b.HasIndex("EquipmentGroupId");
+
+                    b.HasIndex("EquipmentGroupId", "ApparatusId")
+                        .IsUnique();
+
+                    b.ToTable("equipment_group_devices", (string)null);
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroupRequirement", b =>
@@ -2366,6 +2438,17 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .IsRequired();
 
                     b.Navigation("Apparatus");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.SystemOption", "OwnerTeamOption")
+                        .WithMany()
+                        .HasForeignKey("OwnerTeamOptionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("OwnerTeamOption");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroupRequirement", b =>

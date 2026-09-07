@@ -18,6 +18,14 @@ public sealed class BrowserApiClient(IJSRuntime js) : IAsyncDisposable
             ?? throw new InvalidOperationException("伺服器回傳空白資料。");
     }
 
+    public async Task<T?> GetOptionalAsync<T>(string url) where T : class
+    {
+        var response = await SendAsync("GET", url, null);
+        if (response.StatusCode == StatusCodes.Status404NotFound) return null;
+        response.EnsureSuccess();
+        return JsonSerializer.Deserialize<T>(response.Body, JsonOptions);
+    }
+
     public Task<BrowserApiResponse> PostJsonAsync<T>(string url, T body) =>
         SendAsync("POST", url, body);
 

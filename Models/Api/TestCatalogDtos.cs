@@ -24,6 +24,8 @@ public class EquipmentGroupUpsertRequest
 {
     public string Code { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    public Guid OwnerTeamOptionId { get; set; }
+    public string Site { get; set; } = string.Empty;
     public string? Description { get; set; }
     public EquipmentGroupStatus Status { get; set; } = EquipmentGroupStatus.Active;
 }
@@ -33,7 +35,95 @@ public class EquipmentGroupDto : EquipmentGroupUpsertRequest
     public Guid Id { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
+    public string OwnerTeamCode { get; set; } = string.Empty;
+    public string OwnerTeamName { get; set; } = string.Empty;
+    public int TotalDeviceCount { get; set; }
+    public int InEnvironmentDeviceCount { get; set; }
+    public EquipmentGroupCompletenessStatus CompletenessStatus { get; set; }
+    public List<EquipmentGroupMissingDeviceDto> MissingDevices { get; set; } = new();
     public List<EquipmentGroupRequirementDto> Requirements { get; set; } = new();
+}
+
+public sealed class EquipmentGroupMissingDeviceDto
+{
+    public string ApparatusId { get; set; } = string.Empty;
+    public string ApparatusName { get; set; } = string.Empty;
+    public string? ProductsId { get; set; }
+}
+
+public sealed class EquipmentGroupDeviceDto
+{
+    public Guid Id { get; set; }
+    public Guid EquipmentGroupId { get; set; }
+    public string EquipmentGroupCode { get; set; } = string.Empty;
+    public string EquipmentGroupName { get; set; } = string.Empty;
+    public Guid OwnerTeamOptionId { get; set; }
+    public string OwnerTeamName { get; set; } = string.Empty;
+    public string ApparatusId { get; set; } = string.Empty;
+    public string? ProductsId { get; set; }
+    public string ApparatusName { get; set; } = string.Empty;
+    public string? Kind { get; set; }
+    public string? Brand { get; set; }
+    public string? Model { get; set; }
+    public string? Number { get; set; }
+    public string? Custodian { get; set; }
+    public string? CustodianAccount { get; set; }
+    public string? ReservationStatus { get; set; }
+    public string? Place { get; set; }
+    public bool IsInEnvironment { get; set; }
+    public DateTime AddedAt { get; set; }
+    public string AddedBy { get; set; } = string.Empty;
+    public DateTime? PresenceUpdatedAt { get; set; }
+    public string? PresenceUpdatedBy { get; set; }
+    public string? Note { get; set; }
+    public string? Warning { get; set; }
+    public bool CanUpdatePresence { get; set; }
+}
+
+public sealed class EquipmentGroupDeviceCandidateDto
+{
+    public string ApparatusId { get; set; } = string.Empty;
+    public string? ProductsId { get; set; }
+    public string ApparatusName { get; set; } = string.Empty;
+    public string? Kind { get; set; }
+    public string? Brand { get; set; }
+    public string? Model { get; set; }
+    public string? Number { get; set; }
+    public string? Custodian { get; set; }
+    public string? CustodianAccount { get; set; }
+    public string? Place { get; set; }
+    public string? ReservationStatus { get; set; }
+    public Guid? OwnerTeamOptionId { get; set; }
+    public string? OwnerTeamName { get; set; }
+    public Guid? ActiveEquipmentGroupId { get; set; }
+    public string? ActiveEquipmentGroupName { get; set; }
+    public bool CanAdd { get; set; }
+    public string? UnavailableReason { get; set; }
+}
+
+public sealed class AddEquipmentGroupDevicesRequest
+{
+    public List<string> ApparatusIds { get; set; } = new();
+    public string? Note { get; set; }
+}
+
+public sealed class UpdateEquipmentGroupDevicePresenceRequest
+{
+    public bool IsInEnvironment { get; set; }
+    public string? Note { get; set; }
+}
+
+public sealed class ApparatusEnvironmentAssignmentDto
+{
+    public Guid MembershipId { get; set; }
+    public Guid EquipmentGroupId { get; set; }
+    public string EquipmentGroupCode { get; set; } = string.Empty;
+    public string EquipmentGroupName { get; set; } = string.Empty;
+    public Guid OwnerTeamOptionId { get; set; }
+    public string OwnerTeamName { get; set; } = string.Empty;
+    public bool IsInEnvironment { get; set; }
+    public bool CanUpdatePresence { get; set; }
+    public string? Warning { get; set; }
 }
 
 public class EquipmentGroupRequirementUpsertRequest
@@ -50,6 +140,22 @@ public class EquipmentGroupRequirementDto : EquipmentGroupRequirementUpsertReque
 {
     public Guid Id { get; set; }
     public Guid EquipmentGroupId { get; set; }
+    public string? PreferredEquipmentName { get; set; }
+    public string? PreferredEquipmentProductsId { get; set; }
+}
+
+public sealed class EquipmentGroupManagementOptionsDto
+{
+    public bool IsAdmin { get; set; }
+    public List<SystemOptionDto> Teams { get; set; } = new();
+}
+
+public sealed class EquipmentGroupEquipmentOptionDto
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? ProductsId { get; set; }
+    public string ReservationStatus { get; set; } = string.Empty;
 }
 
 public class TestCapabilityUpsertRequest

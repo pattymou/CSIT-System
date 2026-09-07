@@ -59,6 +59,7 @@ builder.Services.AddScoped<IResourceSchedulerService, ResourceSchedulerService>(
 builder.Services.AddScoped<ReservationApiClient>();
 builder.Services.AddScoped<BrowserApiClient>();
 builder.Services.AddScoped<ITestCatalogService, TestCatalogService>();
+builder.Services.AddScoped<IEnvironmentGroupDeviceService, EnvironmentGroupDeviceService>();
 builder.Services.AddScoped<IPlannedTestItemService, PlannedTestItemService>();
 builder.Services.AddScoped<IModuleCaseService, ModuleCaseService>();
 builder.Services.AddScoped<IModuleTaskService, ModuleTaskService>();

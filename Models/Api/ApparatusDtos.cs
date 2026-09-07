@@ -18,6 +18,11 @@ public class ApparatusListItemDto
     public string? OwnerTeamName { get; set; }
     public string? Agent { get; set; }
     public string? Note { get; set; }
+    public Guid? EnvironmentGroupDeviceId { get; set; }
+    public Guid? EnvironmentGroupId { get; set; }
+    public string? EnvironmentGroupName { get; set; }
+    public bool? IsInEnvironment { get; set; }
+    public bool IsDirectReservationLocked => IsInEnvironment == true;
 }
 
 public class ApparatusDetailDto
@@ -56,6 +61,10 @@ public class ApparatusDetailDto
     public string? Feature { get; set; }
     public string? Spec { get; set; }
     public string? Note { get; set; }
+    public Guid? EnvironmentGroupDeviceId { get; set; }
+    public Guid? EnvironmentGroupId { get; set; }
+    public string? EnvironmentGroupName { get; set; }
+    public bool? IsInEnvironment { get; set; }
 
     public List<ApparatusFileDto> Files { get; set; } = new();
 }

@@ -1,0 +1,11 @@
+<div class="form-actions">
+    <button type="button" class="primary-btn" @onclick="Save">@PrimaryText</button>
+    <button type="button" class="btn-secondary" @onclick="Cancel">@SecondaryText</button>
+</div>
+
+@code {
+    [Parameter] public EventCallback Save { get; set; }
+    [Parameter] public EventCallback Cancel { get; set; }
+    [Parameter] public string PrimaryText { get; set; } = "新增";
+    [Parameter] public string SecondaryText { get; set; } = "清空";
+}
