@@ -22,6 +22,8 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.HasSequence("reservation_no_seq");
+
             modelBuilder.HasSequence("verification_application_no_seq");
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.Apparatus", b =>
@@ -42,13 +44,9 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
-                    b.Property<string>("Custodian")
-                        .IsRequired()
+                    b.Property<string>("CustodianAccount")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
-
-                    b.Property<string>("CustodianDepartment")
-                        .HasColumnType("text");
 
                     b.Property<string>("DaysUse")
                         .HasColumnType("text");
@@ -79,6 +77,12 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Property<string>("Model")
                         .HasColumnType("text");
 
+                    b.Property<string>("ModuleCode")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("ModuleCode");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(200)
@@ -99,6 +103,9 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.Property<string>("OsVersion")
                         .HasColumnType("text");
+
+                    b.Property<Guid?>("OwnerTeamOptionId")
+                        .HasColumnType("uuid");
 
                     b.Property<string>("PartNo")
                         .HasColumnType("text");
@@ -127,10 +134,20 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<uint>("Xmin")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
                     b.Property<string>("YearsUse")
                         .HasColumnType("text");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("CustodianAccount");
+
+                    b.HasIndex("OwnerTeamOptionId");
 
                     b.ToTable("apparatus", (string)null);
                 });
@@ -139,40 +156,294 @@ namespace SIT.DepartmentSystem.Web.Migrations
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
+                        .HasColumnType("uuid")
+                        .HasColumnName("Id");
 
                     b.Property<string>("ApparatusId")
                         .IsRequired()
                         .HasMaxLength(30)
-                        .HasColumnType("character varying(30)");
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("ApparatusId");
 
                     b.Property<string>("ContentType")
-                        .HasColumnType("text");
+                        .HasColumnType("text")
+                        .HasColumnName("ContentType");
 
                     b.Property<DateTime>("CreatedAt")
-                        .HasColumnType("timestamp with time zone");
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("CreatedAt");
 
                     b.Property<string>("FileName")
                         .IsRequired()
                         .HasMaxLength(300)
-                        .HasColumnType("character varying(300)");
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("FileName");
 
                     b.Property<string>("FilePath")
                         .IsRequired()
                         .HasMaxLength(1000)
-                        .HasColumnType("character varying(1000)");
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("FilePath");
 
                     b.Property<long>("FileSize")
-                        .HasColumnType("bigint");
+                        .HasColumnType("bigint")
+                        .HasColumnName("FileSize");
+
+                    b.Property<bool>("IsRawDataExported")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_raw_data_exported");
+
+                    b.Property<string>("NasFilePath")
+                        .HasColumnType("text")
+                        .HasColumnName("nas_file_path");
+
+                    b.Property<string>("NasFolderPath")
+                        .HasColumnType("text")
+                        .HasColumnName("nas_folder_path");
+
+                    b.Property<string>("RawDataExportError")
+                        .HasColumnType("text")
+                        .HasColumnName("raw_data_export_error");
+
+                    b.Property<DateTime?>("RawDataExportedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("raw_data_exported_at");
+
+                    b.Property<string>("RawJsonPath")
+                        .HasColumnType("text")
+                        .HasColumnName("raw_json_path");
 
                     b.Property<string>("UploadEmp")
-                        .HasColumnType("text");
+                        .HasColumnType("text")
+                        .HasColumnName("UploadEmp");
 
                     b.HasKey("Id");
 
                     b.HasIndex("ApparatusId");
 
                     b.ToTable("apparatus_files", (string)null);
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ApparatusResourceCapability", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ApparatusId")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("apparatus_id");
+
+                    b.Property<string>("CapabilityTag")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("capability_tag");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("ResourceType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("resource_type");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ApparatusId");
+
+                    b.HasIndex("ResourceType");
+
+                    b.HasIndex("ApparatusId", "ResourceType")
+                        .IsUnique()
+                        .HasFilter("capability_tag IS NULL");
+
+                    b.HasIndex("ResourceType", "CapabilityTag");
+
+                    b.HasIndex("ApparatusId", "ResourceType", "CapabilityTag")
+                        .IsUnique()
+                        .HasFilter("capability_tag IS NOT NULL");
+
+                    b.ToTable("apparatus_resource_capabilities", (string)null);
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("code");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<Guid>("OwnerTeamOptionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("owner_team_option_id");
+
+                    b.Property<string>("Site")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("site");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("OwnerTeamOptionId");
+
+                    b.ToTable("equipment_groups", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_equipment_groups_status", "status IN ('Active', 'Disabled')");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroupDevice", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("AddedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("added_at");
+
+                    b.Property<string>("AddedBy")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("added_by");
+
+                    b.Property<string>("ApparatusId")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("apparatus_id");
+
+                    b.Property<Guid>("EquipmentGroupId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("equipment_group_id");
+
+                    b.Property<bool>("IsInEnvironment")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("is_in_environment");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("text")
+                        .HasColumnName("note");
+
+                    b.Property<DateTime?>("PresenceUpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("presence_updated_at");
+
+                    b.Property<string>("PresenceUpdatedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("presence_updated_by");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ApparatusId")
+                        .IsUnique()
+                        .HasFilter("is_in_environment = true");
+
+                    b.HasIndex("EquipmentGroupId");
+
+                    b.HasIndex("EquipmentGroupId", "ApparatusId")
+                        .IsUnique();
+
+                    b.ToTable("equipment_group_devices", (string)null);
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroupRequirement", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<bool>("AllowAlternative")
+                        .HasColumnType("boolean")
+                        .HasColumnName("allow_alternative");
+
+                    b.Property<string>("CapabilityTag")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("capability_tag");
+
+                    b.Property<Guid>("EquipmentGroupId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("equipment_group_id");
+
+                    b.Property<string>("PreferredEquipmentId")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("preferred_equipment_id");
+
+                    b.Property<int>("Quantity")
+                        .HasColumnType("integer")
+                        .HasColumnName("quantity");
+
+                    b.Property<bool>("Required")
+                        .HasColumnType("boolean")
+                        .HasColumnName("required");
+
+                    b.Property<string>("ResourceType")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("resource_type");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EquipmentGroupId");
+
+                    b.HasIndex("PreferredEquipmentId");
+
+                    b.ToTable("equipment_group_requirements", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_equipment_group_requirements_quantity", "quantity > 0");
+                        });
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.MenuItem", b =>
@@ -219,6 +490,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Property<int>("SortOrder")
                         .HasColumnType("integer")
                         .HasColumnName("sort_order");
+
+                    b.Property<string>("TemplateType")
+                        .HasColumnType("text")
+                        .HasColumnName("template_type");
 
                     b.Property<string>("Title")
                         .IsRequired()
@@ -319,6 +594,30 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Property<long>("FileSize")
                         .HasColumnType("bigint")
                         .HasColumnName("file_size");
+
+                    b.Property<bool>("IsRawDataExported")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_raw_data_exported");
+
+                    b.Property<string>("NasFilePath")
+                        .HasColumnType("text")
+                        .HasColumnName("nas_file_path");
+
+                    b.Property<string>("NasFolderPath")
+                        .HasColumnType("text")
+                        .HasColumnName("nas_folder_path");
+
+                    b.Property<string>("RawDataExportError")
+                        .HasColumnType("text")
+                        .HasColumnName("raw_data_export_error");
+
+                    b.Property<DateTime?>("RawDataExportedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("raw_data_exported_at");
+
+                    b.Property<string>("RawJsonPath")
+                        .HasColumnType("text")
+                        .HasColumnName("raw_json_path");
 
                     b.Property<Guid>("RecordId")
                         .HasColumnType("uuid")
@@ -734,6 +1033,1015 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.ToTable("module_record_tasks", (string)null);
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.PlannedTestItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("EquipmentGroupId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("equipment_group_id");
+
+                    b.Property<int>("EstimatedDurationMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("estimated_duration_minutes");
+
+                    b.Property<Guid>("ModuleRecordId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("module_record_id");
+
+                    b.Property<string>("PlanningSource")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("planning_source");
+
+                    b.Property<Guid>("ReportTemplateId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("report_template_id");
+
+                    b.Property<string>("ReportTemplateVersion")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("report_template_version");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TestCapabilityId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("test_capability_id");
+
+                    b.Property<Guid>("TestEnvironmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("test_environment_id");
+
+                    b.Property<Guid>("TestExecutionProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("test_execution_profile_id");
+
+                    b.Property<Guid>("TestPlanTemplateId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("test_plan_template_id");
+
+                    b.Property<string>("TestPlanTemplateVersion")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("test_plan_template_version");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EquipmentGroupId");
+
+                    b.HasIndex("ReportTemplateId");
+
+                    b.HasIndex("TestCapabilityId");
+
+                    b.HasIndex("TestEnvironmentId");
+
+                    b.HasIndex("TestExecutionProfileId");
+
+                    b.HasIndex("TestPlanTemplateId");
+
+                    b.HasIndex("ModuleRecordId", "Status");
+
+                    b.ToTable("planned_test_items", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_planned_test_items_duration", "estimated_duration_minutes > 0");
+
+                            t.HasCheckConstraint("ck_planned_test_items_source", "planning_source IN ('Agent', 'Manual')");
+
+                            t.HasCheckConstraint("ck_planned_test_items_status", "status IN ('Draft', 'WaitingResource', 'Ready', 'Running', 'Completed', 'Returned', 'Cancelled')");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReportTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("code");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("ResultSchema")
+                        .HasColumnType("text")
+                        .HasColumnName("result_schema");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TemplateFilePath")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("template_file_path");
+
+                    b.Property<string>("TemplateType")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("template_type");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("version");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("Code", "Version")
+                        .IsUnique();
+
+                    b.ToTable("report_templates", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_report_templates_status", "status IN ('Draft', 'Published', 'Retired')");
+
+                            t.HasCheckConstraint("ck_report_templates_type", "template_type IN ('Excel', 'PDF', 'Other')");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.Reservation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ApplicantAccount")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("applicant_account");
+
+                    b.Property<string>("ApplicantAgentEmail")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("applicant_agent_email");
+
+                    b.Property<string>("ApplicantAgentExtension")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("applicant_agent_extension");
+
+                    b.Property<string>("ApplicantAgentName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("applicant_agent_name");
+
+                    b.Property<string>("ApplicantDepartment")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("applicant_department");
+
+                    b.Property<string>("ApplicantEmail")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("applicant_email");
+
+                    b.Property<string>("ApplicantExtension")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("applicant_extension");
+
+                    b.Property<string>("ApplicantName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("applicant_name");
+
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("approved_at");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("approved_by");
+
+                    b.Property<DateTime?>("BorrowedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("borrowed_at");
+
+                    b.Property<string>("BorrowedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("borrowed_by");
+
+                    b.Property<string>("CancelReason")
+                        .HasColumnType("text")
+                        .HasColumnName("cancel_reason");
+
+                    b.Property<DateTime?>("CancelledAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("cancelled_at");
+
+                    b.Property<string>("CancelledBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("cancelled_by");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Customer")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("customer");
+
+                    b.Property<DateTime>("EndTime")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("end_time");
+
+                    b.Property<string>("EquipmentGroupCodeSnapshot")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("equipment_group_code_snapshot");
+
+                    b.Property<Guid?>("EquipmentGroupId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("equipment_group_id");
+
+                    b.Property<string>("EquipmentGroupNameSnapshot")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("equipment_group_name_snapshot");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("note");
+
+                    b.Property<string>("ProductModelName")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("product_model_name");
+
+                    b.Property<string>("ProjectSubPu")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("project_sub_pu");
+
+                    b.Property<string>("Purpose")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("purpose");
+
+                    b.Property<string>("RejectReason")
+                        .HasColumnType("text")
+                        .HasColumnName("reject_reason");
+
+                    b.Property<DateTime?>("RejectedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("rejected_at");
+
+                    b.Property<string>("RejectedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("rejected_by");
+
+                    b.Property<string>("ReservationNo")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("reservation_no");
+
+                    b.Property<DateTime?>("ReturnedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("returned_at");
+
+                    b.Property<string>("ReturnedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("returned_by");
+
+                    b.Property<DateTime>("StartTime")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("start_time");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("TestEnvironmentCodeSnapshot")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("test_environment_code_snapshot");
+
+                    b.Property<Guid?>("TestEnvironmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("test_environment_id");
+
+                    b.Property<string>("TestEnvironmentNameSnapshot")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("test_environment_name_snapshot");
+
+                    b.Property<string>("TestExecutionProfileCodeSnapshot")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("test_execution_profile_code_snapshot");
+
+                    b.Property<Guid?>("TestExecutionProfileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("test_execution_profile_id");
+
+                    b.Property<string>("TestExecutionProfileNameSnapshot")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("test_execution_profile_name_snapshot");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EquipmentGroupId");
+
+                    b.HasIndex("ReservationNo")
+                        .IsUnique();
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("TestEnvironmentId");
+
+                    b.HasIndex("TestExecutionProfileId");
+
+                    b.HasIndex("ApplicantAccount", "Status");
+
+                    b.HasIndex("StartTime", "EndTime");
+
+                    b.HasIndex("Status", "StartTime", "EndTime");
+
+                    b.HasIndex("ApplicantDepartment", "Status", "StartTime", "EndTime");
+
+                    b.ToTable("reservations", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_reservations_status", "status IN ('Draft', 'Pending', 'Approved', 'Borrowed', 'Returned', 'Rejected', 'Cancelled')");
+
+                            t.HasCheckConstraint("ck_reservations_time_range", "start_time < end_time");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationAuditEvent", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Action")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("action");
+
+                    b.Property<string>("ActorAccount")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("actor_account");
+
+                    b.Property<string>("ActorName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("actor_name");
+
+                    b.Property<string>("Details")
+                        .HasColumnType("text")
+                        .HasColumnName("details");
+
+                    b.Property<string>("FromStatus")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("from_status");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<string>("Reason")
+                        .HasColumnType("text")
+                        .HasColumnName("reason");
+
+                    b.Property<Guid>("ReservationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reservation_id");
+
+                    b.Property<string>("ToStatus")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("to_status");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReservationId", "OccurredAt");
+
+                    b.ToTable("reservation_audit_events", (string)null);
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationExtensionRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<DateTime>("CurrentEndTimeSnapshot")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("current_end_time_snapshot");
+
+                    b.Property<string>("RejectReason")
+                        .HasColumnType("text")
+                        .HasColumnName("reject_reason");
+
+                    b.Property<DateTime>("RequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("requested_at");
+
+                    b.Property<string>("RequestedByAccount")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("requested_by_account");
+
+                    b.Property<string>("RequestedByName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("requested_by_name");
+
+                    b.Property<DateTime>("RequestedEndTime")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("requested_end_time");
+
+                    b.Property<Guid>("ReservationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reservation_id");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at");
+
+                    b.Property<string>("ReviewedByAccount")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("reviewed_by_account");
+
+                    b.Property<string>("ReviewedByName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("reviewed_by_name");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReservationId")
+                        .IsUnique()
+                        .HasFilter("status = 'Pending'");
+
+                    b.HasIndex("Status", "RequestedAt");
+
+                    b.ToTable("reservation_extension_requests", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_reservation_extension_requests_status", "status IN ('Pending', 'Approved', 'Rejected', 'Cancelled')");
+
+                            t.HasCheckConstraint("ck_reservation_extension_requests_time", "current_end_time_snapshot < requested_end_time");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationItem", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ApparatusId")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("apparatus_id");
+
+                    b.Property<string>("ApparatusName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("apparatus_name");
+
+                    b.Property<string>("Brand")
+                        .HasColumnType("text")
+                        .HasColumnName("brand");
+
+                    b.Property<string>("Custodian")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("custodian");
+
+                    b.Property<string>("CustodianDepartment")
+                        .HasColumnType("text")
+                        .HasColumnName("custodian_department");
+
+                    b.Property<Guid?>("EquipmentGroupRequirementId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("equipment_group_requirement_id");
+
+                    b.Property<string>("Kind")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("kind");
+
+                    b.Property<string>("Model")
+                        .HasColumnType("text")
+                        .HasColumnName("model");
+
+                    b.Property<string>("Number")
+                        .HasColumnType("text")
+                        .HasColumnName("number");
+
+                    b.Property<string>("Place")
+                        .HasColumnType("text")
+                        .HasColumnName("place");
+
+                    b.Property<string>("PriceUse")
+                        .HasColumnType("text")
+                        .HasColumnName("price_use");
+
+                    b.Property<string>("ProductsId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("products_id");
+
+                    b.Property<string>("RequirementCapabilityTagSnapshot")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("requirement_capability_tag_snapshot");
+
+                    b.Property<string>("RequirementResourceTypeSnapshot")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("requirement_resource_type_snapshot");
+
+                    b.Property<Guid>("ReservationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reservation_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ApparatusId");
+
+                    b.HasIndex("EquipmentGroupRequirementId");
+
+                    b.HasIndex("ReservationId");
+
+                    b.HasIndex("ReservationId", "ApparatusId")
+                        .IsUnique();
+
+                    b.ToTable("reservation_items", (string)null);
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.SystemOption", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("category");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_enabled");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Note")
+                        .HasColumnType("text")
+                        .HasColumnName("note");
+
+                    b.Property<int>("Sort")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("value");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("system_options");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.TeamRouting", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_enabled");
+
+                    b.Property<string>("LeaderAccount")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("leader_account");
+
+                    b.Property<string>("LeaderDisplayName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("leader_display_name");
+
+                    b.Property<Guid>("TeamOptionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("team_option_id");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("IsEnabled");
+
+                    b.HasIndex("TeamOptionId")
+                        .IsUnique();
+
+                    b.ToTable("team_routings", (string)null);
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.TestCapability", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("category");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("code");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("Category", "Status");
+
+                    b.ToTable("test_capabilities", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_test_capabilities_status", "status IN ('Draft', 'Active', 'Retired')");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.TestEnvironment", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("BookingMode")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("booking_mode");
+
+                    b.Property<string>("Category")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("category");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("code");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Description")
+                        .HasColumnType("text")
+                        .HasColumnName("description");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("Site")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("site");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("Category", "Status");
+
+                    b.ToTable("test_environments", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_test_environments_booking_mode", "booking_mode IN ('Exclusive', 'Shared')");
+
+                            t.HasCheckConstraint("ck_test_environments_status", "status IN ('Active', 'Maintenance', 'Disabled')");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.TestExecutionProfile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AutomationLevel")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("automation_level");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("code");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("EquipmentGroupId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("equipment_group_id");
+
+                    b.Property<int>("EstimatedDurationMinutes")
+                        .HasColumnType("integer")
+                        .HasColumnName("estimated_duration_minutes");
+
+                    b.Property<bool>("IsDefault")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_default");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<Guid>("ReportTemplateId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("report_template_id");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<Guid>("TestCapabilityId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("test_capability_id");
+
+                    b.Property<Guid>("TestEnvironmentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("test_environment_id");
+
+                    b.Property<Guid>("TestPlanTemplateId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("test_plan_template_id");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("EquipmentGroupId");
+
+                    b.HasIndex("ReportTemplateId");
+
+                    b.HasIndex("TestCapabilityId")
+                        .IsUnique()
+                        .HasFilter("status = 'Active' AND is_default");
+
+                    b.HasIndex("TestEnvironmentId");
+
+                    b.HasIndex("TestPlanTemplateId");
+
+                    b.HasIndex("TestCapabilityId", "Status");
+
+                    b.ToTable("test_execution_profiles", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_test_execution_profiles_automation", "automation_level IN ('Manual', 'SemiAuto', 'Auto')");
+
+                            t.HasCheckConstraint("ck_test_execution_profiles_duration", "estimated_duration_minutes > 0");
+
+                            t.HasCheckConstraint("ck_test_execution_profiles_status", "status IN ('Active', 'Disabled')");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.TestPlanTemplate", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("code");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<DateTime?>("PublishedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("published_at");
+
+                    b.Property<string>("SourceFilePath")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("source_file_path");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("StructuredDefinition")
+                        .HasColumnType("text")
+                        .HasColumnName("structured_definition");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("Version")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("version");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("Code", "Version")
+                        .IsUnique();
+
+                    b.ToTable("test_plan_templates", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_test_plan_templates_status", "status IN ('Draft', 'Published', 'Retired')");
+                        });
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationApplication", b =>
                 {
                     b.Property<Guid>("Id")
@@ -744,14 +2052,6 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Property<DateTime?>("AcceptedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("accepted_at");
-
-                    b.Property<DateTime?>("RejectedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("rejected_at");
-
-                    b.Property<DateTime?>("ReturnedAt")
-                        .HasColumnType("timestamp with time zone")
-                        .HasColumnName("returned_at");
 
                     b.Property<string>("ApplicantAccount")
                         .IsRequired()
@@ -781,6 +2081,26 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)")
                         .HasColumnName("application_no");
+
+                    b.Property<string>("AssignedLeaderAccount")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("assigned_leader_account");
+
+                    b.Property<string>("AssignedLeaderDisplayName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("assigned_leader_display_name");
+
+                    b.Property<string>("CategoryCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("category_code");
+
+                    b.Property<string>("CategoryName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("category_name");
 
                     b.Property<string>("Chipset")
                         .HasMaxLength(200)
@@ -828,7 +2148,6 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnName("location");
 
                     b.Property<string>("ModuleCode")
-                        .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)")
                         .HasColumnName("module_code");
@@ -866,9 +2185,17 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("character varying(300)")
                         .HasColumnName("project_name");
 
+                    b.Property<DateTime?>("RejectedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("rejected_at");
+
                     b.Property<DateOnly?>("RequestedFinishDate")
                         .HasColumnType("date")
                         .HasColumnName("requested_finish_date");
+
+                    b.Property<DateTime?>("ReturnedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("returned_at");
 
                     b.Property<string>("SampleMacAddress")
                         .HasMaxLength(200)
@@ -899,6 +2226,20 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("submitted_at");
 
+                    b.Property<string>("TeamCode")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("team_code");
+
+                    b.Property<string>("TeamName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("team_name");
+
+                    b.Property<Guid?>("TeamOptionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("team_option_id");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
@@ -911,6 +2252,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Property<string>("ValidationRequirement")
                         .HasColumnType("text")
                         .HasColumnName("validation_requirement");
+
+                    b.Property<Guid?>("VerificationCategoryId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("verification_category_id");
 
                     b.Property<string>("WirelessDrive")
                         .HasMaxLength(200)
@@ -926,7 +2271,13 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .IsUnique()
                         .HasFilter("module_record_id IS NOT NULL");
 
+                    b.HasIndex("ApplicantAccount", "Status");
+
+                    b.HasIndex("AssignedLeaderAccount", "Status");
+
                     b.HasIndex("Status", "SubmittedAt");
+
+                    b.HasIndex("TeamOptionId", "Status");
 
                     b.ToTable("verification_applications", null, t =>
                         {
@@ -983,6 +2334,71 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.ToTable("verification_application_files", (string)null);
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationCategory", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Code")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("code");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<int>("DisplayOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("display_order");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("boolean")
+                        .HasColumnName("is_active");
+
+                    b.Property<string>("LeaderAccount")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("leader_account");
+
+                    b.Property<string>("LeaderDisplayName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("leader_display_name");
+
+                    b.Property<string>("ModuleCode")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("module_code");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Code")
+                        .IsUnique();
+
+                    b.HasIndex("IsActive", "DisplayOrder");
+
+                    b.ToTable("verification_categories", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_verification_categories_display_order", "display_order >= 0");
+                        });
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Models.AppUser", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1019,6 +2435,16 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.ToTable("users", (string)null);
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.Apparatus", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.SystemOption", "OwnerTeamOption")
+                        .WithMany()
+                        .HasForeignKey("OwnerTeamOptionId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("OwnerTeamOption");
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ApparatusFile", b =>
                 {
                     b.HasOne("SIT.DepartmentSystem.Web.Entities.Apparatus", "Apparatus")
@@ -1028,6 +2454,65 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .IsRequired();
 
                     b.Navigation("Apparatus");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ApparatusResourceCapability", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.Apparatus", "Apparatus")
+                        .WithMany("ResourceCapabilities")
+                        .HasForeignKey("ApparatusId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Apparatus");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.SystemOption", "OwnerTeamOption")
+                        .WithMany()
+                        .HasForeignKey("OwnerTeamOptionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("OwnerTeamOption");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroupDevice", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.Apparatus", "Apparatus")
+                        .WithMany("EnvironmentGroupDevices")
+                        .HasForeignKey("ApparatusId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", "EquipmentGroup")
+                        .WithMany("Devices")
+                        .HasForeignKey("EquipmentGroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Apparatus");
+
+                    b.Navigation("EquipmentGroup");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroupRequirement", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", "EquipmentGroup")
+                        .WithMany("Requirements")
+                        .HasForeignKey("EquipmentGroupId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.Apparatus", "PreferredEquipment")
+                        .WithMany()
+                        .HasForeignKey("PreferredEquipmentId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("EquipmentGroup");
+
+                    b.Navigation("PreferredEquipment");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.MenuItem", b =>
@@ -1097,6 +2582,180 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("Case");
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.PlannedTestItem", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", "EquipmentGroup")
+                        .WithMany("PlannedTestItems")
+                        .HasForeignKey("EquipmentGroupId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.ModuleRecord", "ModuleRecord")
+                        .WithMany()
+                        .HasForeignKey("ModuleRecordId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.ReportTemplate", "ReportTemplate")
+                        .WithMany("PlannedTestItems")
+                        .HasForeignKey("ReportTemplateId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.TestCapability", "TestCapability")
+                        .WithMany("PlannedTestItems")
+                        .HasForeignKey("TestCapabilityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.TestEnvironment", "TestEnvironment")
+                        .WithMany("PlannedTestItems")
+                        .HasForeignKey("TestEnvironmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.TestExecutionProfile", "TestExecutionProfile")
+                        .WithMany("PlannedTestItems")
+                        .HasForeignKey("TestExecutionProfileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.TestPlanTemplate", "TestPlanTemplate")
+                        .WithMany("PlannedTestItems")
+                        .HasForeignKey("TestPlanTemplateId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("EquipmentGroup");
+
+                    b.Navigation("ModuleRecord");
+
+                    b.Navigation("ReportTemplate");
+
+                    b.Navigation("TestCapability");
+
+                    b.Navigation("TestEnvironment");
+
+                    b.Navigation("TestExecutionProfile");
+
+                    b.Navigation("TestPlanTemplate");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.Reservation", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", "EquipmentGroup")
+                        .WithMany()
+                        .HasForeignKey("EquipmentGroupId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.TestEnvironment", "TestEnvironment")
+                        .WithMany()
+                        .HasForeignKey("TestEnvironmentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.TestExecutionProfile", "TestExecutionProfile")
+                        .WithMany()
+                        .HasForeignKey("TestExecutionProfileId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("EquipmentGroup");
+
+                    b.Navigation("TestEnvironment");
+
+                    b.Navigation("TestExecutionProfile");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationAuditEvent", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.Reservation", "Reservation")
+                        .WithMany("AuditEvents")
+                        .HasForeignKey("ReservationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Reservation");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationExtensionRequest", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.Reservation", "Reservation")
+                        .WithMany("ExtensionRequests")
+                        .HasForeignKey("ReservationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Reservation");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationItem", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.Apparatus", "Apparatus")
+                        .WithMany()
+                        .HasForeignKey("ApparatusId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.EquipmentGroupRequirement", "EquipmentGroupRequirement")
+                        .WithMany()
+                        .HasForeignKey("EquipmentGroupRequirementId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.Reservation", "Reservation")
+                        .WithMany("Items")
+                        .HasForeignKey("ReservationId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Apparatus");
+
+                    b.Navigation("EquipmentGroupRequirement");
+
+                    b.Navigation("Reservation");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.TestExecutionProfile", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", "EquipmentGroup")
+                        .WithMany("ExecutionProfiles")
+                        .HasForeignKey("EquipmentGroupId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.ReportTemplate", "ReportTemplate")
+                        .WithMany("ExecutionProfiles")
+                        .HasForeignKey("ReportTemplateId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.TestCapability", "TestCapability")
+                        .WithMany("ExecutionProfiles")
+                        .HasForeignKey("TestCapabilityId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.TestEnvironment", "TestEnvironment")
+                        .WithMany("ExecutionProfiles")
+                        .HasForeignKey("TestEnvironmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.TestPlanTemplate", "TestPlanTemplate")
+                        .WithMany("ExecutionProfiles")
+                        .HasForeignKey("TestPlanTemplateId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("EquipmentGroup");
+
+                    b.Navigation("ReportTemplate");
+
+                    b.Navigation("TestCapability");
+
+                    b.Navigation("TestEnvironment");
+
+                    b.Navigation("TestPlanTemplate");
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationApplication", b =>
                 {
                     b.HasOne("SIT.DepartmentSystem.Web.Entities.ModuleRecord", "ModuleRecord")
@@ -1120,7 +2779,22 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.Apparatus", b =>
                 {
+                    b.Navigation("EnvironmentGroupDevices");
+
                     b.Navigation("Files");
+
+                    b.Navigation("ResourceCapabilities");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", b =>
+                {
+                    b.Navigation("Devices");
+
+                    b.Navigation("ExecutionProfiles");
+
+                    b.Navigation("PlannedTestItems");
+
+                    b.Navigation("Requirements");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.MenuSection", b =>
@@ -1143,6 +2817,48 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("Files");
 
                     b.Navigation("Tasks");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReportTemplate", b =>
+                {
+                    b.Navigation("ExecutionProfiles");
+
+                    b.Navigation("PlannedTestItems");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.Reservation", b =>
+                {
+                    b.Navigation("AuditEvents");
+
+                    b.Navigation("ExtensionRequests");
+
+                    b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.TestCapability", b =>
+                {
+                    b.Navigation("ExecutionProfiles");
+
+                    b.Navigation("PlannedTestItems");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.TestEnvironment", b =>
+                {
+                    b.Navigation("ExecutionProfiles");
+
+                    b.Navigation("PlannedTestItems");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.TestExecutionProfile", b =>
+                {
+                    b.Navigation("PlannedTestItems");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.TestPlanTemplate", b =>
+                {
+                    b.Navigation("ExecutionProfiles");
+
+                    b.Navigation("PlannedTestItems");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationApplication", b =>

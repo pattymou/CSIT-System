@@ -1,0 +1,464 @@
+@page "/test-environment-groups/{GroupId:guid}/devices"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@layout MainLayout
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using SIT.DepartmentSystem.Web.Entities
+@using SIT.DepartmentSystem.Web.Models.Api
+@inject BrowserApiClient Api
+@inject ReservationApiClient ReservationApi
+@inject NavigationManager Nav
+
+<div class="case-title-row">
+    <div>
+        <div class="case-kicker">ENVIRONMENT GROUP DEVICES</div>
+        <h3 class="page-title">測試環境設備管理</h3>
+    </div>
+    <button type="button" class="btn-secondary" @onclick="Back">返回測試環境群組設定</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="form-card @(_isError ? "error-text" : "success-text")">@_message</div>
+}
+
+@if (_loading)
+{
+    <div class="form-card">載入中...</div>
+}
+else if (_group is not null)
+{
+    <section class="form-card group-summary">
+        <div>
+            <span>測試環境群組</span>
+            <strong>@_group.Name</strong>
+            <small>@_group.Code</small>
+        </div>
+        <div><span>管理 Team</span><strong>@_group.OwnerTeamName</strong></div>
+        <div><span>Site</span><strong>@_group.Site</strong></div>
+        <div>
+            <span>完整性</span>
+            <strong class="@CompletenessClass">@CompletenessName</strong>
+            <small>@_group.InEnvironmentDeviceCount / @_group.TotalDeviceCount 在環境</small>
+        </div>
+        <div>
+            <span>環境狀態</span>
+            <strong class="readiness-state @ReadinessClass">@ReadinessName</strong>
+            <small>@ReadinessSummary</small>
+        </div>
+        @if (_group.Readiness.Issues.Count > 0)
+        {
+            <div class="readiness-issues">
+                <span>目前問題</span>
+                <ul>
+                    @foreach (var issue in _group.Readiness.Issues)
+                    {
+                        <li>@issue.Message</li>
+                    }
+                </ul>
+            </div>
+        }
+    </section>
+
+    <section class="form-card availability-panel">
+        <div class="section-head">
+            <div>
+                <h4>時段可用性查詢</h4>
+                <p>只判斷目前群組成員在指定時段是否已有預約衝突；環境可否執行測試請另看上方環境狀態。</p>
+            </div>
+        </div>
+
+        <form class="availability-form" @onsubmit="CheckAvailabilityAsync" @onsubmit:preventDefault="true">
+            <label>
+                <span>開始時間</span>
+                <input type="datetime-local" step="60" required value="@_availabilityStartLocal" @onchange="AvailabilityStartChanged" />
+            </label>
+            <label>
+                <span>結束時間</span>
+                <input type="datetime-local" step="60" required value="@_availabilityEndLocal" @onchange="AvailabilityEndChanged" />
+            </label>
+            <button type="submit" class="btn-secondary" disabled="@_checkingAvailability">
+                @(_checkingAvailability ? "查詢中…" : "查詢")
+            </button>
+        </form>
+
+        @if (!string.IsNullOrWhiteSpace(_availabilityMessage))
+        {
+            <p class="availability-error" role="alert">@_availabilityMessage</p>
+        }
+        else if (_availability is not null)
+        {
+            <div class="availability-result @(_availability.IsTimeAvailable ? "available" : "busy")" role="status">
+                <strong>@(_availability.IsTimeAvailable ? "此時段無預約衝突" : "此時段已有預約")</strong>
+                <span>群組成員 @_availability.MembershipDeviceCount 台 · 衝突預約 @_availability.BlockingReservationCount 筆 · 受影響設備 @_availability.BlockingDeviceCount 台</span>
+            </div>
+
+            @if (_availability.Conflicts.Count > 0)
+            {
+                <div class="availability-conflicts">
+                    @foreach (var conflict in _availability.Conflicts)
+                    {
+                        <article class="availability-conflict">
+                            <div class="conflict-heading">
+                                <strong>@conflict.ReservationNo</strong>
+                                <span class="status-badge unavailable">@ReservationUi.StatusText(conflict.ReservationStatus)</span>
+                            </div>
+                            <div class="conflict-details">
+                                <span><LocalDateTime Value="conflict.StartTime" /> ～ <LocalDateTime Value="conflict.EndTime" /></span>
+                                <span>@ModeText(conflict.ReservationMode)</span>
+                            </div>
+                            <div class="conflict-devices">
+                                @foreach (var device in conflict.RelatedDevices)
+                                {
+                                    <span>@ConflictDeviceName(device)</span>
+                                }
+                            </div>
+                        </article>
+                    }
+                </div>
+            }
+        }
+    </section>
+
+    <section class="form-card">
+        <div class="section-head">
+            <div>
+                <h4>目前環境設備</h4>
+                <p>暫時移出會保留標準組成；從群組移除則永久修改群組組成。</p>
+            </div>
+        </div>
+
+        @if (_devices.Count == 0)
+        {
+            <div class="record-empty-box compact-empty-state">
+                <strong>未設定設備</strong>
+                <span>請從下方「可加入設備」選擇既有設備加入此測試環境。</span>
+            </div>
+        }
+        else
+        {
+            <div class="project-table-wrap current-device-table-wrap">
+                <table class="project-table current-device-table">
+                    <thead>
+                        <tr>
+                            <th>設備名稱</th>
+                            <th>設備編號</th>
+                            <th>類別</th>
+                            <th>品牌 / 型號</th>
+                            <th>地點</th>
+                            <th>保管人</th>
+                            <th>設備狀態</th>
+                            <th>環境狀態</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var device in _devices)
+                        {
+                            <tr>
+                                <td class="device-name-cell"><strong>@device.ApparatusName</strong></td>
+                                <td class="device-number-cell">@DeviceNumber(device.ProductsId, device.ApparatusId)</td>
+                                <td>@Display(device.Kind)</td>
+                                <td>@BrandModel(device.Brand, device.Model)</td>
+                                <td>@Display(device.Place)</td>
+                                <td>@Display(device.Custodian)</td>
+                                <td><span class="status-badge @DeviceMasterStatusClass(device)">@Display(device.ReservationStatus)</span></td>
+                                <td><span class="presence-badge @(device.IsInEnvironment ? "present" : "away")">@(device.IsInEnvironment ? "在測試環境" : "已移出測試環境")</span></td>
+                                <td class="action-cell">
+                                    <button type="button" class="table-chip-btn" disabled="@_saving" @onclick="() => SetPresenceAsync(device, !device.IsInEnvironment)">
+                                        @(device.IsInEnvironment ? "暫時移出" : "放回環境")
+                                    </button>
+                                    <button type="button" class="table-chip-btn danger" disabled="@_saving" @onclick="() => RemoveAsync(device)">從群組移除</button>
+                                </td>
+                            </tr>
+                            @if (!string.IsNullOrWhiteSpace(device.Warning))
+                            {
+                                <tr class="warning-row"><td colspan="9">⚠ @device.Warning</td></tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+    </section>
+
+    <section class="form-card candidate-panel">
+        <div class="section-head candidate-section-head">
+            <div>
+                <h4>可加入設備</h4>
+                <p>從設備管理既有設備中選取，可一次加入多台設備。</p>
+            </div>
+        </div>
+
+        <div class="candidate-toolbar">
+            <form class="candidate-search" @onsubmit="LoadCandidatesAsync" @onsubmit:preventDefault="true">
+                <input aria-label="搜尋可加入設備" @bind="_keyword" @bind:event="oninput" placeholder="搜尋 ID、名稱、類別、品牌、型號、編號、保管人或地點" />
+                <button type="submit" class="btn-secondary" disabled="@_saving">搜尋</button>
+            </form>
+            <div class="candidate-selection-actions">
+                <strong class="selected-count" aria-live="polite">已選 @_selectedIds.Count 台</strong>
+                <button type="button" class="primary-btn" disabled="@(_saving || _selectedIds.Count == 0)" @onclick="AddSelectedAsync">加入測試環境</button>
+            </div>
+        </div>
+
+        <div class="project-table-wrap candidate-table-wrap">
+            <table class="project-table candidate-table">
+                <thead>
+                    <tr>
+                        <th class="selection-column">選取</th>
+                        <th>設備名稱</th>
+                        <th>設備編號</th>
+                        <th>類別</th>
+                        <th>品牌 / 型號</th>
+                        <th>地點</th>
+                        <th>保管人</th>
+                        <th>所屬 Team</th>
+                        <th>狀態</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @if (_candidates.Count == 0)
+                    {
+                        <tr><td colspan="9" class="empty-row">找不到符合條件的設備</td></tr>
+                    }
+                    else
+                    {
+                        @foreach (var item in _candidates)
+                        {
+                            <tr class="candidate-row @(!item.CanAdd ? "disabled" : null) @(_selectedIds.Contains(item.ApparatusId) ? "selected" : null)"
+                                @onclick="() => ToggleCandidate(item)">
+                                <td class="selection-column">
+                                    <input type="checkbox"
+                                           aria-label="選取 @DeviceNumber(item.ProductsId, item.ApparatusId)"
+                                           disabled="@(!item.CanAdd || _saving)"
+                                           checked="@_selectedIds.Contains(item.ApparatusId)"
+                                           @onclick:stopPropagation="true"
+                                           @onchange="e => SetCandidateSelection(item, e)" />
+                                </td>
+                                <td class="device-name-cell"><strong>@item.ApparatusName</strong></td>
+                                <td class="device-number-cell">@DeviceNumber(item.ProductsId, item.ApparatusId)</td>
+                                <td>@Display(item.Kind)</td>
+                                <td>@BrandModel(item.Brand, item.Model)</td>
+                                <td>@Display(item.Place)</td>
+                                <td>@Display(item.Custodian)</td>
+                                <td>@Display(item.OwnerTeamName)</td>
+                                <td class="candidate-status-cell">
+                                    @if (item.CanAdd)
+                                    {
+                                        <span class="status-badge available">可加入</span>
+                                    }
+                                    else
+                                    {
+                                        <span class="status-badge unavailable">不可加入</span>
+                                        <small class="disabled-reason">@Display(item.UnavailableReason)</small>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    }
+                </tbody>
+            </table>
+        </div>
+    </section>
+}
+
+@code {
+    [Parameter] public Guid GroupId { get; set; }
+
+    private EquipmentGroupDto? _group;
+    private List<EquipmentGroupDeviceDto> _devices = [];
+    private List<EquipmentGroupDeviceCandidateDto> _candidates = [];
+    private readonly HashSet<string> _selectedIds = new(StringComparer.Ordinal);
+    private string _keyword = string.Empty;
+    private string? _message;
+    private bool _isError;
+    private bool _loading = true;
+    private bool _saving;
+    private bool _checkingAvailability;
+    private string _availabilityStartLocal = string.Empty;
+    private string _availabilityEndLocal = string.Empty;
+    private string? _availabilityMessage;
+    private EnvironmentAvailabilityDto? _availability;
+    private Guid _loadedGroupId;
+
+    private string CompletenessName => _group?.CompletenessStatus switch
+    {
+        EquipmentGroupCompletenessStatus.Complete => "設備齊全",
+        EquipmentGroupCompletenessStatus.Incomplete => "設備不齊全",
+        _ => "未設定設備"
+    };
+    private string CompletenessClass => _group?.CompletenessStatus switch
+    {
+        EquipmentGroupCompletenessStatus.Complete => "complete",
+        EquipmentGroupCompletenessStatus.Incomplete => "incomplete",
+        _ => "unconfigured"
+    };
+    private string ReadinessName => _group?.Readiness.Status == EnvironmentReadinessStatus.Ready
+        ? "環境可使用"
+        : "環境不可使用";
+    private string ReadinessClass => _group?.Readiness.Status == EnvironmentReadinessStatus.Ready
+        ? "ready"
+        : "not-ready";
+    private string ReadinessSummary => _group?.Readiness.Status == EnvironmentReadinessStatus.Ready
+        ? "設備完整且主檔狀態可借用"
+        : _group?.Readiness.Issues.FirstOrDefault()?.Message ?? "目前不可使用";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_loadedGroupId == GroupId) return;
+        _loadedGroupId = GroupId;
+        try
+        {
+            await InitializeAvailabilityRangeAsync();
+            await ReloadAsync();
+            await LoadCandidatesAsync();
+        }
+        catch (Exception ex) { ShowError(ex.Message); }
+        finally { _loading = false; StateHasChanged(); }
+    }
+
+    private async Task ReloadAsync()
+    {
+        _group = await Api.GetAsync<EquipmentGroupDto>($"/api/test-catalog/equipment-groups/{GroupId}");
+        _devices = await Api.GetAsync<List<EquipmentGroupDeviceDto>>($"/api/test-catalog/equipment-groups/{GroupId}/devices");
+    }
+
+    private async Task LoadCandidatesAsync()
+    {
+        try
+        {
+            _candidates = await Api.GetAsync<List<EquipmentGroupDeviceCandidateDto>>(
+                $"/api/test-catalog/equipment-groups/{GroupId}/device-candidates?keyword={Uri.EscapeDataString(_keyword)}");
+            _selectedIds.RemoveWhere(id => !_candidates.Any(x => x.ApparatusId == id && x.CanAdd));
+        }
+        catch (Exception ex) { ShowError(ex.Message); }
+    }
+
+    private async Task InitializeAvailabilityRangeAsync()
+    {
+        var now = DateTime.UtcNow.AddHours(1);
+        var start = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0, DateTimeKind.Utc);
+        _availabilityStartLocal = await ReservationApi.UtcToLocalInputAsync(start);
+        _availabilityEndLocal = await ReservationApi.UtcToLocalInputAsync(start.AddHours(4));
+        _availability = null;
+        _availabilityMessage = null;
+    }
+
+    private async Task CheckAvailabilityAsync()
+    {
+        if (_checkingAvailability) return;
+        _checkingAvailability = true;
+        _availabilityMessage = null;
+        try
+        {
+            var start = await ReservationApi.LocalInputToUtcAsync(_availabilityStartLocal);
+            var end = await ReservationApi.LocalInputToUtcAsync(_availabilityEndLocal);
+            _availability = await ReservationApi.GetEnvironmentGroupAvailabilityAsync(GroupId, start, end);
+        }
+        catch (Exception ex)
+        {
+            _availability = null;
+            _availabilityMessage = ex.Message;
+        }
+        finally
+        {
+            _checkingAvailability = false;
+        }
+    }
+
+    private void AvailabilityStartChanged(ChangeEventArgs args) =>
+        _availabilityStartLocal = args.Value?.ToString() ?? string.Empty;
+
+    private void AvailabilityEndChanged(ChangeEventArgs args) =>
+        _availabilityEndLocal = args.Value?.ToString() ?? string.Empty;
+
+    private async Task RefreshAvailabilityIfQueriedAsync()
+    {
+        if (_availability is not null)
+            await CheckAvailabilityAsync();
+    }
+
+    private void ToggleCandidate(EquipmentGroupDeviceCandidateDto item)
+    {
+        if (!item.CanAdd || _saving) return;
+        if (!_selectedIds.Add(item.ApparatusId)) _selectedIds.Remove(item.ApparatusId);
+    }
+
+    private void SetCandidateSelection(EquipmentGroupDeviceCandidateDto item, ChangeEventArgs args)
+    {
+        if (!item.CanAdd || _saving) return;
+        if (args.Value is true) _selectedIds.Add(item.ApparatusId);
+        else _selectedIds.Remove(item.ApparatusId);
+    }
+
+    private async Task AddSelectedAsync()
+    {
+        if (_saving || _selectedIds.Count == 0) return;
+        _saving = true;
+        try
+        {
+            var response = await Api.PostJsonAsync($"/api/test-catalog/equipment-groups/{GroupId}/devices",
+                new AddEquipmentGroupDevicesRequest { ApparatusIds = _selectedIds.ToList() });
+            response.EnsureSuccess();
+            _selectedIds.Clear();
+            await ReloadAsync();
+            await LoadCandidatesAsync();
+            await RefreshAvailabilityIfQueriedAsync();
+            ShowSuccess("設備已加入測試環境。");
+        }
+        catch (Exception ex) { ShowError(ex.Message); }
+        finally { _saving = false; }
+    }
+
+    private async Task SetPresenceAsync(EquipmentGroupDeviceDto device, bool isInEnvironment)
+    {
+        _saving = true;
+        try
+        {
+            var response = await Api.PutJsonAsync($"/api/test-catalog/equipment-group-devices/{device.Id}/presence",
+                new UpdateEquipmentGroupDevicePresenceRequest { IsInEnvironment = isInEnvironment });
+            response.EnsureSuccess();
+            await ReloadAsync();
+            await LoadCandidatesAsync();
+            await RefreshAvailabilityIfQueriedAsync();
+            ShowSuccess(isInEnvironment ? "設備已放回測試環境。" : "設備已暫時移出測試環境。");
+        }
+        catch (Exception ex) { ShowError(ex.Message); }
+        finally { _saving = false; }
+    }
+
+    private async Task RemoveAsync(EquipmentGroupDeviceDto device)
+    {
+        _saving = true;
+        try
+        {
+            var response = await Api.DeleteAsync($"/api/test-catalog/equipment-group-devices/{device.Id}");
+            response.EnsureSuccess();
+            await ReloadAsync();
+            await LoadCandidatesAsync();
+            await RefreshAvailabilityIfQueriedAsync();
+            ShowSuccess("設備已永久從群組組成移除。");
+        }
+        catch (Exception ex) { ShowError(ex.Message); }
+        finally { _saving = false; }
+    }
+
+    private void Back() => Nav.NavigateTo("/test-environment-settings");
+    private string DeviceMasterStatusClass(EquipmentGroupDeviceDto device) =>
+        _group?.Readiness.Issues.Any(issue =>
+            string.Equals(issue.ApparatusId, device.ApparatusId, StringComparison.Ordinal)
+            && issue.Type != EnvironmentReadinessIssueType.DeviceNotPresent) == true
+                ? "unavailable"
+                : "available";
+    private void ShowError(string message) { _message = message; _isError = true; }
+    private void ShowSuccess(string message) { _message = message; _isError = false; }
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private static string BrandModel(string? brand, string? model) =>
+        Display(string.Join(" / ", new[] { brand, model }.Where(value => !string.IsNullOrWhiteSpace(value)).Select(value => value!.Trim())));
+    private static string DeviceNumber(string? productsId, string id) => string.IsNullOrWhiteSpace(productsId) ? id : productsId;
+    private static string ModeText(ReservationMode mode) =>
+        mode == ReservationMode.Environment ? "依測試環境配置" : "自行選擇設備";
+    private static string ConflictDeviceName(EnvironmentAvailabilityRelatedDeviceDto device) =>
+        string.IsNullOrWhiteSpace(device.ProductsId)
+            ? device.ApparatusName
+            : $"{device.ProductsId} · {device.ApparatusName}";
+}

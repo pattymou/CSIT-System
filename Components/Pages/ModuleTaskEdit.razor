@@ -1,5 +1,6 @@
 @page "/modules/{ModuleCode}/{RecordId:guid}/cases/{CaseId:guid}/tasks/new"
 @page "/modules/{ModuleCode}/{RecordId:guid}/cases/{CaseId:guid}/tasks/{TaskId:guid}/edit"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @using global::System.Net.Http.Json
 @using Microsoft.AspNetCore.Components.Forms
 @inject HttpClient Http

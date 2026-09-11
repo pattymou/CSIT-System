@@ -1,0 +1,17 @@
+@inject ReservationApiClient Api
+
+<span>@_text</span>
+
+@code {
+    [Parameter] public DateTime? Value { get; set; }
+    private string _text = "—";
+    private DateTime? _formattedValue;
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (Value == _formattedValue) return;
+        _formattedValue = Value;
+        _text = Value.HasValue ? await Api.FormatLocalAsync(Value.Value) : "—";
+        StateHasChanged();
+    }
+}

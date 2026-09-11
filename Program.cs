@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Components;
 using SIT.DepartmentSystem.Web.Data;
@@ -30,7 +31,22 @@ builder.Services
         options.AccessDeniedPath = "/signin";
     });
 
-builder.Services.AddAuthorization();
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy(SystemAuthorization.Policies.RdApplicant, policy =>
+        policy.RequireAuthenticatedUser()
+            .RequireClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.RdApplicant));
+    options.AddPolicy(SystemAuthorization.Policies.CsitStaff, policy =>
+        policy.RequireAuthenticatedUser()
+            .RequireClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff));
+    options.AddPolicy(SystemAuthorization.Policies.ReservationUser, policy =>
+        policy.RequireAuthenticatedUser().RequireAssertion(context =>
+            context.User.HasClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.RdApplicant)
+            || context.User.HasClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff)));
+    options.AddPolicy(SystemAuthorization.Policies.Administration, policy =>
+        policy.RequireAuthenticatedUser()
+            .AddRequirements(new AdministrationAccessRequirement()));
+});
 
 builder.Services.AddDbContextFactory<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));
@@ -39,9 +55,22 @@ builder.Services.AddScoped<IModuleService, ModuleService>();
 builder.Services.AddScoped<IModuleRecordService, ModuleRecordService>();
 builder.Services.AddScoped<IModuleRecordCreationService, ModuleRecordCreationService>();
 builder.Services.AddScoped<IVerificationApplicationService, VerificationApplicationService>();
+builder.Services.AddScoped<IReservationService, ReservationService>();
+builder.Services.AddScoped<IReservationPolicyService, ReservationPolicyService>();
+builder.Services.AddScoped<IApparatusAvailabilityService, ApparatusAvailabilityService>();
+builder.Services.AddScoped<IApparatusResourceCapabilityService, ApparatusResourceCapabilityService>();
+builder.Services.AddScoped<IResourceSchedulerService, ResourceSchedulerService>();
+builder.Services.AddScoped<ReservationApiClient>();
+builder.Services.AddScoped<BrowserApiClient>();
+builder.Services.AddScoped<ITestCatalogService, TestCatalogService>();
+builder.Services.AddScoped<IEnvironmentGroupDeviceService, EnvironmentGroupDeviceService>();
+builder.Services.AddScoped<IEnvironmentReadinessService, EnvironmentReadinessService>();
+builder.Services.AddScoped<IEnvironmentAvailabilityService, EnvironmentAvailabilityService>();
+builder.Services.AddScoped<IPlannedTestItemService, PlannedTestItemService>();
 builder.Services.AddScoped<IModuleCaseService, ModuleCaseService>();
 builder.Services.AddScoped<IModuleTaskService, ModuleTaskService>();
 builder.Services.AddScoped<IMenuManagementService, MenuManagementService>();
+builder.Services.AddScoped<IAuthorizationHandler, AdministrationAccessHandler>();
 builder.Services.AddScoped<AdAuthenticationService>();
 
 builder.Services.Configure<UploadSettings>(

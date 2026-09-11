@@ -1,0 +1,6 @@
+@page "/staff/reservations/overview"
+@layout MainLayout
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+
+<ReservationOverview BasePath="/staff/reservations" StaffWorkspace="true" />

@@ -1,5 +1,15 @@
 namespace SIT.DepartmentSystem.Web.Entities;
 
+// Team/Leader comes from the system Team master; ModuleCode comes from the workflow rule.
+// Both are resolved and snapshotted at Submit/Resubmit time.
+public sealed record VerificationApplicationRouting(
+    Guid TeamOptionId,
+    string TeamCode,
+    string TeamName,
+    string ModuleCode,
+    string AssignedLeaderAccount,
+    string? AssignedLeaderDisplayName);
+
 public sealed class VerificationApplicationContent
 {
     public string ProjectName { get; init; } = string.Empty;
@@ -28,7 +38,16 @@ public class VerificationApplication
 
     public Guid Id { get; private set; }
     public string ApplicationNo { get; private set; } = string.Empty;
-    public string ModuleCode { get; private set; } = string.Empty;
+    public string? ModuleCode { get; private set; }
+    public Guid? TeamOptionId { get; private set; }
+    public string? TeamCode { get; private set; }
+    public string? TeamName { get; private set; }
+    // Deprecated VerificationCategory snapshot columns are retained for historical rows.
+    public Guid? VerificationCategoryId { get; private set; }
+    public string? CategoryCode { get; private set; }
+    public string? CategoryName { get; private set; }
+    public string? AssignedLeaderAccount { get; private set; }
+    public string? AssignedLeaderDisplayName { get; private set; }
 
     public string ApplicantAccount { get; private set; } = string.Empty;
     public string ApplicantName { get; private set; } = string.Empty;
@@ -73,7 +92,7 @@ public class VerificationApplication
     public static VerificationApplication CreateDraft(
         Guid id,
         string applicationNo,
-        string moduleCode,
+        Guid teamOptionId,
         string applicantAccount,
         string applicantName,
         string applicantEmail,
@@ -86,7 +105,7 @@ public class VerificationApplication
         {
             Id = id,
             ApplicationNo = applicationNo,
-            ModuleCode = moduleCode,
+            TeamOptionId = teamOptionId,
             ApplicantAccount = applicantAccount,
             ApplicantName = applicantName,
             ApplicantEmail = applicantEmail,
@@ -99,17 +118,26 @@ public class VerificationApplication
         return entity;
     }
 
-    public void UpdateContent(VerificationApplicationContent content, DateTime now)
+    public void UpdateContent(Guid teamOptionId, VerificationApplicationContent content, DateTime now)
     {
         EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
+        TeamOptionId = teamOptionId;
         ApplyContent(content);
         UpdatedAt = now;
     }
 
-    public void Submit(bool targetModuleExists, DateTime now)
+    public void Submit(VerificationApplicationRouting routing, DateTime now)
     {
         EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
-        EnsureSubmitRequirements(targetModuleExists);
+        ArgumentNullException.ThrowIfNull(routing);
+        if (TeamOptionId != routing.TeamOptionId)
+            throw new InvalidOperationException("Resolved Team does not match the application.");
+        TeamCode = RequiredRoutingValue(routing.TeamCode, nameof(routing.TeamCode));
+        TeamName = RequiredRoutingValue(routing.TeamName, nameof(routing.TeamName));
+        ModuleCode = RequiredRoutingValue(routing.ModuleCode, nameof(routing.ModuleCode));
+        AssignedLeaderAccount = RequiredRoutingValue(routing.AssignedLeaderAccount, nameof(routing.AssignedLeaderAccount));
+        AssignedLeaderDisplayName = Clean(routing.AssignedLeaderDisplayName);
+        EnsureSubmitRequirements();
         Status = VerificationApplicationStatus.Submitted;
         SubmittedAt = now;
         ProcessedAt = null;
@@ -153,7 +181,7 @@ public class VerificationApplication
         SetProcessing(processedBy, null, now);
     }
 
-    private void EnsureSubmitRequirements(bool targetModuleExists)
+    private void EnsureSubmitRequirements()
     {
         var missing = new List<string>();
         AddIfMissing(missing, ApplicantAccount, nameof(ApplicantAccount));
@@ -165,7 +193,11 @@ public class VerificationApplication
         AddIfMissing(missing, ProductModel, nameof(ProductModel));
         AddIfMissing(missing, ValidationRequirement, nameof(ValidationRequirement));
         if (!RequestedFinishDate.HasValue) missing.Add(nameof(RequestedFinishDate));
-        if (string.IsNullOrWhiteSpace(ModuleCode) || !targetModuleExists) missing.Add(nameof(ModuleCode));
+        if (!TeamOptionId.HasValue) missing.Add(nameof(TeamOptionId));
+        AddIfMissing(missing, TeamCode, nameof(TeamCode));
+        AddIfMissing(missing, TeamName, nameof(TeamName));
+        AddIfMissing(missing, ModuleCode, nameof(ModuleCode));
+        AddIfMissing(missing, AssignedLeaderAccount, nameof(AssignedLeaderAccount));
 
         if (missing.Count > 0)
         {
@@ -226,6 +258,8 @@ public class VerificationApplication
     }
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    private static string RequiredRoutingValue(string? value, string name) =>
+        string.IsNullOrWhiteSpace(value) ? throw new InvalidOperationException($"Routing configuration is missing {name}.") : value.Trim();
 
     private void EnsureStatus(params VerificationApplicationStatus[] allowed)
     {

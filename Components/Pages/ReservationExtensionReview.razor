@@ -1,0 +1,136 @@
+@page "/reservation-review/extensions"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@using SIT.DepartmentSystem.Web.Entities
+@inject ReservationApiClient Api
+@inject NavigationManager Nav
+
+<PageTitle>待審續借</PageTitle>
+
+<div class="extension-review-page">
+    <header class="review-header">
+        <div><p>EXTENSION REVIEW</p><h1>待審續借</h1><span>依目前設備保管與 Team 責任顯示可審續借</span></div>
+        <div class="review-nav">
+            <button class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-review")'>返回設備預約審核</button>
+        </div>
+    </header>
+
+    <section class="review-toolbar surface-card">
+        <div class="review-tabs" role="tablist" aria-label="續借審核範圍">
+            <button class="@TabClass(ReservationExtensionReviewScope.Custodian)" disabled="@_loading" @onclick="() => ChangeScopeAsync(ReservationExtensionReviewScope.Custodian)">我的保管設備</button>
+            @if (_queue?.IsAdmin == true)
+            {
+                <button class="@TabClass(ReservationExtensionReviewScope.All)" disabled="@_loading" @onclick="() => ChangeScopeAsync(ReservationExtensionReviewScope.All)">全部 Team</button>
+            }
+            else if (_queue?.IsTeamLeader == true)
+            {
+                <button class="@TabClass(ReservationExtensionReviewScope.Team)" disabled="@_loading" @onclick="() => ChangeScopeAsync(ReservationExtensionReviewScope.Team)">我的 Team</button>
+            }
+        </div>
+        @if (_scope is ReservationExtensionReviewScope.Team or ReservationExtensionReviewScope.All)
+        {
+            <ReservationTeamScopeFilter TeamOptions="@(_queue?.TeamOptions ?? [])"
+                                        SelectedTeamOptionId="@_teamOptionId"
+                                        AlwaysShow="@(_scope == ReservationExtensionReviewScope.All)"
+                                        Disabled="@_loading"
+                                        SelectionChanged="ChangeTeamAsync" />
+        }
+    </section>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="surface-card error-text">@_message</div>
+    }
+    else if (_loading)
+    {
+        <div class="surface-card">載入中...</div>
+    }
+    else if (_queue is not null)
+    {
+        <div class="review-summary"><strong>@_queue.Entries.Count</strong><span>筆待審續借</span></div>
+        @if (_queue.Entries.Count == 0)
+        {
+            <div class="surface-card review-empty">目前沒有此責任範圍的待審續借。</div>
+        }
+        else
+        {
+            <div class="extension-list">
+                @foreach (var extension in _queue.Entries)
+                {
+                    <article class="surface-card extension-card">
+                        <header><div><span class="mode-pill">@(extension.Mode == ReservationMode.Direct ? "單一設備" : "測試環境")</span><a href="@DetailUrl(extension.ReservationId)">@extension.ReservationNo</a><small>@extension.RequestedByName · @extension.ApplicantDepartment</small></div><div class="time-range"><span>原結束</span><LocalDateTime Value="extension.CurrentEndTimeSnapshot" /><span>延長至</span><LocalDateTime Value="extension.RequestedEndTime" /></div></header>
+                        @if (extension.Mode == ReservationMode.Direct)
+                        {
+                            <div class="environment-extension"><div><strong>@ReservationUi.Display(extension.ApparatusNames.SingleOrDefault())</strong><span>保管人：@ReservationUi.Display(extension.CustodianName)</span><span>Owner Team：@ReservationUi.Display(extension.OwnerTeamName)</span></div><div class="extension-actions"><button class="btn-secondary reject-button" disabled="@(_working || !extension.CanReject)" @onclick="() => RejectAsync(extension.Id)">拒絕續借</button><button class="btn-primary" disabled="@(_working || !extension.CanApprove)" @onclick="() => ApproveAsync(extension.Id)">核准續借</button></div></div>
+                        }
+                        else
+                        {
+                            <div class="environment-extension"><div><strong>@ReservationUi.Display(extension.EquipmentGroupName)</strong><span>Owner Team：@ReservationUi.Display(extension.OwnerTeamName)</span></div><div class="extension-actions"><button class="btn-secondary reject-button" disabled="@(_working || !extension.CanReject)" @onclick="() => RejectAsync(extension.Id)">拒絕續借</button><button class="btn-primary" disabled="@(_working || !extension.CanApprove)" @onclick="() => ApproveAsync(extension.Id)">核准續借</button></div></div>
+                        }
+                    </article>
+                }
+            </div>
+        }
+    }
+</div>
+
+<style>
+    .extension-review-page { width:100%; padding-bottom:28px; }
+    .review-header,.extension-card header,.environment-extension { display:flex; align-items:center; justify-content:space-between; gap:18px; }
+    .review-header { align-items:flex-end; gap:24px; margin-bottom:18px; }
+    .review-header p { margin:0 0 6px; color:#67e8f9; font-size:.72rem; font-weight:800; letter-spacing:.14em; }
+    .review-header h1 { margin:0; font-size:1.75rem; }
+    .review-header span { display:block; margin-top:7px; color:#94a3b8; font-size:.88rem; }
+    .review-nav,.review-tabs { display:flex; flex-wrap:wrap; gap:9px; }
+    .review-toolbar { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:18px; padding:12px; }
+    .review-tabs button { padding:9px 15px; border:1px solid rgba(148,163,184,.24); border-radius:10px; color:#cbd5e1; background:rgba(15,23,42,.45); font-weight:750; }
+    .review-tabs button.active { color:#ccfbf1; border-color:rgba(45,212,191,.52); background:rgba(13,148,136,.22); }
+    .review-summary { display:flex; align-items:baseline; gap:7px; margin:0 0 12px 2px; color:#94a3b8; }
+    .review-summary strong { color:#f1f5f9; font-size:1.2rem; }
+    .review-empty { padding:34px; color:#94a3b8; text-align:center; }
+    .extension-list { display:grid; gap:14px; }
+    .extension-card { min-width:0; }
+    .extension-card header { align-items:flex-start; padding-bottom:14px; border-bottom:1px solid rgba(148,163,184,.12); }
+    .extension-card header>div:first-child { display:grid; gap:4px; }
+    .extension-card a { color:#e8edf7; font-size:1.05rem; font-weight:800; }
+    .extension-card small,.environment-extension span { display:block; color:#94a3b8; font-size:.8rem; }
+    .mode-pill { width:max-content; padding:3px 7px; border-radius:999px; color:#99f6e4; background:rgba(20,184,166,.13); font-size:.68rem; font-weight:800; }
+    .time-range { display:grid; grid-template-columns:auto auto; gap:3px 9px; color:#dbe5f2; font-size:.82rem; }
+    .time-range>span { color:#94a3b8; }
+    .extension-actions { display:flex; justify-content:flex-end; flex-wrap:wrap; gap:8px; }
+    .reject-button { color:#fecaca; }
+    .environment-extension { margin-top:14px; }
+    .environment-extension strong { display:block; margin-bottom:5px; }
+    @@media(max-width:900px) {
+        .review-header { align-items:stretch; flex-direction:column; }
+        .review-nav { justify-content:flex-start; }
+        .extension-card header { align-items:stretch; flex-direction:column; }
+        .time-range { width:max-content; max-width:100%; }
+    }
+    @@media(max-width:720px) {
+        .review-toolbar { align-items:stretch; flex-direction:column; }
+        .review-tabs button { flex:1 1 auto; }
+    }
+    @@media(max-width:620px) {
+        .environment-extension { align-items:stretch; flex-direction:column; }
+        .extension-actions { justify-content:stretch; }
+        .extension-actions button { flex:1 1 auto; }
+    }
+</style>
+
+@code {
+    private ReservationExtensionReviewQueueDto? _queue;
+    private ReservationExtensionReviewScope _scope = ReservationExtensionReviewScope.Custodian;
+    private Guid? _teamOptionId;
+    private bool _loading = true, _working;
+    private string? _message;
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+    private async Task ChangeScopeAsync(ReservationExtensionReviewScope scope) { if (_scope == scope) return; _scope = scope; _teamOptionId = null; await LoadAsync(); }
+    private async Task ChangeTeamAsync(Guid? teamOptionId) { if (_teamOptionId == teamOptionId) return; _teamOptionId = teamOptionId; await LoadAsync(); }
+    private async Task LoadAsync() { _loading = true; _message = null; try { _queue = await Api.PendingExtensionsAsync(_scope, _teamOptionId); _teamOptionId = _queue.SelectedTeamOptionId; } catch (Exception ex) { _message = ex.Message; } finally { _loading = false; } }
+    private async Task ApproveAsync(Guid id) { if (await Api.ConfirmAsync("確定核准整筆續借？")) await RunAsync(() => Api.ApproveExtensionAsync(id)); }
+    private async Task RejectAsync(Guid id) { var reason = await Api.PromptReasonAsync("請輸入拒絕原因："); if (!string.IsNullOrWhiteSpace(reason) && await Api.ConfirmAsync("確定拒絕整筆續借？")) await RunAsync(() => Api.RejectExtensionAsync(id, reason)); }
+    private async Task RunAsync(Func<Task<ReservationExtensionRequestDto>> action) { _working = true; _message = null; try { await action(); await LoadAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _working = false; } }
+    private string TabClass(ReservationExtensionReviewScope scope) => _scope == scope ? "active" : string.Empty;
+    private string DetailUrl(Guid id) => $"/reservation-review/{id}?scope={_scope}";
+}

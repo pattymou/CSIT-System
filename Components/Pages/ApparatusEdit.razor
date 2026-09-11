@@ -2,12 +2,12 @@
 @page "/apparatus/{Id}/edit"
 @page "/assets/{ModuleCode}/new"
 @page "/assets/{ModuleCode}/{Id}/edit"
-@rendermode InteractiveServer
-@using global::System.Net.Http.Json
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
 @using Microsoft.AspNetCore.Components.Forms
 @using SIT.DepartmentSystem.Web.Models.Api
 @using SIT.DepartmentSystem.Web.Services.Interfaces
-@inject HttpClient Http
+@inject BrowserApiClient Api
 @inject NavigationManager Nav
 @inject IMenuManagementService MenuService
 
@@ -18,6 +18,12 @@
     <div class="form-card error-text">@_message</div>
 }
 
+@if (_loading)
+{
+    <div class="form-card">載入中...</div>
+}
+
+<div hidden="@_loading">
 <div class="form-card">
     <div class="case-card-head">
         <div>
@@ -144,19 +150,25 @@
         </div>
 
         <div class="form-row">
-            <label>保管部門</label>
-            <select @bind="_form.CustodianDepartment">
-                <option value="">請選擇保管部門</option>
-                @foreach (var option in _departmentOptions)
+            <label>設備所屬 Team *</label>
+            <select required @bind="_form.OwnerTeamOptionId">
+                <option value="">請選擇設備所屬 Team</option>
+                @foreach (var team in _ownershipOptions.Teams)
                 {
-                    <option value="@option.Value">@option.Name</option>
+                    <option value="@team.Id">@team.Name / @team.Value</option>
                 }
             </select>
         </div>
 
         <div class="form-row">
             <label>保管人 *</label>
-            <input @bind="_form.Custodian" />
+            <select required value="@_form.CustodianAccount" @onchange="OnCustodianAccountChanged">
+                <option value="">請選擇保管人</option>
+                @foreach (var user in _ownershipOptions.Users)
+                {
+                    <option value="@user.Account">@user.DisplayName</option>
+                }
+            </select>
         </div>
 
         <div class="form-row">
@@ -192,6 +204,117 @@
     </div>
 </div>
 
+@if (IsEquipment && _isEdit)
+{
+    <div class="form-card environment-membership-card">
+        <div class="case-card-head">
+            <div>
+                <div class="case-kicker">TEST ENVIRONMENT</div>
+                <h3>測試環境</h3>
+            </div>
+        </div>
+        @if (_environmentAssignment is null)
+        {
+            <div class="record-empty-box"><strong>未加入測試環境群組</strong></div>
+        }
+        else
+        {
+            <div class="environment-membership-grid">
+                <div><span>測試環境</span><strong>@_environmentAssignment.EquipmentGroupName</strong><small>@_environmentAssignment.EquipmentGroupCode</small></div>
+                <div><span>管理 Team</span><strong>@_environmentAssignment.OwnerTeamName</strong></div>
+                <div><span>環境狀態</span><strong class="@(_environmentAssignment.IsInEnvironment ? "present" : "away")">@(_environmentAssignment.IsInEnvironment ? "在測試環境" : "已移出測試環境")</strong></div>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(_environmentAssignment.Warning))
+            {
+                <div class="environment-warning">⚠ @_environmentAssignment.Warning</div>
+            }
+            @if (_environmentAssignment.CanUpdatePresence)
+            {
+                <div class="form-actions environment-actions">
+                    <button type="button" class="btn-secondary" disabled="@_savingEnvironmentPresence" @onclick="ToggleEnvironmentPresenceAsync">
+                        @(_savingEnvironmentPresence ? "處理中..." : _environmentAssignment.IsInEnvironment ? "移出測試環境" : "放回測試環境")
+                    </button>
+                </div>
+            }
+        }
+    </div>
+}
+
+@if (IsEquipment)
+{
+    <div class="form-card">
+        <div class="case-card-head">
+            <div>
+                <div class="case-kicker">RESERVATION RESOURCE</div>
+                <h3>預約資源能力</h3>
+            </div>
+            @if (_isEdit && _resourceCatalog.Count > 0)
+            {
+                <button type="button" class="primary-btn" @onclick="AddResourceCapability">新增能力</button>
+            }
+        </div>
+
+        @if (!_isEdit)
+        {
+            <div class="record-empty-box">
+                <strong>請先建立設備</strong>
+                <span>建立完成後即可設定預約資源能力。</span>
+            </div>
+        }
+        else if (_resourceCatalog.Count == 0)
+        {
+            <div class="record-empty-box">
+                <strong>目前尚未建立設備組合需求</strong>
+                <span>請先至「測試環境設定」建立設備組合與需求。</span>
+                <button type="button" class="btn-secondary" @onclick="OpenTestEnvironmentSettings">前往測試環境設定</button>
+            </div>
+        }
+        else
+        {
+            @if (_resourceMappings.Count == 0)
+            {
+                <p class="empty-text">目前尚未設定預約資源能力。</p>
+            }
+            @for (var i = 0; i < _resourceMappings.Count; i++)
+            {
+                var index = i;
+                var mapping = _resourceMappings[index];
+                <div class="form-grid resource-capability-row">
+                    <div class="form-row">
+                        <label>ResourceType</label>
+                        <select value="@mapping.ResourceType" @onchange="e => OnResourceTypeChanged(index, e)">
+                            <option value="">請選擇</option>
+                            @foreach (var type in ResourceTypes)
+                            {
+                                <option value="@type">@type</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="form-row">
+                        <label>CapabilityTag</label>
+                        <select @bind="mapping.CapabilityTag">
+                            <option value="">無（僅 ResourceType）</option>
+                            @foreach (var tag in CapabilityTags(mapping.ResourceType))
+                            {
+                                <option value="@tag">@tag</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="form-row resource-remove">
+                        <label>操作</label>
+                        <button type="button" class="table-chip-btn danger" @onclick="() => RemoveResourceCapability(index)">刪除能力</button>
+                    </div>
+                </div>
+            }
+            <div class="form-actions">
+                <button type="button" class="primary-btn" disabled="@_savingResourceCapabilities" @onclick="SaveResourceCapabilitiesAsync">
+                    @(_savingResourceCapabilities ? "儲存中..." : "儲存能力")
+                </button>
+            </div>
+        }
+    </div>
+}
+
 <div class="form-card">
     <div class="case-card-head">
         <div>
@@ -206,7 +329,7 @@
         </button>
     </div>
 
-    <div class="upload-box">
+    <div class="upload-box" @ref="_fileInputContainer">
         <InputFile OnChange="OnFilesSelected" multiple />
         <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案。</span>
     </div>
@@ -250,6 +373,7 @@
         回上一頁
     </button>
 </div>
+</div>
 
 @code {
     [Parameter] public string? ModuleCode { get; set; }
@@ -262,12 +386,22 @@
     private string PageKicker => $"ASSET / {EffectiveModuleCode.ToUpperInvariant()}";
     private string PageFileTitle => $"{AssetDisplayName}檔案";
     private string AssetDisplayName => GetAssetDisplayName();
+    private bool IsEquipment => string.Equals(EffectiveModuleCode, "equipment", StringComparison.OrdinalIgnoreCase);
 
     private bool _isEdit => !string.IsNullOrWhiteSpace(Id);
     private bool _saving;
     private bool _uploading;
     private string? _message;
     private bool _hasCreatedRecord;
+    private ElementReference _fileInputContainer;
+    private bool _reloadRequested;
+    private bool _loading = true;
+    private bool _savingResourceCapabilities;
+    private bool _savingEnvironmentPresence;
+    private ApparatusEnvironmentAssignmentDto? _environmentAssignment;
+    private List<ResourceMatchingCatalogValueDto> _resourceCatalog = new();
+    private List<ApparatusResourceCapabilityInput> _resourceMappings = new();
+    private IEnumerable<string> ResourceTypes => _resourceCatalog.Select(x => x.ResourceType).Distinct(StringComparer.Ordinal).OrderBy(x => x);
 
     private ApparatusUpsertRequest _form = new()
     {
@@ -278,11 +412,47 @@
     private List<ApparatusFileDto> _files = new();
 
     private List<SystemOptionDto> _apparatusKindOptions = new();
-    private List<SystemOptionDto> _departmentOptions = new();
+    private ApparatusOwnershipOptionsDto _ownershipOptions = new();
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
+    {
+        _reloadRequested = true;
+        _loading = true;
+        _message = null;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_reloadRequested) return;
+        _reloadRequested = false;
+
+        try
+        {
+            await InitializeAsync();
+        }
+        catch (Exception ex)
+        {
+            _message = $"載入資料失敗：{ex.Message}";
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task InitializeAsync()
     {
         _message = null;
+        _hasCreatedRecord = false;
+        _form = new ApparatusUpsertRequest { ReservationStatus = "可借用" };
+        _selectedFiles = new();
+        _files = new();
+        _apparatusKindOptions = new();
+        _ownershipOptions = new();
+        _resourceCatalog = new();
+        _resourceMappings = new();
+        _environmentAssignment = null;
 
         await LoadPageMetaAsync();
         await LoadOptionsAsync();
@@ -293,7 +463,7 @@
 
             Console.WriteLine($"[ApparatusEdit] Edit load start. moduleCode={EffectiveModuleCode}, id={Id}");
 
-            var detail = await Http.GetFromJsonAsync<ApparatusDetailDto>(
+            var detail = await Api.GetAsync<ApparatusDetailDto>(
                 $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Id}");
 
             if (detail != null)
@@ -323,8 +493,8 @@
                     YearsUse = detail.YearsUse,
                     DaysUse = detail.DaysUse,
                     PriceUse = detail.PriceUse,
-                    CustodianDepartment = detail.CustodianDepartment,
-                    Custodian = detail.Custodian,
+                    CustodianAccount = detail.CustodianAccount,
+                    OwnerTeamOptionId = detail.OwnerTeamOptionId,
                     Agent = detail.Agent,
                     ReservationStatus = string.IsNullOrWhiteSpace(detail.ReservationStatus) ? "可借用" : detail.ReservationStatus,
                     Feature = detail.Feature,
@@ -334,17 +504,21 @@
 
                 _files = detail.Files ?? new();
 
-                EnsureCurrentOption(_apparatusKindOptions, _form.Kind);
-                EnsureCurrentOption(_departmentOptions, _form.CustodianDepartment);
+                if (IsEquipment)
+                {
+                    await LoadResourceCapabilitiesAsync();
+                    await LoadEnvironmentAssignmentAsync();
+                }
 
-                Console.WriteLine($"[ApparatusEdit] Edit load done. id={_form.Id}, kind={_form.Kind}, dept={_form.CustodianDepartment}");
+                EnsureCurrentOption(_apparatusKindOptions, _form.Kind);
+                Console.WriteLine($"[ApparatusEdit] Edit load done. id={_form.Id}, kind={_form.Kind}");
             }
 
             _hasCreatedRecord = false;
             return;
         }
 
-        var newId = await Http.GetFromJsonAsync<NewApparatusIdResponse>(
+        var newId = await Api.GetAsync<NewApparatusIdResponse>(
             $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/new-id");
 
         _form.Id = newId?.Id ?? "";
@@ -424,10 +598,15 @@
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_form.Custodian))
+        if (IsEquipment && string.IsNullOrWhiteSpace(_form.CustodianAccount))
         {
-            _message = "保管人不可空白。";
-            Console.WriteLine("[ApparatusEdit] Save blocked. Custodian is empty.");
+            _message = "請選擇保管人。";
+            return;
+        }
+
+        if (IsEquipment && !_form.OwnerTeamOptionId.HasValue)
+        {
+            _message = "請選擇設備所屬 Team。";
             return;
         }
 
@@ -435,20 +614,20 @@
 
         try
         {
-            HttpResponseMessage response;
+            BrowserApiResponse response;
 
             if (_isEdit || _hasCreatedRecord)
             {
                 Console.WriteLine($"[ApparatusEdit] Update start. moduleCode={EffectiveModuleCode}, id={_form.Id}, name={_form.Name}, kind={_form.Kind}");
-                response = await Http.PutAsJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}", _form);
+                response = await Api.PutJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}", _form);
             }
             else
             {
                 Console.WriteLine($"[ApparatusEdit] Create start. moduleCode={EffectiveModuleCode}, id={_form.Id}, name={_form.Name}, kind={_form.Kind}");
-                response = await Http.PostAsJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}", _form);
+                response = await Api.PostJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}", _form);
             }
 
-            var body = await response.Content.ReadAsStringAsync();
+            var body = response.Body;
 
             if (response.IsSuccessStatusCode)
             {
@@ -471,22 +650,17 @@
         }
     }
 
-    private async Task OnFilesSelected(InputFileChangeEventArgs e)
+    private void OnFilesSelected(InputFileChangeEventArgs e)
     {
         _selectedFiles.Clear();
 
         foreach (var file in e.GetMultipleFiles(20))
         {
-            await using var stream = file.OpenReadStream(200_000_000);
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms);
-
             _selectedFiles.Add(new SelectedUploadFile
             {
                 FileName = file.Name,
                 ContentType = file.ContentType,
-                Size = file.Size,
-                Content = ms.ToArray()
+                Size = file.Size
             });
         }
 
@@ -504,7 +678,7 @@
 
         if (string.IsNullOrWhiteSpace(_form.Name) ||
             string.IsNullOrWhiteSpace(_form.Kind) ||
-            string.IsNullOrWhiteSpace(_form.Custodian))
+            string.IsNullOrWhiteSpace(_form.CustodianAccount))
         {
             _message = "請先填寫名稱、類別、保管人，再上傳檔案。";
             Console.WriteLine("[ApparatusEdit] Upload blocked. Required field missing.");
@@ -527,8 +701,8 @@
             {
                 Console.WriteLine($"[ApparatusEdit] Create before upload start. moduleCode={EffectiveModuleCode}, id={_form.Id}");
 
-                var createResponse = await Http.PostAsJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}", _form);
-                var createText = await createResponse.Content.ReadAsStringAsync();
+                var createResponse = await Api.PostJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}", _form);
+                var createText = createResponse.Body;
 
                 if (!createResponse.IsSuccessStatusCode)
                 {
@@ -541,25 +715,12 @@
                 Console.WriteLine($"[ApparatusEdit] Create before upload success. id={_form.Id}");
             }
 
-            using var content = new MultipartFormDataContent();
-
-            foreach (var file in _selectedFiles)
-            {
-                var streamContent = new StreamContent(new MemoryStream(file.Content));
-
-                if (!string.IsNullOrWhiteSpace(file.ContentType))
-                {
-                    streamContent.Headers.ContentType =
-                        new global::System.Net.Http.Headers.MediaTypeHeaderValue(file.ContentType);
-                }
-
-                content.Add(streamContent, "files", file.FileName);
-            }
-
             Console.WriteLine($"[ApparatusEdit] Upload start. moduleCode={EffectiveModuleCode}, id={_form.Id}, count={_selectedFiles.Count}");
 
-            var response = await Http.PostAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files", content);
-            var responseText = await response.Content.ReadAsStringAsync();
+            var response = await Api.UploadFilesAsync(
+                $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files",
+                _fileInputContainer);
+            var responseText = response.Body;
 
             if (response.IsSuccessStatusCode)
             {
@@ -594,8 +755,8 @@
 
         Console.WriteLine($"[ApparatusEdit] LoadFiles start. moduleCode={EffectiveModuleCode}, id={_form.Id}");
 
-        _files = await Http.GetFromJsonAsync<List<ApparatusFileDto>>(
-            $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files") ?? new();
+        _files = await Api.GetAsync<List<ApparatusFileDto>>(
+            $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files");
 
         Console.WriteLine($"[ApparatusEdit] LoadFiles done. id={_form.Id}, count={_files.Count}");
     }
@@ -604,8 +765,8 @@
     {
         Console.WriteLine($"[ApparatusEdit] DeleteFile start. fileId={fileId}");
 
-        var response = await Http.DeleteAsync($"/api/assets/files/{fileId}");
-        var body = await response.Content.ReadAsStringAsync();
+        var response = await Api.DeleteAsync($"/api/assets/files/{fileId}");
+        var body = response.Body;
 
         if (response.IsSuccessStatusCode)
         {
@@ -624,12 +785,53 @@
         Console.WriteLine("[ApparatusEdit] LoadOptions start.");
 
         _apparatusKindOptions = await LoadOptionCategoryAsync("ApparatusKind");
-        _departmentOptions = await LoadOptionCategoryAsync("Department");
+        _ownershipOptions = await Api.GetAsync<ApparatusOwnershipOptionsDto>(
+            "/api/assets/ownership-options");
 
         EnsureCurrentOption(_apparatusKindOptions, _form.Kind);
-        EnsureCurrentOption(_departmentOptions, _form.CustodianDepartment);
 
-        Console.WriteLine($"[ApparatusEdit] LoadOptions done. kind={_apparatusKindOptions.Count}, dept={_departmentOptions.Count}");
+        Console.WriteLine($"[ApparatusEdit] LoadOptions done. kind={_apparatusKindOptions.Count}, teams={_ownershipOptions.Teams.Count}, users={_ownershipOptions.Users.Count}");
+    }
+
+    private async Task LoadEnvironmentAssignmentAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_form.Id))
+        {
+            _environmentAssignment = null;
+            return;
+        }
+        _environmentAssignment = await Api.GetOptionalAsync<ApparatusEnvironmentAssignmentDto>(
+            $"/api/apparatus/{Uri.EscapeDataString(_form.Id)}/environment-assignment");
+    }
+
+    private async Task ToggleEnvironmentPresenceAsync()
+    {
+        if (_environmentAssignment is null) return;
+        _savingEnvironmentPresence = true;
+        try
+        {
+            var target = !_environmentAssignment.IsInEnvironment;
+            var response = await Api.PutJsonAsync(
+                $"/api/test-catalog/equipment-group-devices/{_environmentAssignment.MembershipId}/presence",
+                new UpdateEquipmentGroupDevicePresenceRequest { IsInEnvironment = target });
+            response.EnsureSuccess();
+            await LoadEnvironmentAssignmentAsync();
+            _message = target ? "設備已放回測試環境。" : "設備已移出測試環境。";
+        }
+        catch (Exception ex)
+        {
+            _message = ex.Message;
+        }
+        finally
+        {
+            _savingEnvironmentPresence = false;
+        }
+    }
+
+    private void OnCustodianAccountChanged(ChangeEventArgs args)
+    {
+        var account = args.Value?.ToString()?.Trim();
+        _form.CustodianAccount = string.IsNullOrWhiteSpace(account) ? null : account.ToLowerInvariant();
     }
 
     private async Task<List<SystemOptionDto>> LoadOptionCategoryAsync(string category)
@@ -640,7 +842,7 @@
 
             Console.WriteLine($"[ApparatusEdit] LoadOptionCategory start. category={category}, url={url}");
 
-            var result = await Http.GetFromJsonAsync<List<SystemOptionDto>>(url) ?? new();
+            var result = await Api.GetAsync<List<SystemOptionDto>>(url);
 
             var list = result
                 .Where(x => x.IsEnabled)
@@ -702,7 +904,6 @@
         public string FileName { get; set; } = "";
         public string? ContentType { get; set; }
         public long Size { get; set; }
-        public byte[] Content { get; set; } = [];
     }
 
     public class SystemOptionDto
@@ -719,6 +920,98 @@
     public class NewApparatusIdResponse
     {
         public string Id { get; set; } = "";
+    }
+
+    private async Task LoadResourceCapabilitiesAsync()
+    {
+        _resourceCatalog = await Api.GetAsync<List<ResourceMatchingCatalogValueDto>>(
+            "/api/apparatus/resource-capabilities/catalog-values");
+        var existing = await Api.GetAsync<List<ApparatusResourceCapabilityDto>>(
+            $"/api/apparatus/{Uri.EscapeDataString(_form.Id ?? string.Empty)}/resource-capabilities");
+        _resourceMappings = existing.Select(x => new ApparatusResourceCapabilityInput
+        {
+            ResourceType = x.ResourceType,
+            CapabilityTag = x.CapabilityTag
+        }).ToList();
+    }
+
+    private IEnumerable<string> CapabilityTags(string? resourceType) => _resourceCatalog
+        .Where(x => string.Equals(x.ResourceType, resourceType, StringComparison.Ordinal) && !string.IsNullOrWhiteSpace(x.CapabilityTag))
+        .Select(x => x.CapabilityTag!)
+        .Distinct(StringComparer.Ordinal)
+        .OrderBy(x => x);
+
+    private void AddResourceCapability()
+    {
+        _resourceMappings.Add(new ApparatusResourceCapabilityInput
+        {
+            ResourceType = ResourceTypes.FirstOrDefault() ?? string.Empty
+        });
+    }
+
+    private void RemoveResourceCapability(int index)
+    {
+        if (index >= 0 && index < _resourceMappings.Count)
+            _resourceMappings.RemoveAt(index);
+    }
+
+    private void OnResourceTypeChanged(int index, ChangeEventArgs args)
+    {
+        if (index < 0 || index >= _resourceMappings.Count) return;
+        _resourceMappings[index].ResourceType = args.Value?.ToString() ?? string.Empty;
+        _resourceMappings[index].CapabilityTag = null;
+    }
+
+    private async Task SaveResourceCapabilitiesAsync()
+    {
+        _savingResourceCapabilities = true;
+        _message = null;
+        try
+        {
+            var response = await Api.PutJsonAsync(
+                $"/api/apparatus/{Uri.EscapeDataString(_form.Id ?? string.Empty)}/resource-capabilities",
+                new ReplaceApparatusResourceCapabilitiesRequest { Mappings = _resourceMappings });
+            if (!response.IsSuccessStatusCode)
+            {
+                _message = $"儲存預約資源能力失敗：{response.Body}";
+                return;
+            }
+            await LoadResourceCapabilitiesAsync();
+            _message = "預約資源能力已儲存。";
+        }
+        catch (Exception ex)
+        {
+            _message = $"儲存預約資源能力失敗：{ex.Message}";
+        }
+        finally
+        {
+            _savingResourceCapabilities = false;
+        }
+    }
+
+    private void OpenTestEnvironmentSettings()
+    {
+        Nav.NavigateTo("/test-environment-settings");
+    }
+
+    public sealed class ApparatusOwnershipOptionsDto
+    {
+        public List<ApparatusOwnerTeamOptionDto> Teams { get; set; } = new();
+        public List<ApparatusCustodianOptionDto> Users { get; set; } = new();
+    }
+
+    public sealed class ApparatusOwnerTeamOptionDto
+    {
+        public Guid Id { get; set; }
+        public string Value { get; set; } = string.Empty;
+        public string Name { get; set; } = string.Empty;
+    }
+
+    public sealed class ApparatusCustodianOptionDto
+    {
+        public string Account { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public string Department { get; set; } = string.Empty;
     }
 
     public class ApparatusFileDto
@@ -762,8 +1055,8 @@
         public string? YearsUse { get; set; }
         public string? DaysUse { get; set; }
         public string? PriceUse { get; set; }
-        public string? CustodianDepartment { get; set; }
-        public string? Custodian { get; set; }
+        public string? CustodianAccount { get; set; }
+        public Guid? OwnerTeamOptionId { get; set; }
         public string? Agent { get; set; }
         public string? ReservationStatus { get; set; }
         public string? Feature { get; set; }

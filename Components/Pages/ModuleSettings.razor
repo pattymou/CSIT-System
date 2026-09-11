@@ -1,4 +1,5 @@
 ﻿@page "/system/modules"
+@attribute [Authorize(Roles = "Admin")]
 @inject HttpClient Http
 @inject NavigationManager Nav
 

@@ -1,0 +1,10 @@
+<div class="form-row @(Full ? "full-width" : null)">
+    <label>@Label</label>
+    @ChildContent
+</div>
+
+@code {
+    [Parameter, EditorRequired] public string Label { get; set; } = string.Empty;
+    [Parameter] public bool Full { get; set; }
+    [Parameter, EditorRequired] public RenderFragment? ChildContent { get; set; }
+}

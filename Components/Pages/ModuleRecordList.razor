@@ -1,4 +1,5 @@
 ﻿@page "/modules/{moduleCode}"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode InteractiveServer
 @using SIT.DepartmentSystem.Web.Models.Api
 @using SIT.DepartmentSystem.Web.Services.Interfaces

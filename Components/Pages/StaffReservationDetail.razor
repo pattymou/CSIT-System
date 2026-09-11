@@ -1,0 +1,10 @@
+@page "/staff/reservations/{Id:guid}"
+@layout MainLayout
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+
+<ReservationDetail Id="Id" BasePath="/staff/reservations" />
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+}

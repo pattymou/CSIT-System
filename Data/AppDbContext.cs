@@ -19,11 +19,33 @@ public class AppDbContext : DbContext
     public DbSet<Apparatus> Apparatuses => Set<Apparatus>();
     public DbSet<ApparatusFile> ApparatusFiles => Set<ApparatusFile>();
     public DbSet<SystemOption> SystemOptions => Set<SystemOption>();
+    public DbSet<TeamRouting> TeamRoutings => Set<TeamRouting>();
     public DbSet<VerificationApplication> VerificationApplications => Set<VerificationApplication>();
     public DbSet<VerificationApplicationFile> VerificationApplicationFiles => Set<VerificationApplicationFile>();
+    public DbSet<VerificationCategory> VerificationCategories => Set<VerificationCategory>();
+    public DbSet<TestEnvironment> TestEnvironments => Set<TestEnvironment>();
+    public DbSet<EquipmentGroup> EquipmentGroups => Set<EquipmentGroup>();
+    public DbSet<EquipmentGroupDevice> EquipmentGroupDevices => Set<EquipmentGroupDevice>();
+    public DbSet<EquipmentGroupRequirement> EquipmentGroupRequirements => Set<EquipmentGroupRequirement>();
+    public DbSet<TestCapability> TestCapabilities => Set<TestCapability>();
+    public DbSet<TestPlanTemplate> TestPlanTemplates => Set<TestPlanTemplate>();
+    public DbSet<ReportTemplate> ReportTemplates => Set<ReportTemplate>();
+    public DbSet<TestExecutionProfile> TestExecutionProfiles => Set<TestExecutionProfile>();
+    public DbSet<PlannedTestItem> PlannedTestItems => Set<PlannedTestItem>();
+    public DbSet<Reservation> Reservations => Set<Reservation>();
+    public DbSet<ReservationItem> ReservationItems => Set<ReservationItem>();
+    public DbSet<ApparatusResourceCapability> ApparatusResourceCapabilities => Set<ApparatusResourceCapability>();
+    public DbSet<ReservationExtensionRequest> ReservationExtensionRequests => Set<ReservationExtensionRequest>();
+    public DbSet<ReservationAuditEvent> ReservationAuditEvents => Set<ReservationAuditEvent>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ConfigureTestCatalog();
+        modelBuilder.ConfigureVerificationApplicationRouting();
+        modelBuilder.ConfigureSystemMasterData();
+        modelBuilder.ConfigureReservations();
+        modelBuilder.ConfigureApparatusResourceCapabilities();
+
         modelBuilder.Entity<ModuleEntity>(entity =>
         {
             entity.ToTable("modules");
@@ -109,7 +131,15 @@ public class AppDbContext : DbContext
 
             entity.Property(x => x.Id).HasColumnName("id");
             entity.Property(x => x.ApplicationNo).HasColumnName("application_no").HasMaxLength(32).IsRequired();
-            entity.Property(x => x.ModuleCode).HasColumnName("module_code").HasMaxLength(100).IsRequired();
+            entity.Property(x => x.ModuleCode).HasColumnName("module_code").HasMaxLength(100);
+            entity.Property(x => x.TeamOptionId).HasColumnName("team_option_id");
+            entity.Property(x => x.TeamCode).HasColumnName("team_code").HasMaxLength(200);
+            entity.Property(x => x.TeamName).HasColumnName("team_name").HasMaxLength(200);
+            entity.Property(x => x.VerificationCategoryId).HasColumnName("verification_category_id");
+            entity.Property(x => x.CategoryCode).HasColumnName("category_code").HasMaxLength(100);
+            entity.Property(x => x.CategoryName).HasColumnName("category_name").HasMaxLength(200);
+            entity.Property(x => x.AssignedLeaderAccount).HasColumnName("assigned_leader_account").HasMaxLength(100);
+            entity.Property(x => x.AssignedLeaderDisplayName).HasColumnName("assigned_leader_display_name").HasMaxLength(200);
             entity.Property(x => x.ApplicantAccount).HasColumnName("applicant_account").HasMaxLength(100).IsRequired();
             entity.Property(x => x.ApplicantName).HasColumnName("applicant_name").HasMaxLength(200).IsRequired();
             entity.Property(x => x.ApplicantEmail).HasColumnName("applicant_email").HasMaxLength(320).IsRequired();
@@ -148,6 +178,9 @@ public class AppDbContext : DbContext
             entity.HasIndex(x => x.ApplicationNo).IsUnique();
             entity.HasIndex(x => x.ModuleRecordId).IsUnique().HasFilter("module_record_id IS NOT NULL");
             entity.HasIndex(x => new { x.Status, x.SubmittedAt });
+            entity.HasIndex(x => new { x.ApplicantAccount, x.Status });
+            entity.HasIndex(x => new { x.AssignedLeaderAccount, x.Status });
+            entity.HasIndex(x => new { x.TeamOptionId, x.Status });
 
             entity.HasOne(x => x.ModuleRecord)
                 .WithOne()
@@ -325,9 +358,16 @@ public class AppDbContext : DbContext
             entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
             entity.Property(x => x.NameEn).HasMaxLength(200);
             entity.Property(x => x.Kind).HasMaxLength(100).IsRequired();
-            entity.Property(x => x.Custodian).HasMaxLength(100).IsRequired();
+            entity.Property(x => x.CustodianAccount).HasMaxLength(100);
             entity.Property(x => x.ReservationStatus).HasMaxLength(50);
             entity.Property(x => x.Xmin).HasColumnName("xmin").HasColumnType("xid").ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
+
+            entity.HasIndex(x => x.CustodianAccount);
+            entity.HasIndex(x => x.OwnerTeamOptionId);
+            entity.HasOne(x => x.OwnerTeamOption)
+                .WithMany()
+                .HasForeignKey(x => x.OwnerTeamOptionId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<ApparatusFile>(entity =>

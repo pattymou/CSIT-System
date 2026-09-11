@@ -13,6 +13,16 @@ public class ApparatusListItemDto
     public string? ReservationStatus { get; set; }
     public string? Place { get; set; }
     public string? Custodian { get; set; }
+    public string? CustodianAccount { get; set; }
+    public Guid? OwnerTeamOptionId { get; set; }
+    public string? OwnerTeamName { get; set; }
+    public string? Agent { get; set; }
+    public string? Note { get; set; }
+    public Guid? EnvironmentGroupDeviceId { get; set; }
+    public Guid? EnvironmentGroupId { get; set; }
+    public string? EnvironmentGroupName { get; set; }
+    public bool? IsInEnvironment { get; set; }
+    public bool IsDirectReservationLocked => IsInEnvironment == true;
 }
 
 public class ApparatusDetailDto
@@ -41,13 +51,19 @@ public class ApparatusDetailDto
     public string? YearsUse { get; set; }
     public string? DaysUse { get; set; }
     public string? PriceUse { get; set; }
-    public string? CustodianDepartment { get; set; }
     public string? Custodian { get; set; }
+    public string? CustodianAccount { get; set; }
+    public Guid? OwnerTeamOptionId { get; set; }
+    public string? OwnerTeamName { get; set; }
     public string? Agent { get; set; }
     public string? ReservationStatus { get; set; }
     public string? Feature { get; set; }
     public string? Spec { get; set; }
     public string? Note { get; set; }
+    public Guid? EnvironmentGroupDeviceId { get; set; }
+    public Guid? EnvironmentGroupId { get; set; }
+    public string? EnvironmentGroupName { get; set; }
+    public bool? IsInEnvironment { get; set; }
 
     public List<ApparatusFileDto> Files { get; set; } = new();
 }
@@ -78,8 +94,8 @@ public class ApparatusUpsertRequest
     public string? YearsUse { get; set; }
     public string? DaysUse { get; set; }
     public string? PriceUse { get; set; }
-    public string? CustodianDepartment { get; set; }
-    public string? Custodian { get; set; }
+    public string? CustodianAccount { get; set; }
+    public Guid? OwnerTeamOptionId { get; set; }
     public string? Agent { get; set; }
     public string? ReservationStatus { get; set; }
     public string? Feature { get; set; }
@@ -101,4 +117,24 @@ public class ApparatusFileDto
 public class NewApparatusIdResponse
 {
     public string Id { get; set; } = "";
+}
+
+public sealed class ApparatusOwnershipOptionsDto
+{
+    public List<ApparatusOwnerTeamOptionDto> Teams { get; set; } = new();
+    public List<ApparatusCustodianOptionDto> Users { get; set; } = new();
+}
+
+public sealed class ApparatusOwnerTeamOptionDto
+{
+    public Guid Id { get; set; }
+    public string Value { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+}
+
+public sealed class ApparatusCustodianOptionDto
+{
+    public string Account { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string Department { get; set; } = string.Empty;
 }

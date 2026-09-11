@@ -1,5 +1,7 @@
 ﻿@page "/home"
 
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+
 <PageTitle>首頁</PageTitle>
 
 <div class="home-empty"></div>

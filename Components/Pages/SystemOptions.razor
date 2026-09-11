@@ -1,7 +1,9 @@
 ﻿@page "/system/system-options"
-@rendermode InteractiveServer
-@using global::System.Net.Http.Json
-@inject HttpClient Http
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Authorize(Policy = SystemAuthorization.Policies.Administration)]
+@using Microsoft.AspNetCore.Authorization
+@using SIT.DepartmentSystem.Web.Components.Pages.System
+@inject BrowserApiClient Api
 
 <h3 class="page-title">參數設定</h3>
 
@@ -20,8 +22,14 @@
                 <div class="option-kicker">目前管理類別</div>
                 <h3>@GetCategoryDisplayName(_selectedCategory)</h3>
                 <p>
-                    這裡只管理 <b>@GetCategoryDisplayName(_selectedCategory)</b> 的參數。
-                    新增時會自動歸到這個類別，不需要再選一次。
+                    @if (IsTeamRoutingCategory)
+                    {
+                        <text>設定各 Team 的系統共用 Leader，此設定可供整個 CSIT workflow 使用。</text>
+                    }
+                    else
+                    {
+                        <text>這裡只管理 <b>@GetCategoryDisplayName(_selectedCategory)</b> 的參數。新增時會自動歸到這個類別，不需要再選一次。</text>
+                    }
                 </p>
             </div>
 
@@ -39,21 +47,29 @@
         <div class="option-stats">
             <div class="stat-card">
                 <span>目前筆數</span>
-                <strong>@_items.Count</strong>
+                <strong>@(IsTeamRoutingCategory ? _teamRoutingTotal : _items.Count)</strong>
             </div>
 
             <div class="stat-card">
                 <span>啟用中</span>
-                <strong>@_items.Count(x => x.IsEnabled)</strong>
+                <strong>@(IsTeamRoutingCategory ? _teamRoutingEnabled : _items.Count(x => x.IsEnabled))</strong>
             </div>
 
             <div class="stat-card">
                 <span>停用</span>
-                <strong>@_items.Count(x => !x.IsEnabled)</strong>
+                <strong>@(IsTeamRoutingCategory ? _teamRoutingDisabled : _items.Count(x => !x.IsEnabled))</strong>
             </div>
         </div>
     </div>
 
+    @if (IsTeamRoutingCategory)
+    {
+        <TeamRoutingSettings TotalChanged="UpdateTeamRoutingTotal"
+                             EnabledChanged="UpdateTeamRoutingEnabled"
+                             DisabledChanged="UpdateTeamRoutingDisabled" />
+    }
+    else
+    {
     <div class="surface-card option-panel">
         <div class="option-section-title">
             <div>
@@ -188,6 +204,7 @@
             </table>
         </div>
     </div>
+    }
 </div>
 
 <style>
@@ -412,16 +429,23 @@
         "Department",
         "SubPu",
         "Team",
+        "TeamLeader",
         "ApparatusKind",
         "ThreeLevelRootPath",
         "AssetRootPath",
         "TestReportRootPath"
+        ,"Reservation"
     ];
 
     private string _selectedCategory = "Customer";
+    private bool IsTeamRoutingCategory => _selectedCategory == "TeamLeader";
     private string? _message;
     private bool _isError;
     private Guid? _editingId;
+    private bool _loadRequested = true;
+    private int _teamRoutingTotal;
+    private int _teamRoutingEnabled;
+    private int _teamRoutingDisabled;
 
     private List<SystemOptionDto> _items = new();
 
@@ -431,9 +455,12 @@
         IsEnabled = true
     };
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (!_loadRequested) return;
+        _loadRequested = false;
         await LoadAsync();
+        StateHasChanged();
     }
 
     private async Task OnCategoryChanged(ChangeEventArgs e)
@@ -460,23 +487,17 @@
 
         try
         {
+            if (IsTeamRoutingCategory)
+            {
+                _items = [];
+                return;
+            }
+
             var url = $"/api/system-options?category={Uri.EscapeDataString(_selectedCategory)}";
 
             Console.WriteLine($"[SystemOptions] Load start. category={_selectedCategory}, url={url}");
 
-            var response = await Http.GetAsync(url);
-            var text = await response.Content.ReadAsStringAsync();
-
-            if (!response.IsSuccessStatusCode)
-            {
-                _items = new();
-                _isError = true;
-                _message = $"載入參數失敗：{response.StatusCode} {text}";
-                Console.WriteLine($"[SystemOptions] Load failed. status={response.StatusCode}, body={text}");
-                return;
-            }
-
-            _items = await response.Content.ReadFromJsonAsync<List<SystemOptionDto>>() ?? new();
+            _items = await Api.GetAsync<List<SystemOptionDto>>(url);
 
             Console.WriteLine($"[SystemOptions] Load done. category={_selectedCategory}, count={_items.Count}");
         }
@@ -535,20 +556,20 @@
 
         try
         {
-            HttpResponseMessage response;
+            BrowserApiResponse response;
 
             if (_editingId.HasValue)
             {
                 Console.WriteLine($"[SystemOptions] Update start. id={_editingId}, category={_form.Category}, name={_form.Name}, value={_form.Value}");
-                response = await Http.PutAsJsonAsync($"/api/system-options/{_editingId}", _form);
+                response = await Api.PutJsonAsync($"/api/system-options/{_editingId}", _form);
             }
             else
             {
                 Console.WriteLine($"[SystemOptions] Create start. category={_form.Category}, name={_form.Name}, value={_form.Value}");
-                response = await Http.PostAsJsonAsync("/api/system-options", _form);
+                response = await Api.PostJsonAsync("/api/system-options", _form);
             }
 
-            var body = await response.Content.ReadAsStringAsync();
+            var body = response.Body;
 
             if (response.IsSuccessStatusCode)
             {
@@ -583,8 +604,8 @@
         {
             Console.WriteLine($"[SystemOptions] Delete start. id={id}");
 
-            var response = await Http.DeleteAsync($"/api/system-options/{id}");
-            var body = await response.Content.ReadAsStringAsync();
+            var response = await Api.DeleteAsync($"/api/system-options/{id}");
+            var body = response.Body;
 
             if (response.IsSuccessStatusCode)
             {
@@ -623,6 +644,12 @@
         };
     }
 
+    private void UpdateTeamRoutingTotal(int total) => _teamRoutingTotal = total;
+
+    private void UpdateTeamRoutingEnabled(int enabled) => _teamRoutingEnabled = enabled;
+
+    private void UpdateTeamRoutingDisabled(int disabled) => _teamRoutingDisabled = disabled;
+
     private static string GetCategoryDisplayName(string category)
     {
         return category switch
@@ -632,10 +659,12 @@
             "Department" => "部門",
             "SubPu" => "SubPU",
             "Team" => "Team",
+            "TeamLeader" => "Team Leader",
             "ApparatusKind" => "設備類別",
             "AssetRootPath" => "資產資料夾",
             "ThreeLevelRootPath" => "三層公版資料夾",
             "TestReportRootPath" => "TestReport資料夾",
+            "Reservation" => "設備預約設定",
 
             _ => category
         };

@@ -1,0 +1,280 @@
+@page "/test-environment-settings"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using SIT.DepartmentSystem.Web.Entities
+@using SIT.DepartmentSystem.Web.Models.Api
+@inject BrowserApiClient Api
+@inject NavigationManager Nav
+
+<div class="case-title-row">
+    <div>
+        <div class="case-kicker">ENVIRONMENT GROUP</div>
+        <h3 class="page-title">測試環境群組設定</h3>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="form-card @(_isError ? "error-text" : "success-text")">@_message</div>
+}
+
+@if (_loading)
+{
+    <div class="form-card">載入中...</div>
+}
+else
+{
+    <div class="catalog-layout">
+        <section class="form-card catalog-editor">
+            <div class="catalog-head">
+                <h4>@(_groupId.HasValue ? "修改測試環境群組" : "新增測試環境群組")</h4>
+                <span class="catalog-mode-badge">@(_groupId.HasValue ? "編輯模式" : "新增模式")</span>
+            </div>
+
+            <div class="form-grid">
+                <Field Label="群組代碼 *"><input @bind="_group.Code" /></Field>
+                <Field Label="群組名稱 *"><input @bind="_group.Name" /></Field>
+                <Field Label="管理 Team *">
+                    @if (_groupManagement.IsAdmin)
+                    {
+                        <select @bind="_group.OwnerTeamOptionId">
+                            <option value="@Guid.Empty">請選擇</option>
+                            @foreach (var team in _groupManagement.Teams)
+                            {
+                                <option value="@team.Id">@team.Name (@team.Value)</option>
+                            }
+                        </select>
+                    }
+                    else
+                    {
+                        <div class="catalog-readonly">@OwnerTeamName(_group.OwnerTeamOptionId)</div>
+                    }
+                </Field>
+                <Field Label="Site *"><input @bind="_group.Site" /></Field>
+                <Field Label="Status *">
+                    <select @bind="_group.Status">
+                        <option value="@EquipmentGroupStatus.Active">啟用</option>
+                        <option value="@EquipmentGroupStatus.Disabled">停用</option>
+                    </select>
+                </Field>
+                <Field Label="Description" Full="true"><textarea rows="4" @bind="_group.Description"></textarea></Field>
+            </div>
+
+            <EditorActions Save="SaveGroupAsync"
+                           Cancel="NewGroupEditor"
+                           PrimaryText="@(_groupId.HasValue ? "儲存修改" : "新增")"
+                           SecondaryText="@(_groupId.HasValue ? "取消編輯" : "清空")" />
+        </section>
+
+        <section class="form-card catalog-list">
+            <div class="catalog-head">
+                <div>
+                    <h4>測試環境群組清單</h4>
+                    <p>完整性顯示設備是否到齊；環境狀態另依群組與設備主檔判定是否可使用。</p>
+                </div>
+            </div>
+
+            <div class="project-table-wrap">
+                <table class="project-table">
+                    <thead>
+                        <tr>
+                            <th>群組代碼</th>
+                            <th>群組名稱</th>
+                            <th>管理 Team</th>
+                            <th>Site</th>
+                            <th>Status</th>
+                            <th>設備數量／完整性</th>
+                            <th>環境狀態</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @if (_groups.Count == 0)
+                        {
+                            <tr><td colspan="8" class="empty-row">目前尚無測試環境群組。</td></tr>
+                        }
+                        else
+                        {
+                            @foreach (var item in _groups)
+                            {
+                                <tr class="@(_groupId == item.Id ? "selected-row" : null)">
+                                    <td>@item.Code</td>
+                                    <td>@item.Name</td>
+                                    <td>@item.OwnerTeamName (@item.OwnerTeamCode)</td>
+                                    <td>@item.Site</td>
+                                    <td>@GroupStatusName(item.Status)</td>
+                                    <td>
+                                        <div class="device-completeness @CompletenessClass(item.CompletenessStatus)">
+                                            <strong>@item.InEnvironmentDeviceCount / @item.TotalDeviceCount</strong>
+                                            <span>@CompletenessName(item.CompletenessStatus)</span>
+                                            @if (item.MissingDevices.Count > 0)
+                                            {
+                                                <small title="@string.Join("、", item.MissingDevices.Select(DeviceLabel))">
+                                                    缺少 @item.MissingDevices.Count 台
+                                                </small>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="readiness-summary">
+                                            <span class="readiness-badge @ReadinessClass(item.Readiness.Status)">
+                                                @ReadinessName(item.Readiness.Status)
+                                            </span>
+                                            @if (item.Readiness.Issues.FirstOrDefault() is { } firstIssue)
+                                            {
+                                                <small title="@string.Join("、", item.Readiness.Issues.Select(x => x.Message))">
+                                                    @firstIssue.Message
+                                                </small>
+                                                @if (item.Readiness.Issues.Count > 1)
+                                                {
+                                                    <small>另有 @(item.Readiness.Issues.Count - 1) 項問題</small>
+                                                }
+                                            }
+                                        </div>
+                                    </td>
+                                    <td class="action-cell">
+                                        <button type="button" class="table-chip-btn" @onclick="() => EditGroup(item)">編輯</button>
+                                        <button type="button" class="table-chip-btn" @onclick="() => ManageDevices(item.Id)">管理設備</button>
+                                    </td>
+                                </tr>
+                            }
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    private bool _loadRequested = true;
+    private bool _loading = true;
+    private bool _isError;
+    private string? _message;
+    private List<EquipmentGroupDto> _groups = [];
+    private EquipmentGroupManagementOptionsDto _groupManagement = new();
+    private Guid? _groupId;
+    private EquipmentGroupUpsertRequest _group = new();
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_loadRequested) return;
+        _loadRequested = false;
+        try
+        {
+            await LoadAsync();
+            NewGroupEditor();
+        }
+        catch (Exception ex)
+        {
+            ShowError(ex.Message);
+        }
+        finally
+        {
+            _loading = false;
+            StateHasChanged();
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        _groupManagement = await Api.GetAsync<EquipmentGroupManagementOptionsDto>("/api/test-catalog/equipment-groups/management-options");
+        _groups = await Api.GetAsync<List<EquipmentGroupDto>>("/api/test-catalog/equipment-groups");
+    }
+
+    private async Task SaveGroupAsync()
+    {
+        ClearMessage();
+        var response = _groupId.HasValue
+            ? await Api.PutJsonAsync($"/api/test-catalog/equipment-groups/{_groupId}", _group)
+            : await Api.PostJsonAsync("/api/test-catalog/equipment-groups", _group);
+        if (!response.IsSuccessStatusCode)
+        {
+            ShowError(string.IsNullOrWhiteSpace(response.Body) ? $"操作失敗（HTTP {response.StatusCode}）。" : response.Body);
+            return;
+        }
+
+        _groups = await Api.GetAsync<List<EquipmentGroupDto>>("/api/test-catalog/equipment-groups");
+        NewGroupEditor();
+        ShowSuccess("儲存成功。");
+    }
+
+    private void EditGroup(EquipmentGroupDto item)
+    {
+        _groupId = item.Id;
+        _group = new EquipmentGroupUpsertRequest
+        {
+            Code = item.Code,
+            Name = item.Name,
+            OwnerTeamOptionId = item.OwnerTeamOptionId,
+            Site = item.Site,
+            Description = item.Description,
+            Status = item.Status
+        };
+        ClearMessage();
+    }
+
+    private void NewGroupEditor()
+    {
+        _groupId = null;
+        _group = new EquipmentGroupUpsertRequest
+        {
+            OwnerTeamOptionId = _groupManagement.Teams.Count == 1
+                ? _groupManagement.Teams[0].Id
+                : Guid.Empty
+        };
+        ClearMessage();
+    }
+
+    private string OwnerTeamName(Guid id) =>
+        _groupManagement.Teams.FirstOrDefault(x => x.Id == id) is { } team
+            ? $"{team.Name} ({team.Value})"
+            : "尚未設定";
+
+    private static string GroupStatusName(EquipmentGroupStatus status) =>
+        status == EquipmentGroupStatus.Active ? "啟用" : "停用";
+
+    private void ManageDevices(Guid groupId) =>
+        Nav.NavigateTo($"/test-environment-groups/{groupId}/devices");
+
+    private static string CompletenessName(EquipmentGroupCompletenessStatus status) => status switch
+    {
+        EquipmentGroupCompletenessStatus.Complete => "設備齊全",
+        EquipmentGroupCompletenessStatus.Incomplete => "設備不齊全",
+        _ => "未設定設備"
+    };
+
+    private static string CompletenessClass(EquipmentGroupCompletenessStatus status) => status switch
+    {
+        EquipmentGroupCompletenessStatus.Complete => "complete",
+        EquipmentGroupCompletenessStatus.Incomplete => "incomplete",
+        _ => "unconfigured"
+    };
+
+    private static string ReadinessName(EnvironmentReadinessStatus status) =>
+        status == EnvironmentReadinessStatus.Ready ? "環境可使用" : "環境不可使用";
+
+    private static string ReadinessClass(EnvironmentReadinessStatus status) =>
+        status == EnvironmentReadinessStatus.Ready ? "ready" : "not-ready";
+
+    private static string DeviceLabel(EquipmentGroupMissingDeviceDto item) =>
+        string.IsNullOrWhiteSpace(item.ProductsId) ? item.ApparatusName : $"{item.ProductsId} {item.ApparatusName}";
+
+    private void ShowError(string message)
+    {
+        _message = message;
+        _isError = true;
+    }
+
+    private void ShowSuccess(string message)
+    {
+        _message = message;
+        _isError = false;
+    }
+
+    private void ClearMessage()
+    {
+        _message = null;
+        _isError = false;
+    }
+}

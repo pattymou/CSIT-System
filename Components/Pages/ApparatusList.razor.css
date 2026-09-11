@@ -1,0 +1,24 @@
+.case-title-row {
+    flex-wrap: wrap;
+}
+
+.apparatus-page-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
+    gap: 12px;
+    min-width: 0;
+    max-width: 100%;
+    margin-left: auto;
+}
+
+.apparatus-page-actions button {
+    white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+    .apparatus-page-actions {
+        width: 100%;
+    }
+}

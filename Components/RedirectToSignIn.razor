@@ -1,0 +1,18 @@
+@inject NavigationManager Nav
+
+@code {
+    private bool _redirected;
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (!firstRender || _redirected)
+        {
+            return;
+        }
+
+        _redirected = true;
+        var relativePath = Nav.ToBaseRelativePath(Nav.Uri);
+        var returnUrl = "/" + relativePath;
+        Nav.NavigateTo($"/signin?returnUrl={Uri.EscapeDataString(returnUrl)}", forceLoad: true);
+    }
+}

@@ -47,6 +47,35 @@ public class ApparatusService : IApparatusService
         return fallbackId;
     }
 
+    public async Task<ApparatusOwnershipOptionsDto> GetOwnershipOptionsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        var teams = await _db.SystemOptions.AsNoTracking()
+            .Where(x => x.Category == SystemOptionCategories.Team && x.IsEnabled)
+            .OrderBy(x => x.Sort)
+            .ThenBy(x => x.Name)
+            .Select(x => new ApparatusOwnerTeamOptionDto
+            {
+                Id = x.Id,
+                Value = x.Value,
+                Name = x.Name
+            })
+            .ToListAsync(cancellationToken);
+
+        var users = await _db.Users.AsNoTracking()
+            .OrderBy(x => x.DisplayName)
+            .ThenBy(x => x.Account)
+            .Select(x => new ApparatusCustodianOptionDto
+            {
+                Account = x.Account,
+                DisplayName = x.DisplayName,
+                Department = x.Department
+            })
+            .ToListAsync(cancellationToken);
+
+        return new ApparatusOwnershipOptionsDto { Teams = teams, Users = users };
+    }
+
     public async Task<List<ApparatusListItemDto>> GetListAsync(string moduleCode, string? keyword, string? kind)
     {
         moduleCode = NormalizeModuleCode(moduleCode);
@@ -85,7 +114,36 @@ public class ApparatusService : IApparatusService
                 Number = x.Number,
                 ReservationStatus = x.ReservationStatus,
                 Place = x.Place,
-                Custodian = x.Custodian
+                Custodian = _db.Users
+                    .Where(user => x.CustodianAccount != null
+                        && user.Account.ToLower() == x.CustodianAccount.ToLower())
+                    .Select(user => user.DisplayName)
+                    .FirstOrDefault(),
+                CustodianAccount = x.CustodianAccount,
+                OwnerTeamOptionId = x.OwnerTeamOptionId,
+                OwnerTeamName = x.OwnerTeamOption == null ? null : x.OwnerTeamOption.Name,
+                Agent = x.Agent,
+                Note = x.Note,
+                EnvironmentGroupDeviceId = x.EnvironmentGroupDevices
+                    .OrderByDescending(d => d.IsInEnvironment)
+                    .ThenByDescending(d => d.PresenceUpdatedAt ?? d.AddedAt)
+                    .Select(d => (Guid?)d.Id)
+                    .FirstOrDefault(),
+                EnvironmentGroupId = x.EnvironmentGroupDevices
+                    .OrderByDescending(d => d.IsInEnvironment)
+                    .ThenByDescending(d => d.PresenceUpdatedAt ?? d.AddedAt)
+                    .Select(d => (Guid?)d.EquipmentGroupId)
+                    .FirstOrDefault(),
+                EnvironmentGroupName = x.EnvironmentGroupDevices
+                    .OrderByDescending(d => d.IsInEnvironment)
+                    .ThenByDescending(d => d.PresenceUpdatedAt ?? d.AddedAt)
+                    .Select(d => d.EquipmentGroup.Name)
+                    .FirstOrDefault(),
+                IsInEnvironment = x.EnvironmentGroupDevices
+                    .OrderByDescending(d => d.IsInEnvironment)
+                    .ThenByDescending(d => d.PresenceUpdatedAt ?? d.AddedAt)
+                    .Select(d => (bool?)d.IsInEnvironment)
+                    .FirstOrDefault()
             })
             .ToListAsync();
     }
@@ -96,11 +154,20 @@ public class ApparatusService : IApparatusService
 
         var entity = await _db.Apparatuses
             .Include(x => x.Files)
+            .Include(x => x.OwnerTeamOption)
+            .Include(x => x.EnvironmentGroupDevices).ThenInclude(x => x.EquipmentGroup)
             .FirstOrDefaultAsync(x => x.ModuleCode == moduleCode && x.Id == id);
 
         Console.WriteLine($"[ApparatusService] GetById. moduleCode={moduleCode}, id={id}, found={entity != null}");
 
-        return entity == null ? null : ToDetailDto(entity);
+        if (entity is null) return null;
+
+        var custodianNames = await ApparatusCustodianResolver.LoadDisplayNamesAsync(
+            _db,
+            [entity.CustodianAccount]);
+        return ToDetailDto(
+            entity,
+            ApparatusCustodianResolver.GetDisplayName(custodianNames, entity.CustodianAccount));
     }
 
     public async Task<string> CreateAsync(string moduleCode, ApparatusUpsertRequest request)
@@ -108,6 +175,10 @@ public class ApparatusService : IApparatusService
         moduleCode = NormalizeModuleCode(moduleCode);
 
         ValidateUpsert(request);
+        var ownership = await ValidateOwnershipAsync(
+            request,
+            string.Equals(moduleCode, ApparatusReservationRules.EquipmentModuleCode, StringComparison.OrdinalIgnoreCase),
+            CancellationToken.None);
 
         var id = string.IsNullOrWhiteSpace(request.Id)
             ? await GenerateNewIdAsync()
@@ -144,8 +215,8 @@ public class ApparatusService : IApparatusService
             YearsUse = request.YearsUse,
             DaysUse = request.DaysUse,
             PriceUse = request.PriceUse,
-            CustodianDepartment = request.CustodianDepartment,
-            Custodian = request.Custodian!.Trim(),
+            CustodianAccount = ownership.CustodianAccount,
+            OwnerTeamOptionId = ownership.OwnerTeamOptionId,
             Agent = request.Agent,
             ReservationStatus = string.IsNullOrWhiteSpace(request.ReservationStatus) ? "可借用" : request.ReservationStatus,
             Feature = request.Feature,
@@ -178,6 +249,10 @@ public class ApparatusService : IApparatusService
         }
 
         ValidateUpsert(request);
+        var ownership = await ValidateOwnershipAsync(
+            request,
+            string.Equals(moduleCode, ApparatusReservationRules.EquipmentModuleCode, StringComparison.OrdinalIgnoreCase),
+            CancellationToken.None);
         ApplyConcurrencyToken(entity, request.RowVersion);
 
         entity.ModuleCode = moduleCode;
@@ -202,8 +277,8 @@ public class ApparatusService : IApparatusService
         entity.YearsUse = request.YearsUse;
         entity.DaysUse = request.DaysUse;
         entity.PriceUse = request.PriceUse;
-        entity.CustodianDepartment = request.CustodianDepartment;
-        entity.Custodian = request.Custodian!.Trim();
+        entity.CustodianAccount = ownership.CustodianAccount;
+        entity.OwnerTeamOptionId = ownership.OwnerTeamOptionId;
         entity.Agent = request.Agent;
         entity.ReservationStatus = request.ReservationStatus;
         entity.Feature = request.Feature;
@@ -231,6 +306,10 @@ public class ApparatusService : IApparatusService
     {
         moduleCode = NormalizeModuleCode(moduleCode);
 
+        await using var transaction = await _db.Database.BeginTransactionAsync();
+        await _db.Database.ExecuteSqlInterpolatedAsync(
+            $"SELECT 1 FROM apparatus WHERE \"Id\" = {id} FOR UPDATE");
+
         var entity = await _db.Apparatuses
             .Include(x => x.Files)
             .FirstOrDefaultAsync(x => x.ModuleCode == moduleCode && x.Id == id);
@@ -238,6 +317,20 @@ public class ApparatusService : IApparatusService
         if (entity == null)
         {
             return false;
+        }
+
+        if (await _db.ReservationItems
+                .AsNoTracking()
+                .AnyAsync(x => x.ApparatusId == id))
+        {
+            throw new InvalidOperationException(
+                "This apparatus has reservation history and cannot be deleted. Retain the apparatus record instead.");
+        }
+
+        if (await _db.EquipmentGroupDevices.AsNoTracking().AnyAsync(x => x.ApparatusId == id))
+        {
+            throw new InvalidOperationException(
+                "This apparatus belongs to a test environment group and cannot be deleted. Remove the group membership first.");
         }
 
         foreach (var file in entity.Files)
@@ -249,6 +342,7 @@ public class ApparatusService : IApparatusService
         _db.Apparatuses.Remove(entity);
 
         await _db.SaveChangesAsync();
+        await transaction.CommitAsync();
 
         var folder = await GetApparatusFolderAsync(moduleCode, id);
         if (Directory.Exists(folder))
@@ -443,8 +537,7 @@ public class ApparatusService : IApparatusService
             yearsUse = entity.YearsUse,
             daysUse = entity.DaysUse,
             priceUse = entity.PriceUse,
-            custodianDepartment = entity.CustodianDepartment,
-            custodian = entity.Custodian,
+            custodianAccount = entity.CustodianAccount,
             agent = entity.Agent,
             reservationStatus = entity.ReservationStatus,
             feature = entity.Feature,
@@ -624,8 +717,12 @@ public class ApparatusService : IApparatusService
         }
     }
 
-    private static ApparatusDetailDto ToDetailDto(Apparatus x)
+    private static ApparatusDetailDto ToDetailDto(Apparatus x, string? custodianDisplayName)
     {
+        var environmentAssignment = x.EnvironmentGroupDevices
+            .OrderByDescending(d => d.IsInEnvironment)
+            .ThenByDescending(d => d.PresenceUpdatedAt ?? d.AddedAt)
+            .FirstOrDefault();
         return new ApparatusDetailDto
         {
             Id = x.Id,
@@ -652,13 +749,19 @@ public class ApparatusService : IApparatusService
             YearsUse = x.YearsUse,
             DaysUse = x.DaysUse,
             PriceUse = x.PriceUse,
-            CustodianDepartment = x.CustodianDepartment,
-            Custodian = x.Custodian,
+            Custodian = custodianDisplayName,
+            CustodianAccount = x.CustodianAccount,
+            OwnerTeamOptionId = x.OwnerTeamOptionId,
+            OwnerTeamName = x.OwnerTeamOption?.Name,
             Agent = x.Agent,
             ReservationStatus = x.ReservationStatus,
             Feature = x.Feature,
             Spec = x.Spec,
             Note = x.Note,
+            EnvironmentGroupDeviceId = environmentAssignment?.Id,
+            EnvironmentGroupId = environmentAssignment?.EquipmentGroupId,
+            EnvironmentGroupName = environmentAssignment?.EquipmentGroup.Name,
+            IsInEnvironment = environmentAssignment?.IsInEnvironment,
             Files = x.Files
                 .OrderByDescending(f => f.CreatedAt)
                 .Select(ToFileDto)
@@ -692,10 +795,46 @@ public class ApparatusService : IApparatusService
             throw new InvalidOperationException("類別不可空白");
         }
 
-        if (string.IsNullOrWhiteSpace(request.Custodian))
+    }
+
+    private async Task<(string? CustodianAccount, Guid? OwnerTeamOptionId)> ValidateOwnershipAsync(
+        ApparatusUpsertRequest request,
+        bool requireEquipmentOwnership,
+        CancellationToken cancellationToken)
+    {
+        string? custodianAccount = null;
+        if (!string.IsNullOrWhiteSpace(request.CustodianAccount))
         {
-            throw new InvalidOperationException("保管人不可空白");
+            custodianAccount = request.CustodianAccount.Trim().ToLowerInvariant();
+            var selectedUser = await _db.Users.AsNoTracking()
+                .Where(x => x.Account.ToLower() == custodianAccount)
+                .Select(x => x.Account)
+                .SingleOrDefaultAsync(cancellationToken);
+            if (selectedUser is null)
+                throw new InvalidOperationException($"保管人帳號不存在：{request.CustodianAccount.Trim()}。");
+            custodianAccount = selectedUser.Trim().ToLowerInvariant();
         }
+        else if (requireEquipmentOwnership)
+        {
+            throw new InvalidOperationException("請選擇保管人。");
+        }
+
+        if (request.OwnerTeamOptionId.HasValue)
+        {
+            var teamExists = await _db.SystemOptions.AsNoTracking().AnyAsync(
+                x => x.Id == request.OwnerTeamOptionId.Value
+                    && x.Category == SystemOptionCategories.Team
+                    && x.IsEnabled,
+                cancellationToken);
+            if (!teamExists)
+                throw new InvalidOperationException("設備所屬 Team 必須是啟用中的 Team 選項。");
+        }
+        else if (requireEquipmentOwnership)
+        {
+            throw new InvalidOperationException("請選擇設備所屬 Team。");
+        }
+
+        return (custodianAccount, request.OwnerTeamOptionId);
     }
 
     private static string NormalizeModuleCode(string? moduleCode)
