@@ -12,9 +12,6 @@ public sealed class ReservationPolicyService(AppDbContext db) : IReservationPoli
     public const string DepartmentMaxConcurrentEquipmentKey = "reservation.department_max_concurrent_equipment";
     public const string MaxExtensionDaysKey = "reservation.max_extension_days";
 
-    private static readonly ReservationStatus[] OccupyingStatuses =
-        [ReservationStatus.Pending, ReservationStatus.Approved, ReservationStatus.Borrowed];
-
     public async Task<ReservationPolicySettings> GetSettingsAsync(CancellationToken cancellationToken = default)
     {
         var options = await db.SystemOptions.AsNoTracking()
@@ -63,7 +60,7 @@ public sealed class ReservationPolicyService(AppDbContext db) : IReservationPoli
 
         var reservations = await db.Reservations.AsNoTracking()
             .Where(x => x.ApplicantDepartment == department.Trim()
-                && OccupyingStatuses.Contains(x.Status)
+                && ReservationOccupancyRules.BlockingStatuses.Contains(x.Status)
                 && x.StartTime < endTime && startTime < x.EndTime
                 && (!excludedReservationId.HasValue || x.Id != excludedReservationId.Value))
             .Select(x => new { x.StartTime, x.EndTime, Count = x.Items.Count })

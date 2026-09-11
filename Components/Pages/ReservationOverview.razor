@@ -27,7 +27,7 @@
             <div class="form-row"><label>結束日期</label><input type="date" value="@_toDate" @onchange="ToDateChanged" /></div>
             <div class="form-row equipment-search"><label>設備搜尋</label><input @bind="_equipmentKeyword" @bind:event="oninput" placeholder="名稱、財產編號、類型或型號" /></div>
             <div class="form-row equipment-select"><label>設備</label><select @bind="_apparatusId"><option value="">全部設備</option>@foreach (var item in FilteredEquipment) { <option value="@item.Id">@EquipmentOptionText(item)</option> }</select></div>
-            <div class="form-row"><label>部門</label><input @bind="_department" placeholder="輸入申請部門" /></div>
+            <div class="form-row"><label>部門</label><select @bind="_department"><option value="">全部部門</option>@foreach (var option in _departments) { <option value="@option.Value">@option.Label</option> }</select></div>
             <div class="form-row"><label>狀態</label><select @bind="_status"><option value="">全部</option>@foreach (var status in Enum.GetValues<ReservationStatus>()) { <option value="@status">@ReservationUi.StatusText(status)</option> }</select></div>
             <div class="form-row"><label>借用人</label><input @bind="_borrower" placeholder="姓名、帳號或分機" /></div>
         </div>
@@ -113,6 +113,7 @@
 
     private const int _pageSize = 50;
     private List<ApparatusListItemDto> _equipment = [];
+    private List<ReservationOptionDto> _departments = [];
     private ReservationOverviewPageDto _result = new() { Page = 1, PageSize = _pageSize };
     private string _fromDate = FirstDayOfCurrentMonth().ToString("yyyy-MM-dd", global::System.Globalization.CultureInfo.InvariantCulture);
     private string _toDate = LastDayOfCurrentMonth().ToString("yyyy-MM-dd", global::System.Globalization.CultureInfo.InvariantCulture);
@@ -137,6 +138,7 @@
         try
         {
             _equipment = await Api.GetBookableApparatusAsync();
+            _departments = (await Api.GetApplicationOptionsAsync()).Departments;
         }
         catch (Exception ex) { _message = ex.Message; }
         finally { _loading = false; }

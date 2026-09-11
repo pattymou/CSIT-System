@@ -14,16 +14,18 @@
         <h3>@PageTitle</h3>
     </div>
 
-    @if (string.Equals(EffectiveModuleCode, "equipment", StringComparison.OrdinalIgnoreCase))
-    {
-        <button type="button" class="btn-secondary" @onclick="OpenTestEnvironmentSettings">
-            測試環境群組設定
-        </button>
-    }
+    <div class="apparatus-page-actions">
+        @if (string.Equals(EffectiveModuleCode, "equipment", StringComparison.OrdinalIgnoreCase))
+        {
+            <button type="button" class="btn-secondary" @onclick="OpenTestEnvironmentSettings">
+                測試環境群組設定
+            </button>
+        }
 
-    <button class="primary-btn" @onclick="Create">
-        + 新增
-    </button>
+        <button type="button" class="primary-btn" @onclick="Create">
+            + 新增
+        </button>
+    </div>
 </div>
 
 <div class="form-card">

@@ -51,7 +51,6 @@ public class ApparatusDetailDto
     public string? YearsUse { get; set; }
     public string? DaysUse { get; set; }
     public string? PriceUse { get; set; }
-    public string? CustodianDepartment { get; set; }
     public string? Custodian { get; set; }
     public string? CustodianAccount { get; set; }
     public Guid? OwnerTeamOptionId { get; set; }
@@ -95,8 +94,6 @@ public class ApparatusUpsertRequest
     public string? YearsUse { get; set; }
     public string? DaysUse { get; set; }
     public string? PriceUse { get; set; }
-    public string? CustodianDepartment { get; set; }
-    public string? Custodian { get; set; }
     public string? CustodianAccount { get; set; }
     public Guid? OwnerTeamOptionId { get; set; }
     public string? Agent { get; set; }

@@ -44,7 +44,7 @@
     </div>
 
     <div class="form-actions">
-        <button type="button" class="btn-primary" @onclick="SaveAsync">@(_editingId.HasValue ? "儲存修改" : "新增設定")</button>
+        <button type="button" class="btn-primary" @onclick="SaveAsync">@(_editingId.HasValue ? "儲存修改" : "新增 Team Leader")</button>
         <button type="button" class="btn-secondary" @onclick="Clear">清空</button>
     </div>
 </div>
@@ -79,6 +79,15 @@
 </div>
 
 @code {
+    [Parameter]
+    public EventCallback<int> TotalChanged { get; set; }
+
+    [Parameter]
+    public EventCallback<int> EnabledChanged { get; set; }
+
+    [Parameter]
+    public EventCallback<int> DisabledChanged { get; set; }
+
     private List<SystemOptionDto> _teams = [];
     private List<TeamRoutingDto> _items = [];
     private TeamRoutingUpsertRequest _form = NewForm();
@@ -92,6 +101,11 @@
     {
         _teams = await SystemOptions.GetAllAsync(SystemOptionCategories.Team);
         _items = await SystemOptions.GetTeamRoutingsAsync();
+
+        var enabledCount = _items.Count(x => x.IsEnabled && x.TeamIsEnabled);
+        await TotalChanged.InvokeAsync(_items.Count);
+        await EnabledChanged.InvokeAsync(enabledCount);
+        await DisabledChanged.InvokeAsync(_items.Count - enabledCount);
     }
 
     private void Edit(TeamRoutingDto item)

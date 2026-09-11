@@ -36,8 +36,6 @@ public class Apparatus
     public string? DaysUse { get; set; }
     public string? PriceUse { get; set; }
 
-    public string? CustodianDepartment { get; set; }
-    public string Custodian { get; set; } = string.Empty;
     public string? CustodianAccount { get; set; }
     public Guid? OwnerTeamOptionId { get; set; }
     public SystemOption? OwnerTeamOption { get; set; }

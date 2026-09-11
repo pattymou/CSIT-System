@@ -34,6 +34,8 @@
                 {
                     var pending = _item.ExtensionRequests.First(x => x.Status == ReservationExtensionRequestStatus.Pending);
                     <p>待審的新結束時間：<LocalDateTime Value="pending.RequestedEndTime" /></p>
+                    <p class="extension-responsibility">續借狀態：@ExtensionStatusText(pending.Status)</p>
+                    <p class="extension-responsibility">@(pending.Mode == ReservationMode.Direct ? "由設備保管人、Owner Team Leader 或 Admin 整張審核。" : "由測試環境 Owner Team Leader 或 Admin 整張審核。")</p>
                     <button class="btn-secondary" disabled="@_working" @onclick="() => CancelExtensionAsync(pending.Id)">取消續借申請</button>
                 }
                 else { <div class="reservation-extension-actions"><input type="datetime-local" value="@_extensionEndLocal" @onchange="ExtensionEndChanged" /><button class="btn-primary" disabled="@_working" @onclick="RequestExtensionAsync">送出續借申請</button></div> }
@@ -45,6 +47,7 @@
 <style>
     .reservation-detail-page { max-width:1280px; margin:0 auto; padding-bottom:28px; }
     .reservation-extension-card p { margin:0; color:#cbd5e1; line-height:1.55; }.reservation-extension-actions { display:flex; align-items:center; gap:12px; margin-top:14px; }.reservation-extension-actions input { max-width:290px; }
+    .extension-responsibility{margin:9px 0!important;color:#94a3b8!important;font-size:.84rem}
     @@media(max-width:760px) { .reservation-extension-actions { align-items:stretch; flex-direction:column; }.reservation-extension-actions input { max-width:none; } }
 </style>
 
@@ -65,6 +68,7 @@
     private async Task RequestExtensionAsync() { _working = true; _message = null; try { await Api.RequestExtensionAsync(Id, await Api.LocalInputToUtcAsync(_extensionEndLocal)); await LoadAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _working = false; } }
     private void ExtensionEndChanged(ChangeEventArgs e) => _extensionEndLocal = e.Value?.ToString() ?? string.Empty;
     private async Task CancelExtensionAsync(Guid extensionId) { if (!await Api.ConfirmAsync("確定取消這筆續借申請？")) return; _working = true; try { await Api.CancelExtensionAsync(extensionId); await LoadAsync(); } catch (Exception ex) { _message = ex.Message; } finally { _working = false; } }
+    private static string ExtensionStatusText(ReservationExtensionRequestStatus status) => status switch { ReservationExtensionRequestStatus.Pending => "待審核", ReservationExtensionRequestStatus.Approved => "已核准", ReservationExtensionRequestStatus.Rejected => "已拒絕", ReservationExtensionRequestStatus.Cancelled => "已取消", _ => status.ToString() };
     private void Edit() => Nav.NavigateTo($"{BasePath}/{Id}/edit");
     private void Back() => Nav.NavigateTo(BasePath);
 }

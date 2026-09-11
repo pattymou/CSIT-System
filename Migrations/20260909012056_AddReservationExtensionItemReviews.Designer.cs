@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using SIT.DepartmentSystem.Web.Data;
@@ -11,9 +12,11 @@ using SIT.DepartmentSystem.Web.Data;
 namespace SIT.DepartmentSystem.Web.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260909012056_AddReservationExtensionItemReviews")]
+    partial class AddReservationExtensionItemReviews
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -44,9 +47,17 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("timestamp with time zone");
 
+                    b.Property<string>("Custodian")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
                     b.Property<string>("CustodianAccount")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)");
+
+                    b.Property<string>("CustodianDepartment")
+                        .HasColumnType("text");
 
                     b.Property<string>("DaysUse")
                         .HasColumnType("text");
@@ -1484,6 +1495,68 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.ToTable("reservation_audit_events", (string)null);
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationExtensionItemReview", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("RejectReason")
+                        .HasColumnType("text")
+                        .HasColumnName("reject_reason");
+
+                    b.Property<Guid>("ReservationExtensionRequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reservation_extension_request_id");
+
+                    b.Property<Guid>("ReservationItemId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reservation_item_id");
+
+                    b.Property<string>("ReviewStatus")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("review_status");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at");
+
+                    b.Property<string>("ReviewedByAccount")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("reviewed_by_account");
+
+                    b.Property<string>("ReviewedByName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("reviewed_by_name");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ReservationItemId");
+
+                    b.HasIndex("ReservationExtensionRequestId", "ReservationItemId")
+                        .IsUnique();
+
+                    b.HasIndex("ReviewStatus", "ReservationExtensionRequestId");
+
+                    b.ToTable("reservation_extension_item_reviews", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_reservation_extension_item_reviews_status", "review_status IN ('Pending', 'Approved', 'Rejected')");
+                        });
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationExtensionRequest", b =>
                 {
                     b.Property<Guid>("Id")
@@ -1629,6 +1702,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("character varying(100)")
                         .HasColumnName("products_id");
 
+                    b.Property<string>("RejectReason")
+                        .HasColumnType("text")
+                        .HasColumnName("reject_reason");
+
                     b.Property<string>("RequirementCapabilityTagSnapshot")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
@@ -1643,6 +1720,25 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("reservation_id");
 
+                    b.Property<string>("ReviewStatus")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)")
+                        .HasColumnName("review_status");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at");
+
+                    b.Property<string>("ReviewedByAccount")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("reviewed_by_account");
+
+                    b.Property<string>("ReviewedByName")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("reviewed_by_name");
+
                     b.HasKey("Id");
 
                     b.HasIndex("ApparatusId");
@@ -1654,7 +1750,12 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.HasIndex("ReservationId", "ApparatusId")
                         .IsUnique();
 
-                    b.ToTable("reservation_items", (string)null);
+                    b.HasIndex("ReviewStatus", "ReservationId");
+
+                    b.ToTable("reservation_items", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_reservation_items_review_status", "review_status IS NULL OR review_status IN ('Pending', 'Approved', 'Rejected')");
+                        });
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.SystemOption", b =>
@@ -2676,6 +2777,25 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("Reservation");
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationExtensionItemReview", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.ReservationExtensionRequest", "ReservationExtensionRequest")
+                        .WithMany("ItemReviews")
+                        .HasForeignKey("ReservationExtensionRequestId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.ReservationItem", "ReservationItem")
+                        .WithMany("ExtensionItemReviews")
+                        .HasForeignKey("ReservationItemId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("ReservationExtensionRequest");
+
+                    b.Navigation("ReservationItem");
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationExtensionRequest", b =>
                 {
                     b.HasOne("SIT.DepartmentSystem.Web.Entities.Reservation", "Reservation")
@@ -2833,6 +2953,16 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("ExtensionRequests");
 
                     b.Navigation("Items");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationExtensionRequest", b =>
+                {
+                    b.Navigation("ItemReviews");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ReservationItem", b =>
+                {
+                    b.Navigation("ExtensionItemReviews");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.TestCapability", b =>

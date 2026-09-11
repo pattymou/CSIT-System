@@ -9,6 +9,7 @@ public static class SystemAuthorization
         public const string RdApplicant = "RdApplicant";
         public const string CsitStaff = "CsitStaff";
         public const string ReservationUser = "ReservationUser";
+        public const string Administration = "Administration";
     }
 
     public static class AccessScopes

@@ -30,12 +30,20 @@ public sealed class EnvironmentGroupDeviceService(AppDbContext db) : IEnvironmen
 
         var account = GetAccount(user);
         var canManagePresence = access.IsAdmin || access.TeamOptionIds.Contains(group.OwnerTeamOptionId);
+        var custodianNames = await ApparatusCustodianResolver.LoadDisplayNamesAsync(
+            db,
+            devices.Select(x => x.Apparatus.CustodianAccount),
+            cancellationToken);
         var result = new List<EquipmentGroupDeviceDto>(devices.Count);
         foreach (var device in devices)
         {
             var canUpdate = canManagePresence
                 || string.Equals(device.Apparatus.CustodianAccount, account, StringComparison.OrdinalIgnoreCase);
-            result.Add(await MapDeviceAsync(device, canUpdate, cancellationToken));
+            result.Add(await MapDeviceAsync(
+                device,
+                ApparatusCustodianResolver.GetDisplayName(custodianNames, device.Apparatus.CustodianAccount),
+                canUpdate,
+                cancellationToken));
         }
         return result;
     }
@@ -65,13 +73,23 @@ public sealed class EnvironmentGroupDeviceService(AppDbContext db) : IEnvironmen
                 || (x.Brand ?? string.Empty).Contains(term)
                 || (x.Model ?? string.Empty).Contains(term)
                 || (x.Number ?? string.Empty).Contains(term)
-                || x.Custodian.Contains(term)
+                || db.Users.Any(user => x.CustodianAccount != null
+                    && user.Account.ToLower() == x.CustodianAccount.ToLower()
+                    && user.DisplayName.Contains(term))
                 || (x.CustodianAccount ?? string.Empty).Contains(term)
                 || (x.Place ?? string.Empty).Contains(term));
         }
 
         var apparatuses = await query.OrderBy(x => x.ProductsId).ThenBy(x => x.Name).ToListAsync(cancellationToken);
-        return apparatuses.Select(x => MapCandidate(x, group, access)).ToList();
+        var custodianNames = await ApparatusCustodianResolver.LoadDisplayNamesAsync(
+            db,
+            apparatuses.Select(x => x.CustodianAccount),
+            cancellationToken);
+        return apparatuses.Select(x => MapCandidate(
+            x,
+            ApparatusCustodianResolver.GetDisplayName(custodianNames, x.CustodianAccount),
+            group,
+            access)).ToList();
     }
 
     public async Task<List<EquipmentGroupDeviceDto>> AddDevicesAsync(
@@ -191,7 +209,15 @@ public sealed class EnvironmentGroupDeviceService(AppDbContext db) : IEnvironmen
             throw new InvalidOperationException("此設備目前已存在於另一個測試環境，無法放回。", ex);
         }
 
-        return await MapDeviceAsync(entity, true, cancellationToken);
+        var custodianNames = await ApparatusCustodianResolver.LoadDisplayNamesAsync(
+            db,
+            [entity.Apparatus.CustodianAccount],
+            cancellationToken);
+        return await MapDeviceAsync(
+            entity,
+            ApparatusCustodianResolver.GetDisplayName(custodianNames, entity.Apparatus.CustodianAccount),
+            true,
+            cancellationToken);
     }
 
     public async Task<ApparatusEnvironmentAssignmentDto?> GetApparatusAssignmentAsync(
@@ -241,6 +267,7 @@ public sealed class EnvironmentGroupDeviceService(AppDbContext db) : IEnvironmen
 
     private async Task<EquipmentGroupDeviceDto> MapDeviceAsync(
         EquipmentGroupDevice x,
+        string? custodianDisplayName,
         bool canUpdatePresence,
         CancellationToken cancellationToken)
     {
@@ -259,7 +286,7 @@ public sealed class EnvironmentGroupDeviceService(AppDbContext db) : IEnvironmen
             Brand = x.Apparatus.Brand,
             Model = x.Apparatus.Model,
             Number = x.Apparatus.Number,
-            Custodian = x.Apparatus.Custodian,
+            Custodian = custodianDisplayName,
             CustodianAccount = x.Apparatus.CustodianAccount,
             ReservationStatus = x.Apparatus.ReservationStatus,
             Place = x.Apparatus.Place,
@@ -274,7 +301,11 @@ public sealed class EnvironmentGroupDeviceService(AppDbContext db) : IEnvironmen
         };
     }
 
-    private static EquipmentGroupDeviceCandidateDto MapCandidate(Apparatus x, EquipmentGroup group, GroupAccess access)
+    private static EquipmentGroupDeviceCandidateDto MapCandidate(
+        Apparatus x,
+        string? custodianDisplayName,
+        EquipmentGroup group,
+        GroupAccess access)
     {
         var sameMembership = x.EnvironmentGroupDevices.FirstOrDefault(d => d.EquipmentGroupId == group.Id);
         var active = x.EnvironmentGroupDevices.FirstOrDefault(d => d.IsInEnvironment);
@@ -295,7 +326,7 @@ public sealed class EnvironmentGroupDeviceService(AppDbContext db) : IEnvironmen
             Brand = x.Brand,
             Model = x.Model,
             Number = x.Number,
-            Custodian = x.Custodian,
+            Custodian = custodianDisplayName,
             CustodianAccount = x.CustodianAccount,
             Place = x.Place,
             ReservationStatus = x.ReservationStatus,

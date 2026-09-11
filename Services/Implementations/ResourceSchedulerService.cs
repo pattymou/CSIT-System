@@ -98,6 +98,10 @@ public sealed class ResourceSchedulerService : IResourceSchedulerService
         var apparatusById = await _db.Apparatuses.AsNoTracking()
             .Where(x => selectedIds.Contains(x.Id))
             .ToDictionaryAsync(x => x.Id, StringComparer.Ordinal, cancellationToken);
+        var custodianNames = await ApparatusCustodianResolver.LoadDisplayNamesAsync(
+            _db,
+            apparatusById.Values.Select(x => x.CustodianAccount),
+            cancellationToken);
 
         var requirements = requirementStates.Select(state =>
         {
@@ -121,7 +125,11 @@ public sealed class ResourceSchedulerService : IResourceSchedulerService
                 Required = state.Requirement.Required,
                 AllowAlternative = state.Requirement.AllowAlternative,
                 PreferredEquipmentId = state.Requirement.PreferredEquipmentId,
-                SelectedApparatus = selected.Select(id => MapApparatus(apparatusById[id])).ToList(),
+                SelectedApparatus = selected.Select(id => MapApparatus(
+                    apparatusById[id],
+                    ApparatusCustodianResolver.GetDisplayName(
+                        custodianNames,
+                        apparatusById[id].CustodianAccount))).ToList(),
                 UnresolvedQuantity = unresolved,
                 FailureReason = state.Requirement.Required ? failure : state.ConfigurationFailure,
                 Note = state.Requirement.Required ? null : note
@@ -212,7 +220,7 @@ public sealed class ResourceSchedulerService : IResourceSchedulerService
         return result;
     }
 
-    private static ResourceAssignmentApparatusDto MapApparatus(Apparatus x) => new()
+    private static ResourceAssignmentApparatusDto MapApparatus(Apparatus x, string? custodianDisplayName) => new()
     {
         ApparatusId = x.Id,
         Name = x.Name,
@@ -221,7 +229,7 @@ public sealed class ResourceSchedulerService : IResourceSchedulerService
         Brand = x.Brand,
         Model = x.Model,
         Place = x.Place,
-        Custodian = string.IsNullOrWhiteSpace(x.Custodian) ? null : x.Custodian
+        Custodian = custodianDisplayName
     };
 
     private static SchedulerCatalogReferenceDto MapReference(Guid id, string code, string name) =>

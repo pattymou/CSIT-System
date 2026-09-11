@@ -4,9 +4,7 @@
             <NotAuthorized>
                 <AuthorizeView>
                     <Authorized Context="authorizedContext">
-                        <LayoutView Layout="typeof(Layout.MainLayout)">
-                            <div class="surface-card error-text">您沒有權限存取此頁面。</div>
-                        </LayoutView>
+                        <div class="surface-card error-text">您沒有權限存取此頁面。</div>
                     </Authorized>
                     <NotAuthorized Context="anonymousContext">
                         <RedirectToSignIn />

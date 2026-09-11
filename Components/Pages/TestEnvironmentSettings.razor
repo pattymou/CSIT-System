@@ -70,7 +70,7 @@ else
             <div class="catalog-head">
                 <div>
                     <h4>測試環境群組清單</h4>
-                    <p>設備內容將於下一階段透過「管理設備」直接指定既有實體設備。</p>
+                    <p>完整性顯示設備是否到齊；環境狀態另依群組與設備主檔判定是否可使用。</p>
                 </div>
             </div>
 
@@ -84,13 +84,14 @@ else
                             <th>Site</th>
                             <th>Status</th>
                             <th>設備數量／完整性</th>
+                            <th>環境狀態</th>
                             <th>操作</th>
                         </tr>
                     </thead>
                     <tbody>
                         @if (_groups.Count == 0)
                         {
-                            <tr><td colspan="7" class="empty-row">目前尚無測試環境群組。</td></tr>
+                            <tr><td colspan="8" class="empty-row">目前尚無測試環境群組。</td></tr>
                         }
                         else
                         {
@@ -111,6 +112,23 @@ else
                                                 <small title="@string.Join("、", item.MissingDevices.Select(DeviceLabel))">
                                                     缺少 @item.MissingDevices.Count 台
                                                 </small>
+                                            }
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <div class="readiness-summary">
+                                            <span class="readiness-badge @ReadinessClass(item.Readiness.Status)">
+                                                @ReadinessName(item.Readiness.Status)
+                                            </span>
+                                            @if (item.Readiness.Issues.FirstOrDefault() is { } firstIssue)
+                                            {
+                                                <small title="@string.Join("、", item.Readiness.Issues.Select(x => x.Message))">
+                                                    @firstIssue.Message
+                                                </small>
+                                                @if (item.Readiness.Issues.Count > 1)
+                                                {
+                                                    <small>另有 @(item.Readiness.Issues.Count - 1) 項問題</small>
+                                                }
                                             }
                                         </div>
                                     </td>
@@ -232,6 +250,12 @@ else
         EquipmentGroupCompletenessStatus.Incomplete => "incomplete",
         _ => "unconfigured"
     };
+
+    private static string ReadinessName(EnvironmentReadinessStatus status) =>
+        status == EnvironmentReadinessStatus.Ready ? "環境可使用" : "環境不可使用";
+
+    private static string ReadinessClass(EnvironmentReadinessStatus status) =>
+        status == EnvironmentReadinessStatus.Ready ? "ready" : "not-ready";
 
     private static string DeviceLabel(EquipmentGroupMissingDeviceDto item) =>
         string.IsNullOrWhiteSpace(item.ProductsId) ? item.ApparatusName : $"{item.ProductsId} {item.ApparatusName}";

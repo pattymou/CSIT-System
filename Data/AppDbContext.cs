@@ -358,7 +358,6 @@ public class AppDbContext : DbContext
             entity.Property(x => x.Name).HasMaxLength(200).IsRequired();
             entity.Property(x => x.NameEn).HasMaxLength(200);
             entity.Property(x => x.Kind).HasMaxLength(100).IsRequired();
-            entity.Property(x => x.Custodian).HasMaxLength(100).IsRequired();
             entity.Property(x => x.CustodianAccount).HasMaxLength(100);
             entity.Property(x => x.ReservationStatus).HasMaxLength(50);
             entity.Property(x => x.Xmin).HasColumnName("xmin").HasColumnType("xid").ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();

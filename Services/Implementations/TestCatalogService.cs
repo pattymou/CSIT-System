@@ -10,8 +10,13 @@ namespace SIT.DepartmentSystem.Web.Services.Implementations;
 public sealed class TestCatalogService : ITestCatalogService
 {
     private readonly AppDbContext _db;
+    private readonly IEnvironmentReadinessService _environmentReadiness;
 
-    public TestCatalogService(AppDbContext db) => _db = db;
+    public TestCatalogService(AppDbContext db, IEnvironmentReadinessService environmentReadiness)
+    {
+        _db = db;
+        _environmentReadiness = environmentReadiness;
+    }
 
     public async Task<Guid> CreateTestEnvironmentAsync(TestEnvironmentUpsertRequest request, CancellationToken cancellationToken = default)
     {
@@ -106,12 +111,12 @@ public sealed class TestCatalogService : ITestCatalogService
         var access = await ResolveGroupAccessAsync(user, cancellationToken);
         var entity = await _db.EquipmentGroups.AsNoTracking()
             .Include(x => x.OwnerTeamOption)
-            .Include(x => x.Devices).ThenInclude(x => x.Apparatus)
             .Include(x => x.Requirements).ThenInclude(x => x.PreferredEquipment)
             .SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (entity is null) return null;
         EnsureGroupOwnership(entity.OwnerTeamOptionId, access);
-        return Map(entity);
+        var readiness = await _environmentReadiness.GetReadinessAsync(entity.Id, cancellationToken);
+        return Map(entity, readiness);
     }
 
     public async Task<List<EquipmentGroupDto>> ListEquipmentGroupsAsync(
@@ -121,11 +126,13 @@ public sealed class TestCatalogService : ITestCatalogService
         var access = await ResolveGroupAccessAsync(user, cancellationToken);
         var query = _db.EquipmentGroups.AsNoTracking()
             .Include(x => x.OwnerTeamOption)
-            .Include(x => x.Devices).ThenInclude(x => x.Apparatus)
             .Include(x => x.Requirements).ThenInclude(x => x.PreferredEquipment)
             .AsQueryable();
         if (!access.IsAdmin) query = query.Where(x => access.TeamOptionIds.Contains(x.OwnerTeamOptionId));
-        return (await query.OrderBy(x => x.Code).ToListAsync(cancellationToken)).Select(Map).ToList();
+        var groups = await query.OrderBy(x => x.Code).ToListAsync(cancellationToken);
+        var readiness = await _environmentReadiness.GetReadinessForGroupsAsync(
+            groups.Select(x => x.Id).ToArray(), cancellationToken);
+        return groups.Select(x => Map(x, readiness[x.Id])).ToList();
     }
 
     public async Task<EquipmentGroupManagementOptionsDto> GetEquipmentGroupManagementOptionsAsync(
@@ -560,10 +567,8 @@ public sealed class TestCatalogService : ITestCatalogService
     private static void Apply(TestExecutionProfile x, TestExecutionProfileUpsertRequest r, string code) { x.Code = code; x.Name = r.Name.Trim(); x.TestCapabilityId = r.TestCapabilityId; x.TestEnvironmentId = r.TestEnvironmentId; x.EquipmentGroupId = r.EquipmentGroupId; x.TestPlanTemplateId = r.TestPlanTemplateId; x.ReportTemplateId = r.ReportTemplateId; x.EstimatedDurationMinutes = r.EstimatedDurationMinutes; x.AutomationLevel = r.AutomationLevel; x.IsDefault = r.IsDefault; x.Status = r.Status; }
 
     private static TestEnvironmentDto Map(TestEnvironment x) => new() { Id = x.Id, Code = x.Code, Name = x.Name, Category = x.Category, Site = x.Site, Description = x.Description, Status = x.Status, BookingMode = x.BookingMode, CreatedAt = x.CreatedAt, UpdatedAt = x.UpdatedAt };
-    private static EquipmentGroupDto Map(EquipmentGroup x)
+    private static EquipmentGroupDto Map(EquipmentGroup x, EnvironmentReadinessDto readiness)
     {
-        var total = x.Devices.Count;
-        var present = x.Devices.Count(d => d.IsInEnvironment);
         return new EquipmentGroupDto
         {
             Id = x.Id,
@@ -577,18 +582,18 @@ public sealed class TestCatalogService : ITestCatalogService
             Status = x.Status,
             CreatedAt = x.CreatedAt,
             UpdatedAt = x.UpdatedAt,
-            TotalDeviceCount = total,
-            InEnvironmentDeviceCount = present,
-            CompletenessStatus = total == 0
-                ? EquipmentGroupCompletenessStatus.Unconfigured
-                : present == total
-                    ? EquipmentGroupCompletenessStatus.Complete
-                    : EquipmentGroupCompletenessStatus.Incomplete,
-            MissingDevices = x.Devices.Where(d => !d.IsInEnvironment).Select(d => new EquipmentGroupMissingDeviceDto
+            TotalDeviceCount = readiness.TotalDeviceCount,
+            InEnvironmentDeviceCount = readiness.PresentDeviceCount,
+            CompletenessStatus = EnvironmentGroupDeviceRules.GetCompletenessStatus(
+                readiness.TotalDeviceCount, readiness.PresentDeviceCount),
+            Readiness = readiness,
+            MissingDevices = readiness.Issues
+                .Where(issue => issue.Type == EnvironmentReadinessIssueType.DeviceNotPresent)
+                .Select(issue => new EquipmentGroupMissingDeviceDto
             {
-                ApparatusId = d.ApparatusId,
-                ApparatusName = d.Apparatus.Name,
-                ProductsId = d.Apparatus.ProductsId
+                ApparatusId = issue.ApparatusId ?? string.Empty,
+                ApparatusName = issue.ApparatusName ?? issue.ApparatusId ?? "未知設備",
+                ProductsId = issue.ApparatusProductsId
             }).ToList(),
             Requirements = x.Requirements.Select(Map).ToList()
         };

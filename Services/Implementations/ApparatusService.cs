@@ -114,7 +114,11 @@ public class ApparatusService : IApparatusService
                 Number = x.Number,
                 ReservationStatus = x.ReservationStatus,
                 Place = x.Place,
-                Custodian = x.Custodian,
+                Custodian = _db.Users
+                    .Where(user => x.CustodianAccount != null
+                        && user.Account.ToLower() == x.CustodianAccount.ToLower())
+                    .Select(user => user.DisplayName)
+                    .FirstOrDefault(),
                 CustodianAccount = x.CustodianAccount,
                 OwnerTeamOptionId = x.OwnerTeamOptionId,
                 OwnerTeamName = x.OwnerTeamOption == null ? null : x.OwnerTeamOption.Name,
@@ -156,7 +160,14 @@ public class ApparatusService : IApparatusService
 
         Console.WriteLine($"[ApparatusService] GetById. moduleCode={moduleCode}, id={id}, found={entity != null}");
 
-        return entity == null ? null : ToDetailDto(entity);
+        if (entity is null) return null;
+
+        var custodianNames = await ApparatusCustodianResolver.LoadDisplayNamesAsync(
+            _db,
+            [entity.CustodianAccount]);
+        return ToDetailDto(
+            entity,
+            ApparatusCustodianResolver.GetDisplayName(custodianNames, entity.CustodianAccount));
     }
 
     public async Task<string> CreateAsync(string moduleCode, ApparatusUpsertRequest request)
@@ -164,7 +175,10 @@ public class ApparatusService : IApparatusService
         moduleCode = NormalizeModuleCode(moduleCode);
 
         ValidateUpsert(request);
-        var ownership = await ValidateOwnershipAsync(request, CancellationToken.None);
+        var ownership = await ValidateOwnershipAsync(
+            request,
+            string.Equals(moduleCode, ApparatusReservationRules.EquipmentModuleCode, StringComparison.OrdinalIgnoreCase),
+            CancellationToken.None);
 
         var id = string.IsNullOrWhiteSpace(request.Id)
             ? await GenerateNewIdAsync()
@@ -201,8 +215,6 @@ public class ApparatusService : IApparatusService
             YearsUse = request.YearsUse,
             DaysUse = request.DaysUse,
             PriceUse = request.PriceUse,
-            CustodianDepartment = request.CustodianDepartment,
-            Custodian = request.Custodian!.Trim(),
             CustodianAccount = ownership.CustodianAccount,
             OwnerTeamOptionId = ownership.OwnerTeamOptionId,
             Agent = request.Agent,
@@ -237,7 +249,10 @@ public class ApparatusService : IApparatusService
         }
 
         ValidateUpsert(request);
-        var ownership = await ValidateOwnershipAsync(request, CancellationToken.None);
+        var ownership = await ValidateOwnershipAsync(
+            request,
+            string.Equals(moduleCode, ApparatusReservationRules.EquipmentModuleCode, StringComparison.OrdinalIgnoreCase),
+            CancellationToken.None);
         ApplyConcurrencyToken(entity, request.RowVersion);
 
         entity.ModuleCode = moduleCode;
@@ -262,8 +277,6 @@ public class ApparatusService : IApparatusService
         entity.YearsUse = request.YearsUse;
         entity.DaysUse = request.DaysUse;
         entity.PriceUse = request.PriceUse;
-        entity.CustodianDepartment = request.CustodianDepartment;
-        entity.Custodian = request.Custodian!.Trim();
         entity.CustodianAccount = ownership.CustodianAccount;
         entity.OwnerTeamOptionId = ownership.OwnerTeamOptionId;
         entity.Agent = request.Agent;
@@ -524,8 +537,7 @@ public class ApparatusService : IApparatusService
             yearsUse = entity.YearsUse,
             daysUse = entity.DaysUse,
             priceUse = entity.PriceUse,
-            custodianDepartment = entity.CustodianDepartment,
-            custodian = entity.Custodian,
+            custodianAccount = entity.CustodianAccount,
             agent = entity.Agent,
             reservationStatus = entity.ReservationStatus,
             feature = entity.Feature,
@@ -705,7 +717,7 @@ public class ApparatusService : IApparatusService
         }
     }
 
-    private static ApparatusDetailDto ToDetailDto(Apparatus x)
+    private static ApparatusDetailDto ToDetailDto(Apparatus x, string? custodianDisplayName)
     {
         var environmentAssignment = x.EnvironmentGroupDevices
             .OrderByDescending(d => d.IsInEnvironment)
@@ -737,8 +749,7 @@ public class ApparatusService : IApparatusService
             YearsUse = x.YearsUse,
             DaysUse = x.DaysUse,
             PriceUse = x.PriceUse,
-            CustodianDepartment = x.CustodianDepartment,
-            Custodian = x.Custodian,
+            Custodian = custodianDisplayName,
             CustodianAccount = x.CustodianAccount,
             OwnerTeamOptionId = x.OwnerTeamOptionId,
             OwnerTeamName = x.OwnerTeamOption?.Name,
@@ -784,24 +795,28 @@ public class ApparatusService : IApparatusService
             throw new InvalidOperationException("類別不可空白");
         }
 
-        if (string.IsNullOrWhiteSpace(request.Custodian))
-        {
-            throw new InvalidOperationException("保管人不可空白");
-        }
     }
 
     private async Task<(string? CustodianAccount, Guid? OwnerTeamOptionId)> ValidateOwnershipAsync(
         ApparatusUpsertRequest request,
+        bool requireEquipmentOwnership,
         CancellationToken cancellationToken)
     {
         string? custodianAccount = null;
         if (!string.IsNullOrWhiteSpace(request.CustodianAccount))
         {
             custodianAccount = request.CustodianAccount.Trim().ToLowerInvariant();
-            var exists = await _db.Users.AsNoTracking()
-                .AnyAsync(x => x.Account.ToLower() == custodianAccount, cancellationToken);
-            if (!exists)
+            var selectedUser = await _db.Users.AsNoTracking()
+                .Where(x => x.Account.ToLower() == custodianAccount)
+                .Select(x => x.Account)
+                .SingleOrDefaultAsync(cancellationToken);
+            if (selectedUser is null)
                 throw new InvalidOperationException($"保管人帳號不存在：{request.CustodianAccount.Trim()}。");
+            custodianAccount = selectedUser.Trim().ToLowerInvariant();
+        }
+        else if (requireEquipmentOwnership)
+        {
+            throw new InvalidOperationException("請選擇保管人。");
         }
 
         if (request.OwnerTeamOptionId.HasValue)
@@ -813,6 +828,10 @@ public class ApparatusService : IApparatusService
                 cancellationToken);
             if (!teamExists)
                 throw new InvalidOperationException("設備所屬 Team 必須是啟用中的 Team 選項。");
+        }
+        else if (requireEquipmentOwnership)
+        {
+            throw new InvalidOperationException("請選擇設備所屬 Team。");
         }
 
         return (custodianAccount, request.OwnerTeamOptionId);

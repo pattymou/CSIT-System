@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Components;
 using SIT.DepartmentSystem.Web.Data;
@@ -42,6 +43,9 @@ builder.Services.AddAuthorization(options =>
         policy.RequireAuthenticatedUser().RequireAssertion(context =>
             context.User.HasClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.RdApplicant)
             || context.User.HasClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff)));
+    options.AddPolicy(SystemAuthorization.Policies.Administration, policy =>
+        policy.RequireAuthenticatedUser()
+            .AddRequirements(new AdministrationAccessRequirement()));
 });
 
 builder.Services.AddDbContextFactory<AppDbContext>(options =>
@@ -60,10 +64,13 @@ builder.Services.AddScoped<ReservationApiClient>();
 builder.Services.AddScoped<BrowserApiClient>();
 builder.Services.AddScoped<ITestCatalogService, TestCatalogService>();
 builder.Services.AddScoped<IEnvironmentGroupDeviceService, EnvironmentGroupDeviceService>();
+builder.Services.AddScoped<IEnvironmentReadinessService, EnvironmentReadinessService>();
+builder.Services.AddScoped<IEnvironmentAvailabilityService, EnvironmentAvailabilityService>();
 builder.Services.AddScoped<IPlannedTestItemService, PlannedTestItemService>();
 builder.Services.AddScoped<IModuleCaseService, ModuleCaseService>();
 builder.Services.AddScoped<IModuleTaskService, ModuleTaskService>();
 builder.Services.AddScoped<IMenuManagementService, MenuManagementService>();
+builder.Services.AddScoped<IAuthorizationHandler, AdministrationAccessHandler>();
 builder.Services.AddScoped<AdAuthenticationService>();
 
 builder.Services.Configure<UploadSettings>(

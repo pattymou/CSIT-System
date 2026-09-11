@@ -4,6 +4,17 @@ namespace SIT.DepartmentSystem.Web.Models.Api;
 
 public enum ReservationMode { Direct, Environment }
 
+public enum ReservationReviewScope { Custodian, Team, All }
+
+public enum ReservationExtensionReviewScope { Custodian, Team, All }
+
+public sealed class ReservationTeamScopeOptionDto
+{
+    public Guid TeamOptionId { get; set; }
+    public string DisplayName { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+}
+
 public sealed class CreateReservationRequest
 {
     public ReservationMode Mode { get; set; } = ReservationMode.Direct;
@@ -11,6 +22,7 @@ public sealed class CreateReservationRequest
     public DateTime StartTime { get; set; }
     public DateTime EndTime { get; set; }
     public List<ReservationItemRequest> Items { get; set; } = new();
+    public Guid? EnvironmentGroupId { get; set; }
     public Guid? TestExecutionProfileId { get; set; }
     public List<ReservationRequirementSelectionRequest> Selections { get; set; } = new();
     public string ApplicantExtension { get; set; } = string.Empty;
@@ -35,6 +47,7 @@ public sealed class UpdateReservationRequest
     public DateTime StartTime { get; set; }
     public DateTime EndTime { get; set; }
     public List<ReservationItemRequest> Items { get; set; } = new();
+    public Guid? EnvironmentGroupId { get; set; }
     public Guid? TestExecutionProfileId { get; set; }
     public List<ReservationRequirementSelectionRequest> Selections { get; set; } = new();
     public string ApplicantExtension { get; set; } = string.Empty;
@@ -87,6 +100,11 @@ public enum ReservationOverdueCategory
 
 public sealed class ReservationOverdueResponseDto
 {
+    public ReservationReviewScope Scope { get; set; }
+    public Guid? SelectedTeamOptionId { get; set; }
+    public bool IsTeamLeader { get; set; }
+    public bool IsAdmin { get; set; }
+    public List<ReservationTeamScopeOptionDto> TeamOptions { get; set; } = new();
     public int TotalCount { get; set; }
     public int OverdueReturnCount { get; set; }
     public List<ReservationOverdueItemDto> Items { get; set; } = new();
@@ -173,6 +191,11 @@ public sealed class ReservationDetailDto
     public List<ReservationExtensionRequestDto> ExtensionRequests { get; set; } = new();
     public List<ReservationAuditEventDto> AuditEvents { get; set; } = new();
     public bool IsOverdue { get; set; }
+    public bool CanApprove { get; set; }
+    public bool CanReject { get; set; }
+    public Guid? CurrentOwnerTeamOptionId { get; set; }
+    public string? CurrentOwnerTeamName { get; set; }
+    public string? ReviewResponsibility { get; set; }
 }
 
 public sealed class ReservationItemDto
@@ -192,6 +215,43 @@ public sealed class ReservationItemDto
     public Guid? EquipmentGroupRequirementId { get; set; }
     public string? RequirementResourceTypeSnapshot { get; set; }
     public string? RequirementCapabilityTagSnapshot { get; set; }
+    public string? CurrentCustodianAccount { get; set; }
+    public string? CurrentCustodianName { get; set; }
+    public Guid? CurrentOwnerTeamOptionId { get; set; }
+    public string? CurrentOwnerTeamName { get; set; }
+}
+
+public sealed class ReservationReviewQueueDto
+{
+    public ReservationReviewScope Scope { get; set; }
+    public Guid? SelectedTeamOptionId { get; set; }
+    public bool IncludeHistory { get; set; }
+    public bool IsTeamLeader { get; set; }
+    public bool IsAdmin { get; set; }
+    public List<ReservationTeamScopeOptionDto> TeamOptions { get; set; } = new();
+    public List<ReservationReviewEntryDto> Entries { get; set; } = new();
+}
+
+public sealed class ReservationReviewEntryDto
+{
+    public Guid ReservationId { get; set; }
+    public string ReservationNo { get; set; } = string.Empty;
+    public string ApplicantName { get; set; } = string.Empty;
+    public string ApplicantDepartment { get; set; } = string.Empty;
+    public string Purpose { get; set; } = string.Empty;
+    public DateTime StartTime { get; set; }
+    public DateTime EndTime { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public ReservationStatus Status { get; set; }
+    public ReservationMode Mode { get; set; }
+    public int TotalItemCount { get; set; }
+    public List<string> ApparatusNames { get; set; } = new();
+    public Guid? EquipmentGroupId { get; set; }
+    public string? EquipmentGroupName { get; set; }
+    public Guid? OwnerTeamOptionId { get; set; }
+    public string? OwnerTeamName { get; set; }
+    public bool CanApprove { get; set; }
+    public bool CanReject { get; set; }
 }
 
 public sealed class ReservationEnvironmentOptionDto
@@ -202,9 +262,48 @@ public sealed class ReservationEnvironmentOptionDto
     public List<ReservationProfileOptionDto> Profiles { get; set; } = new();
 }
 
+public sealed class ReservationEnvironmentGroupDto
+{
+    public Guid Id { get; set; }
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public Guid OwnerTeamOptionId { get; set; }
+    public string OwnerTeamName { get; set; } = string.Empty;
+    public string Site { get; set; } = string.Empty;
+    public EquipmentGroupStatus Status { get; set; }
+    public int TotalDeviceCount { get; set; }
+    public int InEnvironmentDeviceCount { get; set; }
+    public EquipmentGroupCompletenessStatus CompletenessStatus { get; set; }
+    public List<EquipmentGroupMissingDeviceDto> MissingDevices { get; set; } = new();
+    public List<ReservationEnvironmentGroupDeviceDto> Devices { get; set; } = new();
+    public bool CanReserve { get; set; }
+    public List<string> BlockingReasons { get; set; } = new();
+}
+
+public sealed class ReservationEnvironmentGroupTeamDto
+{
+    public Guid TeamOptionId { get; set; }
+    public string DisplayName { get; set; } = string.Empty;
+    public string Value { get; set; } = string.Empty;
+    public int EnvironmentGroupCount { get; set; }
+}
+
+public sealed class ReservationEnvironmentGroupDeviceDto
+{
+    public string ApparatusId { get; set; } = string.Empty;
+    public string? ProductsId { get; set; }
+    public string Name { get; set; } = string.Empty;
+    public string? Kind { get; set; }
+    public string? Brand { get; set; }
+    public string? Model { get; set; }
+    public string? ReservationStatus { get; set; }
+    public bool IsInEnvironment { get; set; }
+}
+
 public sealed class ReservationApplicationOptionsDto
 {
     public ReservationApplicantSnapshotDto Applicant { get; set; } = new();
+    public List<ReservationOptionDto> Departments { get; set; } = new();
     public List<ReservationOptionDto> Customers { get; set; } = new();
     public List<ReservationOptionDto> SubPus { get; set; } = new();
 }
@@ -293,6 +392,7 @@ public sealed class ReservationOverviewDto
     public string? EquipmentGroupName { get; set; }
     public string? TestExecutionProfileName { get; set; }
     public DateTime CreatedAt { get; set; }
+    public int RelatedDeviceCount { get; set; }
     public List<ReservationOverviewApparatusDto> Apparatus { get; set; } = new();
 }
 
@@ -334,6 +434,25 @@ public sealed class ReservationExtensionRequestDto
     public string ApplicantDepartment { get; set; } = string.Empty;
     public string? ApplicantExtension { get; set; }
     public List<string> ApparatusNames { get; set; } = new();
+    public ReservationMode Mode { get; set; }
+    public Guid? EquipmentGroupId { get; set; }
+    public string? EquipmentGroupName { get; set; }
+    public Guid? OwnerTeamOptionId { get; set; }
+    public string? OwnerTeamName { get; set; }
+    public bool CanApprove { get; set; }
+    public bool CanReject { get; set; }
+    public string? CustodianAccount { get; set; }
+    public string? CustodianName { get; set; }
+}
+
+public sealed class ReservationExtensionReviewQueueDto
+{
+    public ReservationExtensionReviewScope Scope { get; set; }
+    public Guid? SelectedTeamOptionId { get; set; }
+    public bool IsTeamLeader { get; set; }
+    public bool IsAdmin { get; set; }
+    public List<ReservationTeamScopeOptionDto> TeamOptions { get; set; } = new();
+    public List<ReservationExtensionRequestDto> Entries { get; set; } = new();
 }
 
 public sealed class ReservationAuditEventDto

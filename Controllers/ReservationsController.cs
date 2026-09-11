@@ -14,11 +14,16 @@ public class ReservationsController : ControllerBase
 {
     private readonly IReservationService _reservationService;
     private readonly IApparatusService _apparatusService;
+    private readonly IEnvironmentAvailabilityService _environmentAvailabilityService;
 
-    public ReservationsController(IReservationService reservationService, IApparatusService apparatusService)
+    public ReservationsController(
+        IReservationService reservationService,
+        IApparatusService apparatusService,
+        IEnvironmentAvailabilityService environmentAvailabilityService)
     {
         _reservationService = reservationService;
         _apparatusService = apparatusService;
+        _environmentAvailabilityService = environmentAvailabilityService;
     }
 
     [HttpPut("{id:guid}")]
@@ -55,6 +60,69 @@ public class ReservationsController : ControllerBase
     [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
     public async Task<IActionResult> GetEnvironmentOptions(CancellationToken cancellationToken) =>
         Ok(await _reservationService.GetEnvironmentOptionsAsync(cancellationToken));
+
+    [HttpGet("environment-group-teams")]
+    [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
+    public async Task<IActionResult> GetEnvironmentGroupTeams(CancellationToken cancellationToken) =>
+        Ok(await _reservationService.GetEnvironmentGroupTeamsAsync(cancellationToken));
+
+    [HttpGet("environment-groups")]
+    [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
+    public async Task<IActionResult> GetEnvironmentGroups(
+        [FromQuery] Guid? teamOptionId,
+        CancellationToken cancellationToken) =>
+        Ok(await _reservationService.GetEnvironmentGroupsAsync(teamOptionId, cancellationToken));
+
+    [HttpGet("environment-groups/{groupId:guid}")]
+    [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
+    public async Task<IActionResult> GetEnvironmentGroup(Guid groupId, CancellationToken cancellationToken)
+    {
+        var result = await _reservationService.GetEnvironmentGroupAsync(groupId, cancellationToken);
+        return result is null ? NotFound() : Ok(result);
+    }
+
+    [HttpGet("environment-groups/{groupId:guid}/calendar")]
+    [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
+    public async Task<IActionResult> GetEnvironmentGroupCalendar(
+        Guid groupId,
+        [FromQuery] DateTime start,
+        [FromQuery] DateTime end,
+        [FromQuery] bool includeHistory,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _reservationService.GetEnvironmentGroupCalendarAsync(
+                groupId, start, end, includeHistory, cancellationToken));
+        }
+        catch (Exception ex) when (IsExpected(ex))
+        {
+            return ToErrorResult(ex);
+        }
+    }
+
+    [HttpGet("environment-groups/{groupId:guid}/availability")]
+    [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
+    public async Task<IActionResult> GetEnvironmentGroupAvailability(
+        Guid groupId,
+        [FromQuery] DateTime start,
+        [FromQuery] DateTime end,
+        [FromQuery] Guid? excludeReservationId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            if (end > start && end - start > TimeSpan.FromDays(93))
+                throw new ArgumentException("Availability range cannot exceed 93 days.");
+
+            return Ok(await _environmentAvailabilityService.GetAvailabilityAsync(
+                groupId, start, end, excludeReservationId, cancellationToken));
+        }
+        catch (Exception ex) when (IsExpected(ex))
+        {
+            return ToErrorResult(ex);
+        }
+    }
 
     [HttpGet("application-options")]
     [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
@@ -97,8 +165,30 @@ public class ReservationsController : ControllerBase
 
     [HttpGet("review")]
     [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
-    public async Task<IActionResult> StaffList(CancellationToken cancellationToken) =>
-        Ok(await _reservationService.GetStaffListAsync(User, cancellationToken));
+    public async Task<IActionResult> ReviewQueue(
+        [FromQuery] ReservationReviewScope scope = ReservationReviewScope.Custodian,
+        [FromQuery] Guid? teamOptionId = null,
+        [FromQuery] bool includeHistory = false,
+        CancellationToken cancellationToken = default)
+    {
+        try { return Ok(await _reservationService.GetReviewQueueAsync(User, scope, teamOptionId, includeHistory, cancellationToken)); }
+        catch (Exception ex) when (IsExpected(ex)) { return ToErrorResult(ex); }
+    }
+
+    [HttpGet("review/{id:guid}")]
+    [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+    public async Task<IActionResult> ReviewDetail(
+        Guid id,
+        [FromQuery] ReservationReviewScope scope = ReservationReviewScope.Custodian,
+        CancellationToken cancellationToken = default)
+    {
+        try
+        {
+            var result = await _reservationService.GetReviewDetailAsync(id, User, scope, cancellationToken);
+            return result is null ? NotFound() : Ok(result);
+        }
+        catch (Exception ex) when (IsExpected(ex)) { return ToErrorResult(ex); }
+    }
 
     [HttpGet("overview")]
     [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
@@ -115,13 +205,25 @@ public class ReservationsController : ControllerBase
 
     [HttpGet("extensions/pending")]
     [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
-    public async Task<IActionResult> PendingExtensions(CancellationToken cancellationToken) =>
-        Ok(await _reservationService.GetPendingExtensionsAsync(User, cancellationToken));
+    public async Task<IActionResult> PendingExtensions(
+        [FromQuery] ReservationExtensionReviewScope scope = ReservationExtensionReviewScope.Custodian,
+        [FromQuery] Guid? teamOptionId = null,
+        CancellationToken cancellationToken = default)
+    {
+        try { return Ok(await _reservationService.GetPendingExtensionsAsync(User, scope, teamOptionId, cancellationToken)); }
+        catch (Exception ex) when (IsExpected(ex)) { return ToErrorResult(ex); }
+    }
 
     [HttpGet("overdue")]
     [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
-    public async Task<IActionResult> Overdue(CancellationToken cancellationToken) =>
-        Ok(await _reservationService.GetOverdueAsync(User, cancellationToken));
+    public async Task<IActionResult> Overdue(
+        [FromQuery] ReservationReviewScope scope = ReservationReviewScope.Custodian,
+        [FromQuery] Guid? teamOptionId = null,
+        CancellationToken cancellationToken = default)
+    {
+        try { return Ok(await _reservationService.GetOverdueAsync(User, scope, teamOptionId, cancellationToken)); }
+        catch (Exception ex) when (IsExpected(ex)) { return ToErrorResult(ex); }
+    }
 
     [HttpGet("{id:guid}")]
     [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]

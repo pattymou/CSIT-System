@@ -196,12 +196,12 @@ public class Reservation
 }
 
 public sealed record ReservationEnvironmentContext(
-    Guid TestExecutionProfileId,
-    Guid TestEnvironmentId,
     Guid EquipmentGroupId,
-    string TestEnvironmentCode,
-    string TestEnvironmentName,
     string EquipmentGroupCode,
     string EquipmentGroupName,
-    string TestExecutionProfileCode,
-    string TestExecutionProfileName);
+    Guid? TestExecutionProfileId = null,
+    Guid? TestEnvironmentId = null,
+    string? TestEnvironmentCode = null,
+    string? TestEnvironmentName = null,
+    string? TestExecutionProfileCode = null,
+    string? TestExecutionProfileName = null);

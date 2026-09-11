@@ -28,8 +28,17 @@ public sealed class ReservationApiClient(IJSRuntime js) : IAsyncDisposable
         return SendAsync<List<ReservationListDto>>("GET", "/api/reservations" + query, null);
     }
 
-    public Task<List<ReservationListDto>> StaffListAsync() =>
-        SendAsync<List<ReservationListDto>>("GET", "/api/reservations/review", null);
+    public Task<ReservationReviewQueueDto> ReviewQueueAsync(
+        ReservationReviewScope scope,
+        Guid? teamOptionId = null,
+        bool includeHistory = false) =>
+        SendAsync<ReservationReviewQueueDto>(
+            "GET",
+            $"/api/reservations/review?scope={scope}&teamOptionId={TeamOptionQuery(teamOptionId)}&includeHistory={includeHistory.ToString().ToLowerInvariant()}",
+            null);
+
+    public Task<ReservationDetailDto> ReviewDetailAsync(Guid id, ReservationReviewScope scope) =>
+        SendAsync<ReservationDetailDto>("GET", $"/api/reservations/review/{id}?scope={scope}", null);
 
     public async Task<List<ReservationOverviewDto>> OverviewAsync(ReservationOverviewQuery query)
     {
@@ -58,11 +67,21 @@ public sealed class ReservationApiClient(IJSRuntime js) : IAsyncDisposable
     public Task<ReservationPolicySettings> GetPolicySettingsAsync() =>
         SendAsync<ReservationPolicySettings>("GET", "/api/reservations/policy-settings", null);
 
-    public Task<List<ReservationExtensionRequestDto>> PendingExtensionsAsync() =>
-        SendAsync<List<ReservationExtensionRequestDto>>("GET", "/api/reservations/extensions/pending", null);
+    public Task<ReservationExtensionReviewQueueDto> PendingExtensionsAsync(
+        ReservationExtensionReviewScope scope,
+        Guid? teamOptionId = null) =>
+        SendAsync<ReservationExtensionReviewQueueDto>(
+            "GET",
+            $"/api/reservations/extensions/pending?scope={scope}&teamOptionId={TeamOptionQuery(teamOptionId)}",
+            null);
 
-    public Task<ReservationOverdueResponseDto> OverdueAsync() =>
-        SendAsync<ReservationOverdueResponseDto>("GET", "/api/reservations/overdue", null);
+    public Task<ReservationOverdueResponseDto> OverdueAsync(
+        ReservationReviewScope scope = ReservationReviewScope.Custodian,
+        Guid? teamOptionId = null) =>
+        SendAsync<ReservationOverdueResponseDto>(
+            "GET",
+            $"/api/reservations/overdue?scope={scope}&teamOptionId={TeamOptionQuery(teamOptionId)}",
+            null);
 
     public Task<ReservationExtensionRequestDto> RequestExtensionAsync(Guid id, DateTime requestedEndTime) =>
         SendAsync<ReservationExtensionRequestDto>("POST", $"/api/reservations/{id}/extensions", new ReservationExtensionCreateRequest { RequestedEndTime = requestedEndTime });
@@ -89,6 +108,47 @@ public sealed class ReservationApiClient(IJSRuntime js) : IAsyncDisposable
 
     public Task<List<ReservationEnvironmentOptionDto>> GetEnvironmentOptionsAsync() =>
         SendAsync<List<ReservationEnvironmentOptionDto>>("GET", "/api/reservations/environment-options", null);
+
+    public Task<List<ReservationEnvironmentGroupTeamDto>> GetEnvironmentGroupTeamsAsync() =>
+        SendAsync<List<ReservationEnvironmentGroupTeamDto>>("GET", "/api/reservations/environment-group-teams", null);
+
+    public Task<List<ReservationEnvironmentGroupDto>> GetEnvironmentGroupsAsync(Guid? teamOptionId = null) =>
+        SendAsync<List<ReservationEnvironmentGroupDto>>(
+            "GET",
+            teamOptionId.HasValue
+                ? $"/api/reservations/environment-groups?teamOptionId={teamOptionId.Value}"
+                : "/api/reservations/environment-groups",
+            null);
+
+    public Task<ReservationEnvironmentGroupDto> GetEnvironmentGroupAsync(Guid groupId) =>
+        SendAsync<ReservationEnvironmentGroupDto>("GET", $"/api/reservations/environment-groups/{groupId}", null);
+
+    public Task<List<ReservationOverviewDto>> GetEnvironmentGroupCalendarAsync(
+        Guid groupId,
+        DateTime start,
+        DateTime end,
+        bool includeHistory = false) =>
+        SendAsync<List<ReservationOverviewDto>>(
+            "GET",
+            $"/api/reservations/environment-groups/{groupId}/calendar"
+                + $"?start={Uri.EscapeDataString(start.ToUniversalTime().ToString("O"))}"
+                + $"&end={Uri.EscapeDataString(end.ToUniversalTime().ToString("O"))}"
+                + $"&includeHistory={includeHistory.ToString().ToLowerInvariant()}",
+            null);
+
+    public Task<EnvironmentAvailabilityDto> GetEnvironmentGroupAvailabilityAsync(
+        Guid groupId,
+        DateTime start,
+        DateTime end,
+        Guid? excludeReservationId = null)
+    {
+        var url = $"/api/reservations/environment-groups/{groupId}/availability"
+            + $"?start={Uri.EscapeDataString(start.ToUniversalTime().ToString("O"))}"
+            + $"&end={Uri.EscapeDataString(end.ToUniversalTime().ToString("O"))}";
+        if (excludeReservationId.HasValue)
+            url += $"&excludeReservationId={excludeReservationId.Value}";
+        return SendAsync<EnvironmentAvailabilityDto>("GET", url, null);
+    }
 
     public Task<ReservationApplicationOptionsDto> GetApplicationOptionsAsync() =>
         SendAsync<ReservationApplicationOptionsDto>("GET", "/api/reservations/application-options", null);
@@ -148,6 +208,9 @@ public sealed class ReservationApiClient(IJSRuntime js) : IAsyncDisposable
 
     private Task<ReservationDetailDto> TransitionAsync(Guid id, string action) =>
         SendAsync<ReservationDetailDto>("POST", $"/api/reservations/{id}/{action}", null);
+
+    private static string TeamOptionQuery(Guid? teamOptionId) =>
+        teamOptionId?.ToString("D", CultureInfo.InvariantCulture) ?? string.Empty;
 
     private async Task<T> SendAsync<T>(string method, string url, object? body)
     {

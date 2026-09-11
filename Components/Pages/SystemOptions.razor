@@ -1,6 +1,6 @@
 ﻿@page "/system/system-options"
 @rendermode @(new InteractiveServerRenderMode(prerender: false))
-@attribute [Authorize(Roles = "Admin")]
+@attribute [Authorize(Policy = SystemAuthorization.Policies.Administration)]
 @using Microsoft.AspNetCore.Authorization
 @using SIT.DepartmentSystem.Web.Components.Pages.System
 @inject BrowserApiClient Api
@@ -44,30 +44,29 @@
             </div>
         </div>
 
-        @if (!IsTeamRoutingCategory)
-        {
         <div class="option-stats">
             <div class="stat-card">
                 <span>目前筆數</span>
-                <strong>@_items.Count</strong>
+                <strong>@(IsTeamRoutingCategory ? _teamRoutingTotal : _items.Count)</strong>
             </div>
 
             <div class="stat-card">
                 <span>啟用中</span>
-                <strong>@_items.Count(x => x.IsEnabled)</strong>
+                <strong>@(IsTeamRoutingCategory ? _teamRoutingEnabled : _items.Count(x => x.IsEnabled))</strong>
             </div>
 
             <div class="stat-card">
                 <span>停用</span>
-                <strong>@_items.Count(x => !x.IsEnabled)</strong>
+                <strong>@(IsTeamRoutingCategory ? _teamRoutingDisabled : _items.Count(x => !x.IsEnabled))</strong>
             </div>
         </div>
-        }
     </div>
 
     @if (IsTeamRoutingCategory)
     {
-        <TeamRoutingSettings />
+        <TeamRoutingSettings TotalChanged="UpdateTeamRoutingTotal"
+                             EnabledChanged="UpdateTeamRoutingEnabled"
+                             DisabledChanged="UpdateTeamRoutingDisabled" />
     }
     else
     {
@@ -444,6 +443,9 @@
     private bool _isError;
     private Guid? _editingId;
     private bool _loadRequested = true;
+    private int _teamRoutingTotal;
+    private int _teamRoutingEnabled;
+    private int _teamRoutingDisabled;
 
     private List<SystemOptionDto> _items = new();
 
@@ -641,6 +643,12 @@
             Sort = 0
         };
     }
+
+    private void UpdateTeamRoutingTotal(int total) => _teamRoutingTotal = total;
+
+    private void UpdateTeamRoutingEnabled(int enabled) => _teamRoutingEnabled = enabled;
+
+    private void UpdateTeamRoutingDisabled(int disabled) => _teamRoutingDisabled = disabled;
 
     private static string GetCategoryDisplayName(string category)
     {

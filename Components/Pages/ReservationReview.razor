@@ -5,78 +5,195 @@
 @inject ReservationApiClient Api
 @inject NavigationManager Nav
 
-<PageTitle>設備預約管理</PageTitle>
-<h3 class="page-title">設備預約管理</h3>
+<PageTitle>設備預約審核</PageTitle>
 
-<div class="form-actions">
-    <button class="btn-secondary" @onclick='() => Nav.NavigateTo("/staff/reservations")'>返回設備預約管理</button>
-    <button class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-review/extensions")'>待審續借</button>
-    <button class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-overdue")'>逾期管理</button>
-</div>
-
-<div class="form-actions reservation-toolbar">
-    <div class="form-row">
-        <label>狀態</label>
-        <select @bind="_filter">
-            <option value="">全部</option>
-            @foreach (var status in Enum.GetValues<ReservationStatus>().Where(x => x != ReservationStatus.Draft))
-            {
-                <option value="@status">@ReservationUi.StatusText(status)</option>
-            }
-        </select>
+<header class="review-header">
+    <div><p>RESERVATION REVIEW</p><h1>設備預約審核</h1><span>依目前設備保管與 Team 責任顯示可審項目</span></div>
+    <div class="review-nav">
+        <button class="btn-secondary" @onclick='() => Nav.NavigateTo("/staff/reservations")'>設備預約管理</button>
+        <button class="btn-secondary" @onclick='() => Nav.NavigateTo("/reservation-review/extensions")'>待審續借</button>
     </div>
-</div>
+</header>
 
-@if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
-else if (_loading) { <div class="surface-card">載入中...</div> }
-else
+<section class="review-toolbar surface-card">
+    <div class="review-tabs" role="tablist" aria-label="審核責任範圍">
+        <button class="@TabCss(ReservationReviewScope.Custodian)" disabled="@_loading" @onclick="() => ChangeScopeAsync(ReservationReviewScope.Custodian)">我的保管設備</button>
+        @if (_queue?.IsAdmin == true)
+        {
+            <button class="@TabCss(ReservationReviewScope.All)" disabled="@_loading" @onclick="() => ChangeScopeAsync(ReservationReviewScope.All)">全部 Team</button>
+        }
+        else if (_queue?.IsTeamLeader == true)
+        {
+            <button class="@TabCss(ReservationReviewScope.Team)" disabled="@_loading" @onclick="() => ChangeScopeAsync(ReservationReviewScope.Team)">我的 Team</button>
+        }
+    </div>
+    <div class="review-filters">
+        @if (_scope is ReservationReviewScope.Team or ReservationReviewScope.All)
+        {
+            <ReservationTeamScopeFilter TeamOptions="@(_queue?.TeamOptions ?? [])"
+                                        SelectedTeamOptionId="@_teamOptionId"
+                                        AlwaysShow="@(_scope == ReservationReviewScope.All)"
+                                        Disabled="@_loading"
+                                        SelectionChanged="ChangeTeamAsync" />
+        }
+        <label class="history-toggle"><input type="checkbox" checked="@_includeHistory" disabled="@_loading" @onchange="ToggleHistoryAsync" /><span>顯示歷史</span></label>
+    </div>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(_message))
 {
-    <div class="surface-card">
-        <div class="project-table-wrap">
-            <table class="project-table">
-                <thead><tr><th>預約編號</th><th>申請人 / 部門</th><th>預約時間</th><th>用途</th><th>設備</th><th>狀態</th><th>建立時間</th></tr></thead>
+    <div class="surface-card error-text">@_message</div>
+}
+else if (_loading)
+{
+    <div class="surface-card">載入中...</div>
+}
+else if (_queue is not null)
+{
+    <div class="review-summary"><strong>@_queue.Entries.Count</strong><span>@(_includeHistory ? "筆責任範圍紀錄" : "筆待審預約")</span></div>
+    @if (_queue.Entries.Count == 0)
+    {
+        <div class="surface-card review-empty">目前沒有符合此責任範圍的@(_includeHistory ? "審核紀錄" : "待審項目")。</div>
+    }
+    else
+    {
+        <div class="surface-card review-list">
+            <table class="review-table" aria-label="設備預約審核清單">
+                <thead>
+                    <tr>
+                        <th>預約類型</th>
+                        <th>預約單號</th>
+                        <th>申請人</th>
+                        <th>預約時間</th>
+                        <th>待審設備</th>
+                        <th>狀態</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
                 <tbody>
-                    @if (!FilteredItems.Any())
+                    @foreach (var item in _queue.Entries)
                     {
-                        <tr><td colspan="7" class="empty-row">目前沒有符合條件的設備預約。</td></tr>
-                    }
-                    else
-                    {
-                        @foreach (var item in FilteredItems)
-                        {
-                            <tr class="clickable-row" @onclick="() => Open(item.Id)">
-                                <td><strong>@item.ReservationNo</strong></td>
-                                <td>@item.ApplicantName<br /><span class="hint-text">@item.ApplicantDepartment</span></td>
-                                <td><LocalDateTime Value="item.StartTime" /> ～ <LocalDateTime Value="item.EndTime" /></td>
-                                <td>@item.Purpose</td>
-                                <td>@ReservationUi.EquipmentSummary(item.ApparatusNames, item.ItemCount)</td>
-                                <td><span class="record-status-pill">@ReservationUi.StatusText(item.Status)</span></td>
-                                <td><LocalDateTime Value="item.CreatedAt" /></td>
-                            </tr>
-                        }
+                        <tr tabindex="0" @onclick="() => Open(item.ReservationId)" @onkeydown="e => OpenByKeyboard(e, item.ReservationId)">
+                            <td data-label="預約類型"><span class="mode-pill @ModeCss(item.Mode)">@ModeText(item.Mode)</span></td>
+                            <td data-label="預約單號"><strong class="reservation-no">@item.ReservationNo</strong></td>
+                            <td data-label="申請人">
+                                <strong class="cell-primary">@item.ApplicantName</strong>
+                                <span class="cell-secondary">@item.ApplicantDepartment</span>
+                            </td>
+                            <td data-label="預約時間" class="reservation-time">
+                                <span><LocalDateTime Value="item.StartTime" /></span>
+                                <span class="time-separator">～</span>
+                                <span><LocalDateTime Value="item.EndTime" /></span>
+                            </td>
+                            <td data-label="待審設備" class="devices-cell">
+                                @if (item.Mode == ReservationMode.Direct)
+                                {
+                                    <strong class="cell-primary">@DirectDeviceSummary(item)</strong>
+                                    <span class="cell-secondary">單一設備整張審核</span>
+                                }
+                                else
+                                {
+                                    <strong class="cell-primary">@ReservationUi.Display(item.EquipmentGroupName)</strong>
+                                    <span class="cell-secondary">Environment 整張審核</span>
+                                }
+                            </td>
+                            <td data-label="狀態"><span class="record-status-pill">@ReservationUi.StatusText(item.Status)</span></td>
+                            <td data-label="操作" class="action-cell">
+                                <button type="button" class="review-action" @onclick="() => Open(item.ReservationId)" @onclick:stopPropagation="true">查看審核</button>
+                            </td>
+                        </tr>
                     }
                 </tbody>
             </table>
         </div>
-    </div>
+    }
 }
 
-<style>.reservation-toolbar { justify-content:flex-start; } .reservation-toolbar .form-row { min-width:190px; margin:0; }</style>
+<style>
+    .review-header { display:flex; justify-content:space-between; align-items:flex-end; gap:24px; margin-bottom:18px; }
+    .review-header p { margin:0 0 6px; color:#67e8f9; font-size:.72rem; font-weight:800; letter-spacing:.14em; }
+    .review-header h1 { margin:0; font-size:1.75rem; }
+    .review-header span { display:block; margin-top:7px; color:#94a3b8; font-size:.88rem; }
+    .review-nav,.review-tabs { display:flex; flex-wrap:wrap; gap:9px; }
+    .review-toolbar { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:18px; padding:12px; }
+    .review-tabs button { padding:9px 15px; border:1px solid rgba(148,163,184,.24); border-radius:10px; color:#cbd5e1; background:rgba(15,23,42,.45); font-weight:750; }
+    .review-tabs button.active { color:#ccfbf1; border-color:rgba(45,212,191,.52); background:rgba(13,148,136,.22); }
+    .history-toggle { display:flex; align-items:center; gap:8px; color:#cbd5e1; white-space:nowrap; }
+    .review-filters { display:flex; align-items:center; justify-content:flex-end; flex-wrap:wrap; gap:14px; }
+    .review-summary { display:flex; align-items:baseline; gap:7px; margin:0 0 12px 2px; color:#94a3b8; }
+    .review-summary strong { color:#f1f5f9; font-size:1.2rem; }
+    .review-list { overflow-x:auto; padding:0; }
+    .review-table { width:100%; border-collapse:collapse; color:#dbe5f2; font-size:.84rem; }
+    .review-table th { padding:11px 12px; border-bottom:1px solid rgba(148,163,184,.18); color:#94a3b8; font-size:.74rem; font-weight:750; letter-spacing:.03em; text-align:left; white-space:nowrap; }
+    .review-table td { padding:12px; border-bottom:1px solid rgba(148,163,184,.11); vertical-align:middle; }
+    .review-table tbody tr { cursor:pointer; transition:background-color .15s; }
+    .review-table tbody tr:last-child td { border-bottom:0; }
+    .review-table tbody tr:hover,.review-table tbody tr:focus-visible { background:rgba(30,41,59,.42); outline:none; }
+    .mode-pill { display:inline-flex; padding:4px 8px; border-radius:999px; font-size:.72rem; font-weight:800; white-space:nowrap; }
+    .mode-direct { color:#bae6fd; background:rgba(14,165,233,.14); }
+    .mode-environment { color:#d8b4fe; background:rgba(168,85,247,.14); }
+    .reservation-no { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:.8rem; overflow-wrap:anywhere; }
+    .cell-primary,.cell-secondary { display:block; }
+    .cell-primary { color:#e8edf7; font-weight:650; overflow-wrap:anywhere; }
+    .cell-secondary { margin-top:4px; color:#94a3b8; font-size:.76rem; }
+    .reservation-time { min-width:190px; color:#cbd5e1; }
+    .reservation-time span { display:block; white-space:nowrap; }
+    .reservation-time .time-separator { color:#64748b; line-height:.9; }
+    .devices-cell { min-width:230px; max-width:360px; }
+    .action-cell { text-align:right; white-space:nowrap; }
+    .review-action { padding:7px 10px; border:1px solid rgba(45,212,191,.35); border-radius:8px; color:#5eead4; background:rgba(13,148,136,.12); font-weight:750; }
+    .review-action:hover,.review-action:focus-visible { border-color:rgba(45,212,191,.62); background:rgba(13,148,136,.22); outline:none; }
+    .review-empty { padding:34px; color:#94a3b8; text-align:center; }
+    @@media(max-width:900px) {
+        .review-header { align-items:stretch; flex-direction:column; }
+        .review-nav { justify-content:flex-start; }
+    }
+    @@media(max-width:720px) {
+        .review-toolbar { align-items:stretch; flex-direction:column; }
+        .review-tabs button { flex:1 1 auto; }
+        .review-filters { align-items:stretch; flex-direction:column; }
+        .review-list { overflow:visible; }
+        .review-table,.review-table tbody { display:block; }
+        .review-table thead { display:none; }
+        .review-table tbody tr { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:9px 16px; padding:11px 12px; border-bottom:1px solid rgba(148,163,184,.16); }
+        .review-table tbody tr:last-child { border-bottom:0; }
+        .review-table td { display:grid; grid-template-columns:5.5rem minmax(0,1fr); align-items:start; gap:8px; padding:0; border:0; min-width:0; max-width:none; text-align:left; }
+        .review-table td::before { content:attr(data-label); color:#64748b; font-size:.72rem; font-weight:700; }
+        .review-table .reservation-time,.review-table .devices-cell { grid-column:1/-1; }
+        .reservation-time span { white-space:normal; }
+        .reservation-time .time-separator { display:none; }
+        .action-cell { align-items:center !important; }
+        .review-action { justify-self:start; }
+    }
+    @@media(max-width:480px) {
+        .review-table tbody tr { grid-template-columns:1fr; }
+        .review-table .reservation-time,.review-table .devices-cell { grid-column:auto; }
+    }
+</style>
 
 @code {
-    private List<ReservationListDto> _items = [];
-    private ReservationStatus? _filter = ReservationStatus.Pending;
+    private ReservationReviewQueueDto? _queue;
+    private ReservationReviewScope _scope = ReservationReviewScope.Custodian;
+    private Guid? _teamOptionId;
+    private bool _includeHistory;
     private bool _loading = true;
     private string? _message;
-    private IEnumerable<ReservationListDto> FilteredItems => (_filter.HasValue ? _items.Where(x => x.Status == _filter) : _items)
-        .OrderBy(x => x.Status == ReservationStatus.Pending ? 0 : 1)
-        .ThenBy(x => x.StartTime);
-
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync() => LoadAsync();
+    private async Task LoadAsync() { _loading = true; _message = null; try { _queue = await Api.ReviewQueueAsync(_scope, _teamOptionId, _includeHistory); _teamOptionId = _queue.SelectedTeamOptionId; } catch (Exception ex) { _message = ex.Message; } finally { _loading = false; } }
+    private async Task ChangeScopeAsync(ReservationReviewScope scope) { if (_scope == scope) return; _scope = scope; _teamOptionId = null; await LoadAsync(); }
+    private async Task ChangeTeamAsync(Guid? teamOptionId) { if (_teamOptionId == teamOptionId) return; _teamOptionId = teamOptionId; await LoadAsync(); }
+    private async Task ToggleHistoryAsync(ChangeEventArgs args) { _includeHistory = args.Value is bool value && value; await LoadAsync(); }
+    private string TabCss(ReservationReviewScope scope) => _scope == scope ? "active" : string.Empty;
+    private void Open(Guid id) => Nav.NavigateTo($"/reservation-review/{id}?scope={_scope}");
+    private void OpenByKeyboard(KeyboardEventArgs args, Guid id) { if (args.Key is "Enter" or " ") Open(id); }
+    private static string ModeText(ReservationMode mode) => mode == ReservationMode.Direct ? "單一設備" : "測試環境";
+    private static string ModeCss(ReservationMode mode) => mode == ReservationMode.Direct ? "mode-direct" : "mode-environment";
+    private static string DirectDeviceSummary(ReservationReviewEntryDto item)
     {
-        try { _items = await Api.StaffListAsync(); }
-        catch (Exception ex) { _message = ex.Message; }
-        finally { _loading = false; }
+        var names = item.ApparatusNames.Take(3).ToList();
+        if (names.Count == 0) return "—";
+        var summary = string.Join("、", names);
+        var remaining = item.ApparatusNames.Count - names.Count;
+        return remaining > 0 ? $"{summary}，另 {remaining} 台" : summary;
     }
-    private void Open(Guid id) => Nav.NavigateTo($"/reservation-review/{id}");
 }

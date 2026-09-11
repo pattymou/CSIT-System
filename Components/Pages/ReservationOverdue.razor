@@ -16,6 +16,28 @@
         <button type="button" class="btn-secondary" @onclick='() => Nav.NavigateTo("/staff/reservations")'>返回設備預約管理</button>
     </header>
 
+    <section class="overdue-toolbar surface-card">
+        <div class="overdue-tabs" role="tablist" aria-label="逾期設備責任範圍">
+            <button class="@TabCss(ReservationReviewScope.Custodian)" disabled="@_loading" @onclick="() => ChangeScopeAsync(ReservationReviewScope.Custodian)">我的保管設備</button>
+            @if (_result.IsAdmin)
+            {
+                <button class="@TabCss(ReservationReviewScope.All)" disabled="@_loading" @onclick="() => ChangeScopeAsync(ReservationReviewScope.All)">全部 Team</button>
+            }
+            else if (_result.IsTeamLeader)
+            {
+                <button class="@TabCss(ReservationReviewScope.Team)" disabled="@_loading" @onclick="() => ChangeScopeAsync(ReservationReviewScope.Team)">我的 Team</button>
+            }
+        </div>
+        @if (_scope is ReservationReviewScope.Team or ReservationReviewScope.All)
+        {
+            <ReservationTeamScopeFilter TeamOptions="@_result.TeamOptions"
+                                        SelectedTeamOptionId="@_teamOptionId"
+                                        AlwaysShow="@(_scope == ReservationReviewScope.All)"
+                                        Disabled="@_loading"
+                                        SelectionChanged="ChangeTeamAsync" />
+        }
+    </section>
+
     @if (!string.IsNullOrWhiteSpace(_message))
     {
         <div class="surface-card error-text">@_message</div>
@@ -40,7 +62,7 @@
                             <th>類型</th>
                             <th>預約編號</th>
                             <th>借用人 / 部門 / 分機</th>
-                            <th>與我相關設備</th>
+                            <th>範圍內設備</th>
                             <th>預約期間</th>
                             <th>應歸還</th>
                             <th>逾期時間</th>
@@ -67,7 +89,7 @@
                                                 <div><strong>@apparatus.Name</strong><span>@EquipmentMeta(apparatus)</span></div>
                                             }
                                         </div>
-                                        <div class="hint-text">可管理 @item.VisibleApparatusCount / 全部 @item.TotalReservationItemCount 台</div>
+                                        <div class="hint-text">此範圍 @item.VisibleApparatusCount / 全部 @item.TotalReservationItemCount 台</div>
                                     </td>
                                     <td><LocalDateTime Value="item.StartTime" /> ～<br /><LocalDateTime Value="item.EndTime" /></td>
                                     <td><LocalDateTime Value="item.EndTime" /></td>
@@ -89,6 +111,10 @@
     .overdue-header p { margin:0 0 5px; color:#67e8f9; font-size:.72rem; font-weight:800; letter-spacing:.14em; }
     .overdue-header h3 { margin:0 0 6px; }
     .overdue-header span { color:#94a3b8; }
+    .overdue-toolbar { display:flex; justify-content:space-between; align-items:center; gap:16px; margin-bottom:18px; padding:12px; }
+    .overdue-tabs { display:flex; flex-wrap:wrap; gap:9px; }
+    .overdue-tabs button { padding:9px 15px; border:1px solid rgba(148,163,184,.24); border-radius:10px; color:#cbd5e1; background:rgba(15,23,42,.45); font-weight:750; }
+    .overdue-tabs button.active { color:#ccfbf1; border-color:rgba(45,212,191,.52); background:rgba(13,148,136,.22); }
     .overdue-summary { display:grid; grid-template-columns:minmax(220px,360px); gap:12px; margin-bottom:16px; }
     .summary-tab { display:flex; justify-content:space-between; align-items:center; min-height:62px; padding:14px 17px; border:1px solid rgba(148,163,184,.2); border-radius:12px; color:#cbd5e1; background:rgba(15,23,42,.55); text-align:left; }
     .summary-tab strong { font-size:1.35rem; color:#f8fafc; }
@@ -103,19 +129,43 @@
     .overdue-duration { color:#fdba74; white-space:nowrap; }
     .compact-action { padding:7px 11px; white-space:nowrap; }
     @@media(max-width:900px) { .overdue-header { flex-direction:column; }.overdue-summary { grid-template-columns:1fr; } }
+    @@media(max-width:720px) { .overdue-toolbar { align-items:stretch; flex-direction:column; }.overdue-tabs button { flex:1 1 auto; } }
 </style>
 
 @code {
     private ReservationOverdueResponseDto _result = new();
+    private ReservationReviewScope _scope = ReservationReviewScope.Custodian;
+    private Guid? _teamOptionId;
     private bool _loading = true;
     private string? _message;
 
-    protected override async Task OnInitializedAsync()
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
     {
-        try { _result = await Api.OverdueAsync(); }
+        _loading = true;
+        _message = null;
+        try { _result = await Api.OverdueAsync(_scope, _teamOptionId); _teamOptionId = _result.SelectedTeamOptionId; }
         catch (Exception ex) { _message = ex.Message; }
         finally { _loading = false; }
     }
+
+    private async Task ChangeScopeAsync(ReservationReviewScope scope)
+    {
+        if (_scope == scope) return;
+        _scope = scope;
+        _teamOptionId = null;
+        await LoadAsync();
+    }
+
+    private async Task ChangeTeamAsync(Guid? teamOptionId)
+    {
+        if (_teamOptionId == teamOptionId) return;
+        _teamOptionId = teamOptionId;
+        await LoadAsync();
+    }
+
+    private string TabCss(ReservationReviewScope scope) => _scope == scope ? "active" : string.Empty;
 
     private static string ExtensionText(string? value) => string.IsNullOrWhiteSpace(value) ? "無分機" : $"#{value}";
     private static string EquipmentMeta(ReservationOverdueApparatusDto item) => string.Join(" · ", new[] { item.ProductsId, item.Kind, item.OwnerTeamName }.Where(x => !string.IsNullOrWhiteSpace(x)));

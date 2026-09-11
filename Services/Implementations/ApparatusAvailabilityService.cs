@@ -7,13 +7,6 @@ namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
 public sealed class ApparatusAvailabilityService : IApparatusAvailabilityService
 {
-    private static readonly ReservationStatus[] OccupyingStatuses =
-    [
-        ReservationStatus.Pending,
-        ReservationStatus.Approved,
-        ReservationStatus.Borrowed
-    ];
-
     private readonly AppDbContext _db;
 
     public ApparatusAvailabilityService(AppDbContext db)
@@ -36,7 +29,7 @@ public sealed class ApparatusAvailabilityService : IApparatusAvailabilityService
             .Where(x => x.ReservationStatus == ApparatusReservationRules.BookableStatus)
             .Where(x => !_db.ReservationItems.Any(item =>
                 item.ApparatusId == x.Id
-                && OccupyingStatuses.Contains(item.Reservation.Status)
+                && ReservationOccupancyRules.BlockingStatuses.Contains(item.Reservation.Status)
                 && item.Reservation.StartTime < endTime
                 && item.Reservation.EndTime > startTime
                 && (!excludedReservationId.HasValue || item.ReservationId != excludedReservationId.Value)))
@@ -72,7 +65,7 @@ public sealed class ApparatusAvailabilityService : IApparatusAvailabilityService
         var ids = apparatusIds.Distinct(StringComparer.Ordinal).ToArray();
         var conflicts = await _db.ReservationItems.AsNoTracking()
             .Where(x => ids.Contains(x.ApparatusId))
-            .Where(x => OccupyingStatuses.Contains(x.Reservation.Status))
+            .Where(x => ReservationOccupancyRules.BlockingStatuses.Contains(x.Reservation.Status))
             .Where(x => x.Reservation.StartTime < endTime && x.Reservation.EndTime > startTime)
             .Where(x => !excludedReservationId.HasValue || x.ReservationId != excludedReservationId.Value)
             .Select(x => new { x.ApparatusId, x.Reservation.ReservationNo })

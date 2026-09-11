@@ -1,4 +1,5 @@
 using System.Data;
+using System.Linq.Expressions;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Data;
@@ -11,6 +12,7 @@ namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
 public sealed class ReservationService : IReservationService
 {
+    private const string DirectSingleApparatusError = "Direct 預約一次只能包含 1 台設備。";
     private readonly AppDbContext _db;
     private readonly IApparatusAvailabilityService _availability;
     private readonly IApparatusResourceCapabilityService _resourceCapabilities;
@@ -78,6 +80,123 @@ public sealed class ReservationService : IReservationService
                     }).ToList()
              }).ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<ReservationEnvironmentGroupTeamDto>> GetEnvironmentGroupTeamsAsync(
+        CancellationToken cancellationToken = default) =>
+        await _db.SystemOptions.AsNoTracking()
+            .Where(x => x.Category == SystemOptionCategories.Team
+                && x.IsEnabled
+                && _db.EquipmentGroups.Any(group =>
+                    group.OwnerTeamOptionId == x.Id
+                    && group.Status == EquipmentGroupStatus.Active))
+            .OrderBy(x => x.Sort).ThenBy(x => x.Name).ThenBy(x => x.Value)
+            .Select(x => new ReservationEnvironmentGroupTeamDto
+            {
+                TeamOptionId = x.Id,
+                DisplayName = x.Name,
+                Value = x.Value,
+                EnvironmentGroupCount = _db.EquipmentGroups.Count(group =>
+                    group.OwnerTeamOptionId == x.Id
+                    && group.Status == EquipmentGroupStatus.Active)
+            })
+            .ToListAsync(cancellationToken);
+
+    public async Task<IReadOnlyList<ReservationEnvironmentGroupDto>> GetEnvironmentGroupsAsync(
+        Guid? teamOptionId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var query = _db.EquipmentGroups.AsNoTracking()
+            .Include(x => x.OwnerTeamOption)
+            .Include(x => x.Devices).ThenInclude(x => x.Apparatus)
+            .Where(x => x.Status == EquipmentGroupStatus.Active);
+        if (teamOptionId.HasValue)
+            query = query.Where(x => x.OwnerTeamOptionId == teamOptionId.Value);
+
+        var groups = await query
+            .OrderBy(x => x.Name).ThenBy(x => x.Code)
+            .ToListAsync(cancellationToken);
+        return groups.Select(MapEnvironmentGroup).ToList();
+    }
+
+    public async Task<ReservationEnvironmentGroupDto?> GetEnvironmentGroupAsync(
+        Guid groupId,
+        CancellationToken cancellationToken = default)
+    {
+        var group = await _db.EquipmentGroups.AsNoTracking()
+            .Include(x => x.OwnerTeamOption)
+            .Include(x => x.Devices).ThenInclude(x => x.Apparatus)
+            .SingleOrDefaultAsync(
+                x => x.Id == groupId && x.Status == EquipmentGroupStatus.Active,
+                cancellationToken);
+        return group is null ? null : MapEnvironmentGroup(group);
+    }
+
+    public async Task<IReadOnlyList<ReservationOverviewDto>> GetEnvironmentGroupCalendarAsync(
+        Guid groupId,
+        DateTime start,
+        DateTime end,
+        bool includeHistory = false,
+        CancellationToken cancellationToken = default)
+    {
+        ValidateTimeRange(start, end);
+        if (end - start > TimeSpan.FromDays(93))
+            throw new InvalidOperationException("Calendar range cannot exceed 93 days.");
+        if (!await _db.EquipmentGroups.AsNoTracking().AnyAsync(
+                x => x.Id == groupId && x.Status == EquipmentGroupStatus.Active,
+                cancellationToken))
+            throw new KeyNotFoundException($"Equipment group {groupId} was not found.");
+
+        var memberships = _db.EquipmentGroupDevices.AsNoTracking()
+            .Where(x => x.EquipmentGroupId == groupId);
+        var statuses = includeHistory
+            ? Enum.GetValues<ReservationStatus>()
+            : ReservationOccupancyRules.BlockingStatuses;
+        var now = DateTime.UtcNow;
+
+        // Query from Reservation rather than joining into the result set. A reservation
+        // that contains several members of the group therefore remains one calendar event.
+        return await _db.Reservations.AsNoTracking()
+            .Where(x => x.StartTime < end && start < x.EndTime && statuses.Contains(x.Status))
+            .Where(x => x.Items.Any(item => memberships.Any(member => member.ApparatusId == item.ApparatusId)))
+            .OrderBy(x => x.StartTime).ThenBy(x => x.ReservationNo)
+            .Select(x => new ReservationOverviewDto
+            {
+                ReservationId = x.Id,
+                ReservationNo = x.ReservationNo,
+                StartTime = x.StartTime,
+                EndTime = x.EndTime,
+                Status = x.Status,
+                ApplicantAccount = x.ApplicantAccount,
+                ApplicantDepartment = x.ApplicantDepartment,
+                ApplicantName = x.ApplicantName,
+                ApplicantExtension = x.ApplicantExtension,
+                Purpose = x.Purpose,
+                IsOverdue = (x.Status == ReservationStatus.Approved || x.Status == ReservationStatus.Borrowed)
+                    && x.EndTime < now,
+                Mode = x.EquipmentGroupId.HasValue || x.TestExecutionProfileId.HasValue
+                    ? ReservationMode.Environment
+                    : ReservationMode.Direct,
+                TestEnvironmentName = x.TestEnvironmentNameSnapshot,
+                EquipmentGroupName = x.EquipmentGroupNameSnapshot,
+                TestExecutionProfileName = x.TestExecutionProfileNameSnapshot,
+                CreatedAt = x.CreatedAt,
+                RelatedDeviceCount = x.Items.Count(item =>
+                    memberships.Any(member => member.ApparatusId == item.ApparatusId)),
+                Apparatus = x.Items
+                    .Where(item => memberships.Any(member => member.ApparatusId == item.ApparatusId))
+                    .OrderBy(item => item.ApparatusId)
+                    .Select(item => new ReservationOverviewApparatusDto
+                    {
+                        Id = item.ApparatusId,
+                        Name = item.ApparatusName,
+                        ProductsId = item.ProductsId,
+                        Kind = item.Kind,
+                        Brand = item.Brand,
+                        Model = item.Model
+                    }).ToList()
+            })
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<ReservationApplicationOptionsDto> GetApplicationOptionsAsync(
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
@@ -86,7 +205,9 @@ public sealed class ReservationService : IReservationService
         var applicant = await ResolveApplicantAsync(user, cancellationToken);
         var options = await _db.SystemOptions.AsNoTracking()
             .Where(x => x.IsEnabled
-                && (x.Category == SystemOptionCategories.Customer || x.Category == SystemOptionCategories.SubPu))
+                && (x.Category == SystemOptionCategories.Department
+                    || x.Category == SystemOptionCategories.Customer
+                    || x.Category == SystemOptionCategories.SubPu))
             .OrderBy(x => x.Sort).ThenBy(x => x.Name).ThenBy(x => x.Value)
             .Select(x => new { x.Category, x.Name, x.Value })
             .ToListAsync(cancellationToken);
@@ -99,6 +220,8 @@ public sealed class ReservationService : IReservationService
                 Department = Require(applicant.Department, nameof(AppUser.Department)),
                 Email = Clean(applicant.Email)
             },
+            Departments = options.Where(x => x.Category == SystemOptionCategories.Department)
+                .Select(x => ToReservationOption(x.Value, x.Name)).ToList(),
             Customers = options.Where(x => x.Category == SystemOptionCategories.Customer)
                 .Select(x => ToReservationOption(x.Value, x.Name)).ToList(),
             SubPus = options.Where(x => x.Category == SystemOptionCategories.SubPu)
@@ -124,8 +247,12 @@ public sealed class ReservationService : IReservationService
         try
         {
             var prepared = await PrepareRequestAsync(
-                request.Mode, request.Items, request.TestExecutionProfileId, request.Selections, cancellationToken);
-            await _availability.EnsureNoOverlapAsync(prepared.ApparatusIds, request.StartTime, request.EndTime, null, cancellationToken);
+                request.Mode, request.Items, request.EnvironmentGroupId,
+                request.TestExecutionProfileId, request.Selections, cancellationToken);
+            if (request.Mode == ReservationMode.Environment)
+                await EnsureEnvironmentNoOverlapAsync(prepared.ApparatusIds, request.StartTime, request.EndTime, null, cancellationToken);
+            else
+                await _availability.EnsureNoOverlapAsync(prepared.ApparatusIds, request.StartTime, request.EndTime, null, cancellationToken);
             await _policy.EnsureDepartmentQuotaAsync(
                 applicant.Department, request.StartTime, request.EndTime, prepared.Items.Count,
                 acquireTransactionLock: true, cancellationToken: cancellationToken);
@@ -216,13 +343,17 @@ public sealed class ReservationService : IReservationService
             EnsureOwner(entity, account);
             if (entity.Status != ReservationStatus.Draft)
                 throw new InvalidOperationException("Only a Draft reservation can be updated.");
-            var existingMode = entity.TestExecutionProfileId.HasValue ? ReservationMode.Environment : ReservationMode.Direct;
+            var existingMode = IsEnvironmentReservation(entity) ? ReservationMode.Environment : ReservationMode.Direct;
             if (request.Mode != existingMode)
                 throw new InvalidOperationException("A Draft reservation cannot change between Direct and Environment mode.");
 
             var prepared = await PrepareRequestAsync(
-                request.Mode, request.Items, request.TestExecutionProfileId, request.Selections, cancellationToken);
-            await _availability.EnsureNoOverlapAsync(prepared.ApparatusIds, request.StartTime, request.EndTime, entity.Id, cancellationToken);
+                request.Mode, request.Items, request.EnvironmentGroupId,
+                request.TestExecutionProfileId, request.Selections, cancellationToken);
+            if (request.Mode == ReservationMode.Environment)
+                await EnsureEnvironmentNoOverlapAsync(prepared.ApparatusIds, request.StartTime, request.EndTime, entity.Id, cancellationToken);
+            else
+                await _availability.EnsureNoOverlapAsync(prepared.ApparatusIds, request.StartTime, request.EndTime, entity.Id, cancellationToken);
             await _policy.EnsureDepartmentQuotaAsync(
                 entity.ApplicantDepartment, request.StartTime, request.EndTime, prepared.Items.Count, entity.Id,
                 acquireTransactionLock: true, cancellationToken: cancellationToken);
@@ -284,13 +415,83 @@ public sealed class ReservationService : IReservationService
         return await MapList(query).ToListAsync(cancellationToken);
     }
 
-    public async Task<IReadOnlyList<ReservationListDto>> GetStaffListAsync(
+    public async Task<ReservationReviewQueueDto> GetReviewQueueAsync(
         ClaimsPrincipal user,
+        ReservationReviewScope scope,
+        Guid? teamOptionId = null,
+        bool includeHistory = false,
         CancellationToken cancellationToken = default)
     {
-        EnsureScope(user, SystemAuthorization.AccessScopes.CsitStaff);
-        return await MapList(_db.Reservations.AsNoTracking())
+        var access = await ResolveReviewAccessAsync(user, cancellationToken);
+        EnsureReviewScopeAllowed(access, scope);
+        var teamScope = await ResolveTeamScopeAsync(
+            access,
+            scope == ReservationReviewScope.Team,
+            scope == ReservationReviewScope.All,
+            teamOptionId,
+            cancellationToken);
+
+        var query = _db.Reservations.AsNoTracking()
+            .Include(x => x.Items).ThenInclude(x => x.Apparatus).ThenInclude(x => x.OwnerTeamOption)
+            .Include(x => x.EquipmentGroup).ThenInclude(x => x!.OwnerTeamOption)
+            .AsSplitQuery()
+            .Where(x => x.Status != ReservationStatus.Draft);
+
+        if (!includeHistory)
+            query = query.Where(x => x.Status == ReservationStatus.Pending);
+
+        query = scope switch
+        {
+            ReservationReviewScope.Custodian => query.Where(x =>
+                !x.EquipmentGroupId.HasValue && !x.TestExecutionProfileId.HasValue
+                && x.Items.Any(i => i.Apparatus.CustodianAccount != null
+                    && i.Apparatus.CustodianAccount.ToLower() == access.Account)),
+            ReservationReviewScope.Team or ReservationReviewScope.All =>
+                query.Where(BuildReservationTeamFilter(teamScope.TeamOptionIds)),
+            _ => throw new ArgumentException("Review scope is invalid.", nameof(scope))
+        };
+
+        var entities = await query.OrderBy(x => x.StartTime).ThenBy(x => x.ReservationNo)
             .ToListAsync(cancellationToken);
+        var custodianProfiles = await ApparatusCustodianResolver.LoadDisplayNamesAsync(
+            _db,
+            entities.SelectMany(x => x.Items).Select(x => x.Apparatus.CustodianAccount),
+            cancellationToken);
+        return new ReservationReviewQueueDto
+        {
+            Scope = scope,
+            SelectedTeamOptionId = teamScope.SelectedTeamOptionId,
+            IncludeHistory = includeHistory,
+            IsTeamLeader = access.LeaderTeamIds.Count != 0,
+            IsAdmin = access.IsAdmin,
+            TeamOptions = teamScope.Options,
+            Entries = entities.Select(x => MapReviewEntry(x, access, scope, custodianProfiles)).ToList()
+        };
+    }
+
+    public async Task<ReservationDetailDto?> GetReviewDetailAsync(
+        Guid id,
+        ClaimsPrincipal user,
+        ReservationReviewScope scope,
+        CancellationToken cancellationToken = default)
+    {
+        var access = await ResolveReviewAccessAsync(user, cancellationToken);
+        EnsureReviewScopeAllowed(access, scope);
+        var entity = await _db.Reservations.AsNoTracking()
+            .Include(x => x.Items).ThenInclude(x => x.Apparatus).ThenInclude(x => x.OwnerTeamOption)
+            .Include(x => x.EquipmentGroup).ThenInclude(x => x!.OwnerTeamOption)
+            .Include(x => x.ExtensionRequests)
+            .Include(x => x.AuditEvents)
+            .AsSplitQuery()
+            .SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (entity is null) return null;
+        if (!CanViewReview(entity, access, scope))
+            throw new UnauthorizedAccessException("The reservation is outside the selected review responsibility.");
+        var custodianProfiles = await ApparatusCustodianResolver.LoadDisplayNamesAsync(
+            _db,
+            entity.Items.Select(x => x.Apparatus.CustodianAccount),
+            cancellationToken);
+        return MapReviewDetail(entity, access, scope, custodianProfiles);
     }
 
     private static IQueryable<ReservationListDto> MapList(IQueryable<Reservation> query) => query
@@ -307,7 +508,9 @@ public sealed class ReservationService : IReservationService
                 StartTime = x.StartTime,
                 EndTime = x.EndTime,
                 Status = x.Status,
-                Mode = x.TestExecutionProfileId.HasValue ? ReservationMode.Environment : ReservationMode.Direct,
+                Mode = x.EquipmentGroupId.HasValue || x.TestExecutionProfileId.HasValue
+                    ? ReservationMode.Environment
+                    : ReservationMode.Direct,
                 ItemCount = x.Items.Count,
                 ApparatusNames = x.Items.OrderBy(i => i.ApparatusId).Select(i => i.ApparatusName).ToList(),
                 CreatedAt = x.CreatedAt,
@@ -339,8 +542,8 @@ public sealed class ReservationService : IReservationService
         }
         if (!string.IsNullOrWhiteSpace(query.Department))
         {
-            var department = query.Department.Trim().ToLower();
-            source = source.Where(x => x.ApplicantDepartment.ToLower().Contains(department));
+            var department = query.Department.Trim();
+            source = source.Where(x => x.ApplicantDepartment == department);
         }
         if (!string.IsNullOrWhiteSpace(query.Borrower))
         {
@@ -369,7 +572,9 @@ public sealed class ReservationService : IReservationService
                 Purpose = x.Purpose,
                 IsOverdue = (x.Status == ReservationStatus.Approved || x.Status == ReservationStatus.Borrowed)
                     && x.EndTime < now,
-                Mode = x.TestExecutionProfileId.HasValue ? ReservationMode.Environment : ReservationMode.Direct,
+                Mode = x.EquipmentGroupId.HasValue || x.TestExecutionProfileId.HasValue
+                    ? ReservationMode.Environment
+                    : ReservationMode.Direct,
                 TestEnvironmentName = x.TestEnvironmentNameSnapshot,
                 EquipmentGroupName = x.EquipmentGroupNameSnapshot,
                 TestExecutionProfileName = x.TestExecutionProfileNameSnapshot,
@@ -441,84 +646,48 @@ public sealed class ReservationService : IReservationService
         }
     }
 
-    public async Task<ReservationExtensionRequestDto> ApproveExtensionAsync(
-        Guid extensionId, ClaimsPrincipal user, CancellationToken cancellationToken = default)
-    {
-        EnsureScope(user, SystemAuthorization.AccessScopes.CsitStaff);
-        var account = GetAccount(user);
-        var actorName = GetActorName(user);
-        await using var transaction = await _db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-        try
-        {
-            var request = await _db.ReservationExtensionRequests
-                .FromSqlInterpolated($"SELECT * FROM reservation_extension_requests WHERE id = {extensionId} FOR UPDATE")
-                .SingleOrDefaultAsync(cancellationToken)
-                ?? throw new KeyNotFoundException($"Extension request {extensionId} was not found.");
-            var entity = await FindRequiredForUpdateAsync(request.ReservationId, cancellationToken);
-            if (request.Status != ReservationExtensionRequestStatus.Pending)
-                throw new InvalidOperationException("Only a Pending extension request can be approved.");
-            if (entity.Status is not ReservationStatus.Approved and not ReservationStatus.Borrowed)
-                throw new InvalidOperationException("The reservation is no longer eligible for extension.");
-            if (entity.EndTime != request.CurrentEndTimeSnapshot)
-                throw new InvalidOperationException("Reservation EndTime changed after this extension request was created.");
-            await _policy.ValidateExtensionDurationAsync(entity.EndTime, request.RequestedEndTime, cancellationToken);
-            var apparatusIds = entity.Items.Select(x => x.ApparatusId).OrderBy(x => x, StringComparer.Ordinal).ToArray();
-            await LockApparatusAsync(apparatusIds, cancellationToken);
-            await LoadAndValidateApparatusAsync(apparatusIds, cancellationToken);
-            if (!entity.TestExecutionProfileId.HasValue)
-                await _environmentGroupDevices.EnsureDirectReservationAllowedAsync(apparatusIds, cancellationToken);
-            await _availability.EnsureBookableAsync(apparatusIds, cancellationToken);
-            await _availability.EnsureNoOverlapAsync(
-                apparatusIds, entity.EndTime, request.RequestedEndTime, entity.Id, cancellationToken);
-            await _policy.EnsureDepartmentQuotaAsync(
-                entity.ApplicantDepartment, entity.EndTime, request.RequestedEndTime, apparatusIds.Length, entity.Id,
-                acquireTransactionLock: true, cancellationToken: cancellationToken);
-            var now = DateTime.UtcNow;
-            entity.ExtendEndTime(request.RequestedEndTime, now);
-            request.Approve(account, actorName, now);
-            AddAudit(entity, NewAudit(entity.Id, ReservationAuditActions.ExtensionApproved,
-                entity.Status, entity.Status, account, actorName, now,
-                details: $"New end: {request.RequestedEndTime:O}"));
-            await _db.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
-            return MapExtension(request, entity);
-        }
-        catch
-        {
-            await transaction.RollbackAsync(CancellationToken.None);
-            _db.ChangeTracker.Clear();
-            throw;
-        }
-    }
+    public Task<ReservationExtensionRequestDto> ApproveExtensionAsync(
+        Guid extensionId, ClaimsPrincipal user, CancellationToken cancellationToken = default) =>
+        ReviewExtensionAsync(extensionId, user, approve: true, reason: null, cancellationToken);
 
     public Task<ReservationExtensionRequestDto> RejectExtensionAsync(
         Guid extensionId, ClaimsPrincipal user, string? reason, CancellationToken cancellationToken = default) =>
-        ProcessExtensionAsync(extensionId, user, true, reason, cancellationToken);
+        ReviewExtensionAsync(extensionId, user, approve: false, reason, cancellationToken);
 
     public Task<ReservationExtensionRequestDto> CancelExtensionAsync(
         Guid extensionId, ClaimsPrincipal user, CancellationToken cancellationToken = default) =>
-        ProcessExtensionAsync(extensionId, user, false, null, cancellationToken);
+        CancelExtensionCoreAsync(extensionId, user, cancellationToken);
 
-    private async Task<ReservationExtensionRequestDto> ProcessExtensionAsync(
-        Guid extensionId, ClaimsPrincipal user, bool reject, string? reason, CancellationToken cancellationToken)
+    private async Task<ReservationExtensionRequestDto> ReviewExtensionAsync(
+        Guid extensionId,
+        ClaimsPrincipal user,
+        bool approve,
+        string? reason,
+        CancellationToken cancellationToken)
     {
-        if (reject) EnsureScope(user, SystemAuthorization.AccessScopes.CsitStaff); else EnsureReservationUser(user);
-        var account = GetAccount(user);
+        var access = await ResolveReviewAccessAsync(user, cancellationToken);
+        var rejectionReason = approve ? null : Require(reason, nameof(reason));
         await using var transaction = await _db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
         try
         {
-            var request = await _db.ReservationExtensionRequests
-                .FromSqlInterpolated($"SELECT * FROM reservation_extension_requests WHERE id = {extensionId} FOR UPDATE")
-                .SingleOrDefaultAsync(cancellationToken)
-                ?? throw new KeyNotFoundException($"Extension request {extensionId} was not found.");
-            var entity = await FindRequiredForUpdateAsync(request.ReservationId, cancellationToken);
-            if (!reject) EnsureOwner(entity, account);
+            var (entity, request) = await FindExtensionForUpdateAsync(extensionId, cancellationToken);
+            EnsurePendingExtension(request);
+            await EnsureWholeReviewAuthorizationAsync(entity, access, cancellationToken);
             var now = DateTime.UtcNow;
-            var actorName = reject ? GetActorName(user) : entity.ApplicantName;
-            if (reject) request.Reject(account, actorName, Require(reason, nameof(reason)), now); else request.Cancel(now);
+            if (approve)
+            {
+                await ValidateExtensionFinalAsync(entity, request, cancellationToken);
+                entity.ExtendEndTime(request.RequestedEndTime, now);
+                request.Approve(access.Account, access.ActorName, now);
+            }
+            else
+            {
+                request.Reject(access.Account, access.ActorName, rejectionReason!, now);
+            }
             AddAudit(entity, NewAudit(entity.Id,
-                reject ? ReservationAuditActions.ExtensionRejected : ReservationAuditActions.ExtensionCancelled,
-                entity.Status, entity.Status, account, actorName, now, reason));
+                approve ? ReservationAuditActions.ExtensionApproved : ReservationAuditActions.ExtensionRejected,
+                entity.Status, entity.Status, access.Account, access.ActorName, now, rejectionReason,
+                approve ? $"New end: {request.RequestedEndTime:O}" : null));
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return MapExtension(request, entity);
@@ -531,44 +700,122 @@ public sealed class ReservationService : IReservationService
         }
     }
 
-    public async Task<IReadOnlyList<ReservationExtensionRequestDto>> GetPendingExtensionsAsync(
-        ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    private async Task<ReservationExtensionRequestDto> CancelExtensionCoreAsync(
+        Guid extensionId, ClaimsPrincipal user, CancellationToken cancellationToken)
     {
-        EnsureScope(user, SystemAuthorization.AccessScopes.CsitStaff);
-        var items = await _db.ReservationExtensionRequests.AsNoTracking()
+        EnsureReservationUser(user);
+        var account = GetAccount(user);
+        await using var transaction = await _db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        try
+        {
+            var (entity, request) = await FindExtensionForUpdateAsync(extensionId, cancellationToken);
+            EnsureOwner(entity, account);
+            EnsurePendingExtension(request);
+            var now = DateTime.UtcNow;
+            request.Cancel(now);
+            AddAudit(entity, NewAudit(entity.Id, ReservationAuditActions.ExtensionCancelled,
+                entity.Status, entity.Status, account, entity.ApplicantName, now));
+            await _db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return MapExtension(request, entity);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+    }
+
+    public async Task<ReservationExtensionReviewQueueDto> GetPendingExtensionsAsync(
+        ClaimsPrincipal user,
+        ReservationExtensionReviewScope scope,
+        Guid? teamOptionId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var access = await ResolveReviewAccessAsync(user, cancellationToken);
+        EnsureExtensionReviewScopeAllowed(access, scope);
+        var teamScope = await ResolveTeamScopeAsync(
+            access,
+            scope == ReservationExtensionReviewScope.Team,
+            scope == ReservationExtensionReviewScope.All,
+            teamOptionId,
+            cancellationToken);
+        var requests = await _db.ReservationExtensionRequests.AsNoTracking()
             .Include(x => x.Reservation).ThenInclude(x => x.Items)
+                .ThenInclude(x => x.Apparatus).ThenInclude(x => x.OwnerTeamOption)
+            .Include(x => x.Reservation).ThenInclude(x => x.EquipmentGroup).ThenInclude(x => x!.OwnerTeamOption)
+            .AsSplitQuery()
             .Where(x => x.Status == ReservationExtensionRequestStatus.Pending)
             .OrderBy(x => x.RequestedAt)
             .ToListAsync(cancellationToken);
-        return items.Select(x => MapExtension(x, x.Reservation)).ToList();
+        var custodianProfiles = await ApparatusCustodianResolver.LoadDisplayNamesAsync(
+            _db,
+            requests.SelectMany(x => x.Reservation.Items)
+                .Select(x => x.Apparatus.CustodianAccount),
+            cancellationToken);
+
+        var entries = new List<ReservationExtensionRequestDto>();
+        var teamPredicate = scope is ReservationExtensionReviewScope.Team or ReservationExtensionReviewScope.All
+            ? BuildReservationTeamFilter(teamScope.TeamOptionIds).Compile()
+            : null;
+        foreach (var request in requests)
+        {
+            var reservation = request.Reservation;
+            if (teamPredicate is not null)
+            {
+                if (teamPredicate(reservation))
+                    entries.Add(MapExtension(request, reservation, access, scope, custodianProfiles));
+                continue;
+            }
+
+            if (IsEnvironmentReservation(reservation))
+                continue;
+
+            if (reservation.Items.Any(x => IsWithinExtensionReviewScope(x.Apparatus, access, scope)))
+                entries.Add(MapExtension(request, reservation, access, scope, custodianProfiles));
+        }
+
+        return new ReservationExtensionReviewQueueDto
+        {
+            Scope = scope,
+            SelectedTeamOptionId = teamScope.SelectedTeamOptionId,
+            IsTeamLeader = access.LeaderTeamIds.Count != 0,
+            IsAdmin = access.IsAdmin,
+            TeamOptions = teamScope.Options,
+            Entries = entries
+        };
     }
 
     public async Task<ReservationOverdueResponseDto> GetOverdueAsync(
-        ClaimsPrincipal user, CancellationToken cancellationToken = default)
+        ClaimsPrincipal user,
+        ReservationReviewScope scope,
+        Guid? teamOptionId = null,
+        CancellationToken cancellationToken = default)
     {
-        EnsureScope(user, SystemAuthorization.AccessScopes.CsitStaff);
-        var account = GetAccount(user);
-        var isAdmin = user.IsInRole("Admin");
+        var access = await ResolveReviewAccessAsync(user, cancellationToken);
+        EnsureOverdueScopeAllowed(access, scope);
+        var teamScope = await ResolveTeamScopeAsync(
+            access,
+            scope == ReservationReviewScope.Team,
+            scope == ReservationReviewScope.All,
+            teamOptionId,
+            cancellationToken);
         var now = DateTime.UtcNow;
-        var leaderTeamIds = isAdmin
-            ? []
-            : await _db.TeamRoutings.AsNoTracking()
-                .Where(x => x.IsEnabled && x.LeaderAccount.ToLower() == account)
-                .Select(x => x.TeamOptionId)
-                .ToListAsync(cancellationToken);
 
         var source = _db.Reservations.AsNoTracking()
             .Where(x => (x.Status == ReservationStatus.Borrowed || x.Status == ReservationStatus.Approved)
                 && x.EndTime < now);
 
-        if (!isAdmin)
+        source = scope switch
         {
-            source = source.Where(x => x.Items.Any(i =>
-                (i.Apparatus.CustodianAccount != null
-                    && i.Apparatus.CustodianAccount.ToLower() == account)
-                || (i.Apparatus.OwnerTeamOptionId.HasValue
-                    && leaderTeamIds.Contains(i.Apparatus.OwnerTeamOptionId.Value))));
-        }
+            ReservationReviewScope.Custodian => source.Where(x => x.Items.Any(i =>
+                i.Apparatus.CustodianAccount != null
+                && i.Apparatus.CustodianAccount.ToLower() == access.Account)),
+            ReservationReviewScope.Team or ReservationReviewScope.All =>
+                source.Where(BuildReservationTeamFilter(teamScope.TeamOptionIds)),
+            _ => source
+        };
 
         var items = await source
             .OrderBy(x => x.EndTime)
@@ -588,11 +835,9 @@ public sealed class ReservationService : IReservationService
                 BorrowedAt = x.BorrowedAt,
                 TotalReservationItemCount = x.Items.Count,
                 VisibleApparatus = x.Items
-                    .Where(i => isAdmin
+                    .Where(i => scope != ReservationReviewScope.Custodian
                         || (i.Apparatus.CustodianAccount != null
-                            && i.Apparatus.CustodianAccount.ToLower() == account)
-                        || (i.Apparatus.OwnerTeamOptionId.HasValue
-                            && leaderTeamIds.Contains(i.Apparatus.OwnerTeamOptionId.Value)))
+                            && i.Apparatus.CustodianAccount.ToLower() == access.Account))
                     .OrderBy(i => i.ApparatusId)
                     .Select(i => new ReservationOverdueApparatusDto
                     {
@@ -603,7 +848,11 @@ public sealed class ReservationService : IReservationService
                         Brand = i.Apparatus.Brand,
                         Model = i.Apparatus.Model,
                         Place = i.Apparatus.Place,
-                        Custodian = i.Apparatus.Custodian,
+                        Custodian = _db.Users
+                            .Where(user => i.Apparatus.CustodianAccount != null
+                                && user.Account.ToLower() == i.Apparatus.CustodianAccount.ToLower())
+                            .Select(user => user.DisplayName)
+                            .FirstOrDefault(),
                         CustodianAccount = i.Apparatus.CustodianAccount,
                         OwnerTeamOptionId = i.Apparatus.OwnerTeamOptionId,
                         OwnerTeamName = i.Apparatus.OwnerTeamOption == null
@@ -618,6 +867,11 @@ public sealed class ReservationService : IReservationService
 
         return new ReservationOverdueResponseDto
         {
+            Scope = scope,
+            SelectedTeamOptionId = teamScope.SelectedTeamOptionId,
+            IsTeamLeader = access.LeaderTeamIds.Count != 0,
+            IsAdmin = access.IsAdmin,
+            TeamOptions = teamScope.Options,
             TotalCount = items.Count,
             OverdueReturnCount = items.Count,
             Items = items
@@ -633,25 +887,8 @@ public sealed class ReservationService : IReservationService
         {
             var entity = await FindRequiredForUpdateAsync(id, cancellationToken);
             EnsureOwner(entity, account);
-            ValidateTimeRange(entity.StartTime, entity.EndTime);
-            Require(entity.ApplicantExtension, nameof(entity.ApplicantExtension));
-            await _policy.ValidateInitialDurationAsync(entity.StartTime, entity.EndTime, cancellationToken);
-            await EnsureStoredEnvironmentSelectionsValidAsync(entity, cancellationToken);
-            var apparatusIds = entity.Items.Select(x => x.ApparatusId).OrderBy(x => x, StringComparer.Ordinal).ToArray();
-            if (apparatusIds.Length == 0) throw new InvalidOperationException("A reservation must contain at least one apparatus.");
-            await LockApparatusAsync(apparatusIds, cancellationToken);
-            await LoadAndValidateApparatusAsync(apparatusIds, cancellationToken);
-            if (!entity.TestExecutionProfileId.HasValue)
-                await _environmentGroupDevices.EnsureDirectReservationAllowedAsync(apparatusIds, cancellationToken);
-            await _availability.EnsureBookableAsync(apparatusIds, cancellationToken);
-            await _availability.EnsureNoOverlapAsync(apparatusIds, entity.StartTime, entity.EndTime, entity.Id, cancellationToken);
-            await _policy.EnsureDepartmentQuotaAsync(
-                entity.ApplicantDepartment, entity.StartTime, entity.EndTime, apparatusIds.Length, entity.Id,
-                acquireTransactionLock: true, cancellationToken: cancellationToken);
-            await EnsureApplicationOptionIsActiveAsync(
-                entity.Customer, SystemOptionCategories.Customer, nameof(entity.Customer), cancellationToken);
-            await EnsureApplicationOptionIsActiveAsync(
-                entity.ProjectSubPu, SystemOptionCategories.SubPu, nameof(entity.ProjectSubPu), cancellationToken);
+            EnsureDirectSingleApparatus(entity);
+            await ValidateFinalApprovalAsync(entity, cancellationToken);
             var now = DateTime.UtcNow;
             entity.Submit(now);
             AddAudit(entity, NewAudit(entity.Id, ReservationAuditActions.Submitted, ReservationStatus.Draft,
@@ -668,11 +905,18 @@ public sealed class ReservationService : IReservationService
         }
     }
 
-    public Task<ReservationDetailDto> ApproveAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default) =>
-        TransitionStaffAsync(id, user, ReservationAuditActions.Approved, null, (x, account, now) => x.Approve(account, now), cancellationToken);
+    public Task<ReservationDetailDto> ApproveAsync(
+        Guid id,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default) =>
+        ReviewReservationAsync(id, user, approve: true, reason: null, cancellationToken);
 
-    public Task<ReservationDetailDto> RejectAsync(Guid id, ClaimsPrincipal user, string? reason, CancellationToken cancellationToken = default) =>
-        TransitionStaffAsync(id, user, ReservationAuditActions.Rejected, reason, (x, account, now) => x.Reject(account, reason, now), cancellationToken);
+    public Task<ReservationDetailDto> RejectAsync(
+        Guid id,
+        ClaimsPrincipal user,
+        string? reason,
+        CancellationToken cancellationToken = default) =>
+        ReviewReservationAsync(id, user, approve: false, reason, cancellationToken);
 
     public async Task<ReservationDetailDto> CancelAsync(
         Guid id,
@@ -717,6 +961,49 @@ public sealed class ReservationService : IReservationService
     public Task<ReservationDetailDto> ReturnAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default) =>
         TransitionStaffAsync(id, user, ReservationAuditActions.Returned, null, (x, account, now) => x.Return(account, now), cancellationToken);
 
+    private async Task<ReservationDetailDto> ReviewReservationAsync(
+        Guid id,
+        ClaimsPrincipal user,
+        bool approve,
+        string? reason,
+        CancellationToken cancellationToken)
+    {
+        var access = await ResolveReviewAccessAsync(user, cancellationToken);
+        if (!approve && string.IsNullOrWhiteSpace(reason))
+            throw new InvalidOperationException("Reject reason is required.");
+        await using var transaction = await _db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        try
+        {
+            var entity = await FindRequiredForUpdateAsync(id, cancellationToken);
+            await EnsureWholeReviewAuthorizationAsync(entity, access, cancellationToken);
+
+            var fromStatus = entity.Status;
+            var now = DateTime.UtcNow;
+            if (approve)
+            {
+                await ValidateFinalApprovalAsync(entity, cancellationToken);
+                entity.Approve(access.Account, now);
+            }
+            else
+            {
+                entity.Reject(access.Account, reason, now);
+            }
+
+            AddAudit(entity, NewAudit(entity.Id,
+                approve ? ReservationAuditActions.Approved : ReservationAuditActions.Rejected,
+                fromStatus, entity.Status, access.Account, access.ActorName, now, reason));
+            await _db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return MapDetail(entity);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+    }
+
     private async Task<ReservationDetailDto> TransitionStaffAsync(
         Guid id,
         ClaimsPrincipal user,
@@ -732,17 +1019,6 @@ public sealed class ReservationService : IReservationService
         {
             var entity = await FindRequiredForUpdateAsync(id, cancellationToken);
             var fromStatus = entity.Status;
-            if (action == ReservationAuditActions.Approved)
-            {
-                var apparatusIds = entity.Items
-                    .Select(x => x.ApparatusId)
-                    .OrderBy(x => x, StringComparer.Ordinal)
-                    .ToArray();
-                await LockApparatusAsync(apparatusIds, cancellationToken);
-                await LoadAndValidateApparatusAsync(apparatusIds, cancellationToken);
-                if (!entity.TestExecutionProfileId.HasValue)
-                    await _environmentGroupDevices.EnsureDirectReservationAllowedAsync(apparatusIds, cancellationToken);
-            }
             var now = DateTime.UtcNow;
             transition(entity, account, now);
             AddAudit(entity, NewAudit(entity.Id, action, fromStatus, entity.Status,
@@ -770,6 +1046,160 @@ public sealed class ReservationService : IReservationService
         await _db.Entry(entity).Collection(x => x.AuditEvents).LoadAsync(cancellationToken);
         return entity;
     }
+
+    private async Task<(Reservation Reservation, ReservationExtensionRequest Extension)> FindExtensionForUpdateAsync(
+        Guid extensionId,
+        CancellationToken cancellationToken)
+    {
+        var reservationId = await _db.ReservationExtensionRequests.AsNoTracking()
+            .Where(x => x.Id == extensionId)
+            .Select(x => (Guid?)x.ReservationId)
+            .SingleOrDefaultAsync(cancellationToken)
+            ?? throw new KeyNotFoundException($"Extension request {extensionId} was not found.");
+        var reservation = await FindRequiredForUpdateAsync(reservationId, cancellationToken);
+        var extension = await _db.ReservationExtensionRequests
+            .FromSqlInterpolated($"SELECT * FROM reservation_extension_requests WHERE id = {extensionId} FOR UPDATE")
+            .SingleAsync(cancellationToken);
+        return (reservation, extension);
+    }
+
+    private static void EnsurePendingExtension(ReservationExtensionRequest request)
+    {
+        if (request.Status != ReservationExtensionRequestStatus.Pending)
+            throw new InvalidOperationException("Only a Pending extension request can be processed.");
+    }
+
+    private async Task EnsureWholeReviewAuthorizationAsync(
+        Reservation reservation,
+        ReviewAccess access,
+        CancellationToken cancellationToken)
+    {
+        if (IsEnvironmentReservation(reservation))
+        {
+            if (!reservation.EquipmentGroupId.HasValue)
+                throw new InvalidOperationException("The Environment reservation no longer has an Equipment Group.");
+            var group = await _db.EquipmentGroups
+                .FromSqlInterpolated($"SELECT * FROM equipment_groups WHERE id = {reservation.EquipmentGroupId.Value} FOR UPDATE")
+                .SingleOrDefaultAsync(cancellationToken)
+                ?? throw new InvalidOperationException("The Environment reservation's Equipment Group no longer exists.");
+            if (!access.IsAdmin
+                && !await HasEnabledTeamLeadershipForUpdateAsync(group.OwnerTeamOptionId, access.Account, cancellationToken))
+                throw new UnauthorizedAccessException("Only the current Environment Group Owner Team Leader or Admin may review this request.");
+            return;
+        }
+
+        if (reservation.Items.Count != 1)
+            throw new InvalidOperationException(DirectSingleApparatusError);
+        var apparatusId = reservation.Items[0].ApparatusId;
+        await LockApparatusAsync([apparatusId], cancellationToken);
+        var apparatus = await _db.Apparatuses.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == apparatusId, cancellationToken)
+            ?? throw new InvalidOperationException($"Apparatus {apparatusId} does not exist.");
+        if (!await CanReviewApparatusForUpdateAsync(apparatus, access, cancellationToken))
+            throw new UnauthorizedAccessException("Only the current apparatus custodian, owner Team leader, or Admin may review this request.");
+    }
+
+    private async Task ValidateExtensionFinalAsync(
+        Reservation entity,
+        ReservationExtensionRequest request,
+        CancellationToken cancellationToken)
+    {
+        if (entity.Status is not ReservationStatus.Approved and not ReservationStatus.Borrowed)
+            throw new InvalidOperationException("The reservation is no longer eligible for extension.");
+        if (entity.EndTime != request.CurrentEndTimeSnapshot)
+            throw new InvalidOperationException("Reservation EndTime changed after this extension request was created.");
+        await _policy.ValidateExtensionDurationAsync(entity.EndTime, request.RequestedEndTime, cancellationToken);
+
+        string[] apparatusIds;
+        if (IsGroupEnvironmentReservation(entity))
+        {
+            var prepared = await PrepareEnvironmentGroupAsync(entity.EquipmentGroupId!.Value, cancellationToken);
+            apparatusIds = prepared.ApparatusIds;
+            EnsureEnvironmentCompositionUnchanged(entity.Items, apparatusIds);
+            await EnsureEnvironmentNoOverlapAsync(
+                apparatusIds, entity.EndTime, request.RequestedEndTime, entity.Id, cancellationToken);
+        }
+        else
+        {
+            apparatusIds = entity.Items.Select(x => x.ApparatusId)
+                .OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            if (apparatusIds.Length == 0)
+                throw new InvalidOperationException("A reservation must contain at least one apparatus.");
+            await LockApparatusAsync(apparatusIds, cancellationToken);
+            await LoadAndValidateApparatusAsync(apparatusIds, cancellationToken);
+            if (!IsEnvironmentReservation(entity))
+                await _environmentGroupDevices.EnsureDirectReservationAllowedAsync(apparatusIds, cancellationToken);
+            await _availability.EnsureBookableAsync(apparatusIds, cancellationToken);
+            await _availability.EnsureNoOverlapAsync(
+                apparatusIds, entity.EndTime, request.RequestedEndTime, entity.Id, cancellationToken);
+        }
+        await _policy.EnsureDepartmentQuotaAsync(
+            entity.ApplicantDepartment, entity.EndTime, request.RequestedEndTime, apparatusIds.Length, entity.Id,
+            acquireTransactionLock: true, cancellationToken: cancellationToken);
+    }
+
+    private async Task ValidateFinalApprovalAsync(Reservation entity, CancellationToken cancellationToken)
+    {
+        ValidateTimeRange(entity.StartTime, entity.EndTime);
+        Require(entity.ApplicantExtension, nameof(entity.ApplicantExtension));
+        await _policy.ValidateInitialDurationAsync(entity.StartTime, entity.EndTime, cancellationToken);
+
+        string[] apparatusIds;
+        if (IsGroupEnvironmentReservation(entity))
+        {
+            var prepared = await PrepareEnvironmentGroupAsync(entity.EquipmentGroupId!.Value, cancellationToken);
+            apparatusIds = prepared.ApparatusIds;
+            EnsureEnvironmentCompositionUnchanged(entity.Items, apparatusIds);
+            await EnsureEnvironmentNoOverlapAsync(
+                apparatusIds, entity.StartTime, entity.EndTime, entity.Id, cancellationToken);
+        }
+        else
+        {
+            await EnsureStoredEnvironmentSelectionsValidAsync(entity, cancellationToken);
+            apparatusIds = entity.Items.Select(x => x.ApparatusId)
+                .OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            if (apparatusIds.Length == 0)
+                throw new InvalidOperationException("A reservation must contain at least one apparatus.");
+            await LockApparatusAsync(apparatusIds, cancellationToken);
+            await LoadAndValidateApparatusAsync(apparatusIds, cancellationToken);
+            if (!IsEnvironmentReservation(entity))
+                await _environmentGroupDevices.EnsureDirectReservationAllowedAsync(apparatusIds, cancellationToken);
+            await _availability.EnsureBookableAsync(apparatusIds, cancellationToken);
+            await _availability.EnsureNoOverlapAsync(
+                apparatusIds, entity.StartTime, entity.EndTime, entity.Id, cancellationToken);
+        }
+
+        await _policy.EnsureDepartmentQuotaAsync(
+            entity.ApplicantDepartment, entity.StartTime, entity.EndTime, apparatusIds.Length, entity.Id,
+            acquireTransactionLock: true, cancellationToken: cancellationToken);
+        await EnsureApplicationOptionIsActiveAsync(
+            entity.Customer, SystemOptionCategories.Customer, nameof(entity.Customer), cancellationToken);
+        await EnsureApplicationOptionIsActiveAsync(
+            entity.ProjectSubPu, SystemOptionCategories.SubPu, nameof(entity.ProjectSubPu), cancellationToken);
+    }
+
+    private async Task<bool> CanReviewApparatusForUpdateAsync(
+        Apparatus apparatus,
+        ReviewAccess access,
+        CancellationToken cancellationToken)
+    {
+        if (access.IsAdmin) return true;
+        if (!string.IsNullOrWhiteSpace(apparatus.CustodianAccount)
+            && string.Equals(apparatus.CustodianAccount.Trim(), access.Account, StringComparison.OrdinalIgnoreCase))
+            return true;
+        return apparatus.OwnerTeamOptionId.HasValue
+            && await HasEnabledTeamLeadershipForUpdateAsync(
+                apparatus.OwnerTeamOptionId.Value, access.Account, cancellationToken);
+    }
+
+    private async Task<bool> HasEnabledTeamLeadershipForUpdateAsync(
+        Guid teamOptionId,
+        string account,
+        CancellationToken cancellationToken) =>
+        (await _db.TeamRoutings
+            .FromSqlInterpolated($"SELECT * FROM team_routings WHERE team_option_id = {teamOptionId} AND is_enabled AND lower(leader_account) = {account} FOR SHARE")
+            .AsNoTracking()
+            .ToListAsync(cancellationToken)).Count != 0;
 
     private async Task LockApparatusAsync(IReadOnlyCollection<string> apparatusIds, CancellationToken cancellationToken)
     {
@@ -886,130 +1316,132 @@ public sealed class ReservationService : IReservationService
             throw new InvalidOperationException("A selected requirement does not belong to the profile's equipment group.");
     }
 
+    private async Task<PreparedReservation> PrepareEnvironmentGroupAsync(
+        Guid groupId,
+        CancellationToken cancellationToken)
+    {
+        // Lock the group first. Besides stabilizing its enabled state, PostgreSQL's
+        // FK key-share lock makes concurrent membership inserts wait for this flow.
+        var group = await _db.EquipmentGroups
+            .FromSqlInterpolated($"SELECT * FROM equipment_groups WHERE id = {groupId} FOR UPDATE")
+            .SingleOrDefaultAsync(cancellationToken)
+            ?? throw new InvalidOperationException("測試環境群組不存在。");
+
+        var memberships = await _db.EquipmentGroupDevices
+            .FromSqlInterpolated($"SELECT * FROM equipment_group_devices WHERE equipment_group_id = {groupId} ORDER BY apparatus_id FOR UPDATE")
+            .ToListAsync(cancellationToken);
+        var apparatusIds = memberships.Select(x => x.ApparatusId)
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+
+        await LockApparatusAsync(apparatusIds, cancellationToken);
+        var apparatuses = await LoadAndValidateApparatusAsync(apparatusIds, cancellationToken);
+
+        if (group.Status != EquipmentGroupStatus.Active)
+            throw new InvalidOperationException("測試環境群組目前未啟用。");
+
+        var completeness = EnvironmentGroupDeviceRules.GetCompletenessStatus(
+            memberships.Count,
+            memberships.Count(x => x.IsInEnvironment));
+        if (completeness != EquipmentGroupCompletenessStatus.Complete)
+        {
+            var apparatusById = apparatuses.ToDictionary(x => x.Id, StringComparer.Ordinal);
+            var missing = memberships.Where(x => !x.IsInEnvironment)
+                .Select(x => apparatusById[x.ApparatusId])
+                .Select(DeviceLabel)
+                .ToArray();
+            var details = missing.Length == 0 ? "尚未設定設備" : string.Join("、", missing);
+            throw new InvalidOperationException($"測試環境設備不齊全：{details}。");
+        }
+
+        try
+        {
+            await _availability.EnsureBookableAsync(apparatusIds, cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+        {
+            var unavailable = apparatuses
+                .Where(x => !ApparatusReservationRules.IsBookable(x))
+                .Select(x => $"{DeviceLabel(x)}（{x.ReservationStatus ?? "未設定"}）")
+                .ToArray();
+            throw new InvalidOperationException(
+                $"設備目前狀態不可使用：{string.Join("、", unavailable)}。", ex);
+        }
+
+        var items = await CreateReservationItemsAsync(
+            apparatuses.OrderBy(x => x.Id, StringComparer.Ordinal),
+            cancellationToken);
+        var context = new ReservationEnvironmentContext(
+            group.Id,
+            group.Code,
+            group.Name);
+        return new PreparedReservation(context, items);
+    }
+
+    private async Task EnsureEnvironmentNoOverlapAsync(
+        IReadOnlyCollection<string> apparatusIds,
+        DateTime startTime,
+        DateTime endTime,
+        Guid? excludedReservationId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _availability.EnsureNoOverlapAsync(
+                apparatusIds, startTime, endTime, excludedReservationId, cancellationToken);
+        }
+        catch (InvalidOperationException ex)
+        {
+            throw new InvalidOperationException("指定時段已有設備被預約。", ex);
+        }
+    }
+
+    private static void EnsureEnvironmentCompositionUnchanged(
+        IReadOnlyCollection<ReservationItem> storedItems,
+        IReadOnlyCollection<string> currentApparatusIds)
+    {
+        var stored = storedItems.Select(x => x.ApparatusId)
+            .OrderBy(x => x, StringComparer.Ordinal)
+            .ToArray();
+        var current = currentApparatusIds.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        if (!stored.SequenceEqual(current, StringComparer.Ordinal))
+            throw new InvalidOperationException("測試環境設備組成已變更，請重新確認並更新預約。");
+    }
+
     private async Task<PreparedReservation> PrepareRequestAsync(
         ReservationMode mode,
         IReadOnlyCollection<ReservationItemRequest>? directItems,
+        Guid? environmentGroupId,
         Guid? profileId,
         IReadOnlyCollection<ReservationRequirementSelectionRequest>? selections,
         CancellationToken cancellationToken)
     {
         if (mode == ReservationMode.Direct)
         {
-            if (profileId.HasValue || selections?.Count > 0)
+            if (environmentGroupId.HasValue || profileId.HasValue || selections?.Count > 0)
                 throw new InvalidOperationException("Direct reservations cannot include environment selections.");
+            if (directItems?.Count > 1)
+                throw new InvalidOperationException(DirectSingleApparatusError);
             var ids = NormalizeApparatusIds(directItems);
             await LockApparatusAsync(ids, cancellationToken);
             var directApparatuses = await LoadAndValidateApparatusAsync(ids, cancellationToken);
             await _environmentGroupDevices.EnsureDirectReservationAllowedAsync(ids, cancellationToken);
             await _availability.EnsureBookableAsync(ids, cancellationToken);
-            return new PreparedReservation(null, directApparatuses.Select(x => ToReservationItem(x, null)).ToList());
+            return new PreparedReservation(
+                null,
+                await CreateReservationItemsAsync(directApparatuses, cancellationToken));
         }
 
         if (mode != ReservationMode.Environment)
             throw new InvalidOperationException("Reservation mode is invalid.");
-        if (!profileId.HasValue || profileId == Guid.Empty)
-            throw new InvalidOperationException("TestExecutionProfileId is required for an Environment reservation.");
-        if (directItems?.Count > 0)
-            throw new InvalidOperationException("Environment reservations must use requirement selections.");
+        if (!environmentGroupId.HasValue || environmentGroupId == Guid.Empty)
+            throw new InvalidOperationException("EnvironmentGroupId is required for an Environment reservation.");
+        if (profileId.HasValue || selections?.Count > 0)
+            throw new InvalidOperationException("新版測試環境預約不可包含舊版測試方案或設備需求選擇。");
 
-        var profile = await _db.TestExecutionProfiles.AsNoTracking()
-            .Include(x => x.TestEnvironment)
-            .Include(x => x.EquipmentGroup).ThenInclude(x => x.Requirements)
-            .SingleOrDefaultAsync(x => x.Id == profileId.Value, cancellationToken)
-            ?? throw new InvalidOperationException("Test execution profile does not exist.");
-        if (profile.Status != TestExecutionProfileStatus.Active)
-            throw new InvalidOperationException("Test execution profile is not Active.");
-        if (profile.TestEnvironment.Status != TestEnvironmentStatus.Active)
-            throw new InvalidOperationException("Test environment is not Active.");
-        if (profile.EquipmentGroup.Status != EquipmentGroupStatus.Active)
-            throw new InvalidOperationException("Equipment group is not Active.");
-
-        var requirements = profile.EquipmentGroup.Requirements.ToDictionary(x => x.Id);
-        var supplied = selections ?? [];
-        if (supplied.GroupBy(x => x.EquipmentGroupRequirementId).Any(x => x.Count() > 1))
-            throw new InvalidOperationException("Each equipment group requirement may appear only once.");
-        var invalidRequirement = supplied.FirstOrDefault(x => !requirements.ContainsKey(x.EquipmentGroupRequirementId));
-        if (invalidRequirement is not null)
-            throw new InvalidOperationException("A selected requirement does not belong to the profile's equipment group.");
-
-        var selectedByRequirement = supplied.ToDictionary(
-            x => x.EquipmentGroupRequirementId,
-            x => (IReadOnlyList<string>)(x.ApparatusIds ?? []).Select(id => Require(id, nameof(x.ApparatusIds))).ToList());
-
-        foreach (var requirement in requirements.Values)
-        {
-            if (!string.IsNullOrWhiteSpace(requirement.PreferredEquipmentId))
-            {
-                var preferredMatches = await _resourceCapabilities.GetMatchingApparatusIdsAsync(
-                    requirement.ResourceType,
-                    requirement.CapabilityTag,
-                    [requirement.PreferredEquipmentId],
-                    cancellationToken);
-                if (!preferredMatches.Contains(requirement.PreferredEquipmentId))
-                    throw new InvalidOperationException(
-                        $"Catalog configuration error: preferred equipment for {requirement.ResourceType} does not match its resource capability.");
-            }
-
-            if (selectedByRequirement.TryGetValue(requirement.Id, out var selectedIds) && selectedIds.Count != 0)
-            {
-                var matchingIds = await _resourceCapabilities.GetMatchingApparatusIdsAsync(
-                    requirement.ResourceType,
-                    requirement.CapabilityTag,
-                    selectedIds,
-                    cancellationToken);
-                var mismatched = selectedIds.Where(x => !matchingIds.Contains(x)).Distinct(StringComparer.Ordinal).ToArray();
-                if (mismatched.Length != 0)
-                    throw new InvalidOperationException(
-                        $"Selected apparatus does not match requirement {requirement.ResourceType}{FormatCapability(requirement.CapabilityTag)}: {string.Join(", ", mismatched)}.");
-            }
-        }
-        var preparedSelections = new List<(EquipmentGroupRequirement Requirement, string ApparatusId)>();
-        foreach (var requirement in requirements.Values.OrderBy(x => x.Id))
-        {
-            selectedByRequirement.TryGetValue(requirement.Id, out var selected);
-            selected ??= [];
-            if (selected.Distinct(StringComparer.Ordinal).Count() != selected.Count)
-                throw new InvalidOperationException($"Requirement {requirement.ResourceType} contains duplicate apparatus.");
-            if (requirement.Required && selected.Count != requirement.Quantity)
-                throw new InvalidOperationException($"Required requirement {requirement.ResourceType} must select exactly {requirement.Quantity} apparatus.");
-            if (!requirement.Required && selected.Count != 0 && selected.Count != requirement.Quantity)
-                throw new InvalidOperationException($"Optional requirement {requirement.ResourceType} must select either zero or exactly {requirement.Quantity} apparatus.");
-            if (!requirement.AllowAlternative)
-            {
-                if (string.IsNullOrWhiteSpace(requirement.PreferredEquipmentId))
-                    throw new InvalidOperationException($"Catalog configuration error: {requirement.ResourceType} disallows alternatives but has no preferred equipment.");
-                if (requirement.Quantity != 1)
-                    throw new InvalidOperationException($"Catalog configuration error: {requirement.ResourceType} disallows alternatives but quantity is not one.");
-                if (selected.Count == 1 && !string.Equals(selected[0], requirement.PreferredEquipmentId, StringComparison.Ordinal))
-                    throw new InvalidOperationException($"Requirement {requirement.ResourceType} must use its preferred equipment.");
-            }
-            preparedSelections.AddRange(selected.Select(id => (requirement, id)));
-        }
-
-        var apparatusIds = preparedSelections.Select(x => x.ApparatusId).ToArray();
-        if (apparatusIds.Length == 0)
-            throw new InvalidOperationException("At least one apparatus is required.");
-        if (apparatusIds.Distinct(StringComparer.Ordinal).Count() != apparatusIds.Length)
-            throw new InvalidOperationException("The same apparatus cannot satisfy more than one requirement.");
-        apparatusIds = apparatusIds.OrderBy(x => x, StringComparer.Ordinal).ToArray();
-        await LockApparatusAsync(apparatusIds, cancellationToken);
-        var apparatuses = await LoadAndValidateApparatusAsync(apparatusIds, cancellationToken);
-        await _availability.EnsureBookableAsync(apparatusIds, cancellationToken);
-        var apparatusById = apparatuses.ToDictionary(x => x.Id, StringComparer.Ordinal);
-        var items = preparedSelections
-            .Select(x => ToReservationItem(apparatusById[x.ApparatusId], x.Requirement))
-            .ToList();
-        var context = new ReservationEnvironmentContext(
-            profile.Id,
-            profile.TestEnvironmentId,
-            profile.EquipmentGroupId,
-            profile.TestEnvironment.Code,
-            profile.TestEnvironment.Name,
-            profile.EquipmentGroup.Code,
-            profile.EquipmentGroup.Name,
-            profile.Code,
-            profile.Name);
-        return new PreparedReservation(context, items);
+        // ApparatusIds supplied by the caller are intentionally ignored. The current
+        // EquipmentGroupDevice membership is the sole source of ReservationItems.
+        return await PrepareEnvironmentGroupAsync(environmentGroupId.Value, cancellationToken);
     }
 
     private static string[] NormalizeApparatusIds(IReadOnlyCollection<ReservationItemRequest>? items)
@@ -1022,7 +1454,33 @@ public sealed class ReservationService : IReservationService
         return ids.OrderBy(x => x, StringComparer.Ordinal).ToArray();
     }
 
-    private static ReservationItem ToReservationItem(Apparatus x, EquipmentGroupRequirement? requirement) => new()
+    private static void EnsureDirectSingleApparatus(Reservation reservation)
+    {
+        if (!IsEnvironmentReservation(reservation) && reservation.Items.Count > 1)
+            throw new InvalidOperationException(DirectSingleApparatusError);
+    }
+
+    private async Task<List<ReservationItem>> CreateReservationItemsAsync(
+        IEnumerable<Apparatus> apparatuses,
+        CancellationToken cancellationToken)
+    {
+        var apparatusList = apparatuses.ToList();
+        var custodianProfiles = await ApparatusCustodianResolver.LoadDisplayNamesAsync(
+            _db,
+            apparatusList.Select(x => x.CustodianAccount),
+            cancellationToken);
+        return apparatusList.Select(x => ToReservationItem(
+            x,
+            null,
+            ApparatusCustodianResolver.GetDisplayName(custodianProfiles, x.CustodianAccount),
+            ApparatusCustodianResolver.GetDepartment(custodianProfiles, x.CustodianAccount))).ToList();
+    }
+
+    private static ReservationItem ToReservationItem(
+        Apparatus x,
+        EquipmentGroupRequirement? requirement,
+        string? custodianDisplayName,
+        string? custodianDepartment) => new()
     {
         Id = Guid.NewGuid(),
         ApparatusId = x.Id,
@@ -1033,8 +1491,8 @@ public sealed class ReservationService : IReservationService
         Model = x.Model,
         Number = x.Number,
         Place = x.Place,
-        Custodian = Clean(x.Custodian),
-        CustodianDepartment = x.CustodianDepartment,
+        Custodian = Clean(custodianDisplayName),
+        CustodianDepartment = Clean(custodianDepartment),
         PriceUse = x.PriceUse,
         EquipmentGroupRequirementId = requirement?.Id,
         RequirementResourceTypeSnapshot = requirement?.ResourceType,
@@ -1071,6 +1529,108 @@ public sealed class ReservationService : IReservationService
 
     private static void EnsureReservationUser(ClaimsPrincipal user) => _ = GetKnownScope(user);
 
+    private async Task<ReviewAccess> ResolveReviewAccessAsync(
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken)
+    {
+        EnsureScope(user, SystemAuthorization.AccessScopes.CsitStaff);
+        var account = GetAccount(user);
+        var teamIds = await _db.TeamRoutings.AsNoTracking()
+            .Where(x => x.IsEnabled && x.LeaderAccount.ToLower() == account)
+            .Select(x => x.TeamOptionId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+        return new ReviewAccess(account, GetActorName(user), user.IsInRole("Admin"), teamIds.ToHashSet());
+    }
+
+    private async Task<TeamScopeContext> ResolveTeamScopeAsync(
+        ReviewAccess access,
+        bool isLeaderTeamScope,
+        bool isAllTeamScope,
+        Guid? selectedTeamOptionId,
+        CancellationToken cancellationToken)
+    {
+        if (!isLeaderTeamScope && !isAllTeamScope)
+            return new TeamScopeContext([], null, []);
+
+        var query = _db.SystemOptions.AsNoTracking()
+            .Where(x => x.Category == SystemOptionCategories.Team && x.IsEnabled);
+
+        if (isLeaderTeamScope)
+            query = query.Where(x => access.LeaderTeamIds.Contains(x.Id));
+
+        var options = await query
+            .OrderBy(x => x.Sort)
+            .ThenBy(x => x.Name)
+            .ThenBy(x => x.Value)
+            .Select(x => new ReservationTeamScopeOptionDto
+            {
+                TeamOptionId = x.Id,
+                DisplayName = x.Name,
+                Value = x.Value
+            })
+            .ToListAsync(cancellationToken);
+
+        if (selectedTeamOptionId.HasValue
+            && options.All(x => x.TeamOptionId != selectedTeamOptionId.Value))
+            throw new UnauthorizedAccessException("The selected Team is outside the available Team scope.");
+
+        var effectiveTeamOptionId = selectedTeamOptionId;
+        if (isLeaderTeamScope && !effectiveTeamOptionId.HasValue && options.Count == 1)
+            effectiveTeamOptionId = options[0].TeamOptionId;
+
+        var teamOptionIds = effectiveTeamOptionId.HasValue
+            ? new[] { effectiveTeamOptionId.Value }
+            : options.Select(x => x.TeamOptionId).ToArray();
+
+        return new TeamScopeContext(options, effectiveTeamOptionId, teamOptionIds);
+    }
+
+    private static Expression<Func<Reservation, bool>> BuildReservationTeamFilter(
+        IReadOnlyCollection<Guid> teamOptionIds)
+    {
+        var ids = teamOptionIds.ToArray();
+        return reservation =>
+            ((!reservation.EquipmentGroupId.HasValue && !reservation.TestExecutionProfileId.HasValue)
+                && reservation.Items.Any(item => item.Apparatus.OwnerTeamOptionId.HasValue
+                    && ids.Contains(item.Apparatus.OwnerTeamOptionId.Value)))
+            || ((reservation.EquipmentGroupId.HasValue || reservation.TestExecutionProfileId.HasValue)
+                && reservation.EquipmentGroup != null
+                && ids.Contains(reservation.EquipmentGroup.OwnerTeamOptionId));
+    }
+
+    private static void EnsureReviewScopeAllowed(ReviewAccess access, ReservationReviewScope scope)
+    {
+        if (scope == ReservationReviewScope.Team && access.LeaderTeamIds.Count == 0)
+            throw new UnauthorizedAccessException("An enabled Team leader routing is required for the Team review queue.");
+        if (scope == ReservationReviewScope.All && !access.IsAdmin)
+            throw new UnauthorizedAccessException("Admin role is required for the all-reservations review queue.");
+        if (!Enum.IsDefined(scope))
+            throw new ArgumentException("Review scope is invalid.", nameof(scope));
+    }
+
+    private static void EnsureOverdueScopeAllowed(ReviewAccess access, ReservationReviewScope scope)
+    {
+        if (scope == ReservationReviewScope.Team && access.LeaderTeamIds.Count == 0)
+            throw new UnauthorizedAccessException("An enabled Team leader routing is required for the Team overdue scope.");
+        if (scope == ReservationReviewScope.All && !access.IsAdmin)
+            throw new UnauthorizedAccessException("Admin role is required for the all-overdue scope.");
+        if (!Enum.IsDefined(scope))
+            throw new ArgumentException("Overdue scope is invalid.", nameof(scope));
+    }
+
+    private static void EnsureExtensionReviewScopeAllowed(
+        ReviewAccess access,
+        ReservationExtensionReviewScope scope)
+    {
+        if (scope == ReservationExtensionReviewScope.Team && access.LeaderTeamIds.Count == 0)
+            throw new UnauthorizedAccessException("An enabled Team leader routing is required for the Team extension queue.");
+        if (scope == ReservationExtensionReviewScope.All && !access.IsAdmin)
+            throw new UnauthorizedAccessException("Admin role is required for the all-extensions queue.");
+        if (!Enum.IsDefined(scope))
+            throw new ArgumentException("Extension review scope is invalid.", nameof(scope));
+    }
+
     private static string GetActorName(ClaimsPrincipal user)
     {
         var value = user.FindFirstValue("display_name")
@@ -1092,6 +1652,142 @@ public sealed class ReservationService : IReservationService
         string.IsNullOrWhiteSpace(value) ? throw new InvalidOperationException($"{name} is required.") : value.Trim();
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+
+    private static string DeviceLabel(Apparatus apparatus) =>
+        $"{(string.IsNullOrWhiteSpace(apparatus.ProductsId) ? apparatus.Id : apparatus.ProductsId)} / {apparatus.Name}";
+
+    private static bool IsEnvironmentReservation(Reservation reservation) =>
+        reservation.EquipmentGroupId.HasValue || reservation.TestExecutionProfileId.HasValue;
+
+    private static bool IsGroupEnvironmentReservation(Reservation reservation) =>
+        reservation.EquipmentGroupId.HasValue && !reservation.TestExecutionProfileId.HasValue;
+
+    private static bool IsWithinReviewScope(
+        Apparatus apparatus,
+        ReviewAccess access,
+        ReservationReviewScope scope) => scope switch
+        {
+            ReservationReviewScope.Custodian => !string.IsNullOrWhiteSpace(apparatus.CustodianAccount)
+                && string.Equals(apparatus.CustodianAccount.Trim(), access.Account, StringComparison.OrdinalIgnoreCase),
+            ReservationReviewScope.Team => apparatus.OwnerTeamOptionId.HasValue
+                && access.LeaderTeamIds.Contains(apparatus.OwnerTeamOptionId.Value),
+            ReservationReviewScope.All => access.IsAdmin,
+            _ => false
+        };
+
+    private static bool IsWithinExtensionReviewScope(
+        Apparatus apparatus,
+        ReviewAccess access,
+        ReservationExtensionReviewScope scope) => scope switch
+        {
+            ReservationExtensionReviewScope.Custodian => !string.IsNullOrWhiteSpace(apparatus.CustodianAccount)
+                && string.Equals(apparatus.CustodianAccount.Trim(), access.Account, StringComparison.OrdinalIgnoreCase),
+            ReservationExtensionReviewScope.Team => apparatus.OwnerTeamOptionId.HasValue
+                && access.LeaderTeamIds.Contains(apparatus.OwnerTeamOptionId.Value),
+            ReservationExtensionReviewScope.All => access.IsAdmin,
+            _ => false
+        };
+
+    private static bool CanViewReview(
+        Reservation reservation,
+        ReviewAccess access,
+        ReservationReviewScope scope)
+    {
+        if (!IsEnvironmentReservation(reservation))
+            return reservation.Items.Any(x => IsWithinReviewScope(x.Apparatus, access, scope));
+        return scope switch
+        {
+            ReservationReviewScope.Team => reservation.EquipmentGroup is not null
+                && access.LeaderTeamIds.Contains(reservation.EquipmentGroup.OwnerTeamOptionId),
+            ReservationReviewScope.All => access.IsAdmin,
+            _ => false
+        };
+    }
+
+    private static ReservationReviewEntryDto MapReviewEntry(
+        Reservation reservation,
+        ReviewAccess access,
+        ReservationReviewScope scope,
+        IReadOnlyDictionary<string, ApparatusCustodianProfile> custodianProfiles)
+    {
+        var detail = MapReviewDetail(reservation, access, scope, custodianProfiles);
+        return new ReservationReviewEntryDto
+        {
+            ReservationId = detail.Id,
+            ReservationNo = detail.ReservationNo,
+            ApplicantName = detail.ApplicantName,
+            ApplicantDepartment = detail.ApplicantDepartment,
+            Purpose = detail.Purpose,
+            StartTime = detail.StartTime,
+            EndTime = detail.EndTime,
+            CreatedAt = detail.CreatedAt,
+            Status = detail.Status,
+            Mode = detail.Mode,
+            TotalItemCount = detail.Items.Count,
+            ApparatusNames = detail.Items.Select(x => x.ApparatusName).ToList(),
+            EquipmentGroupId = detail.EquipmentGroupId,
+            EquipmentGroupName = detail.EquipmentGroupNameSnapshot,
+            OwnerTeamOptionId = detail.CurrentOwnerTeamOptionId,
+            OwnerTeamName = detail.CurrentOwnerTeamName,
+            CanApprove = detail.CanApprove,
+            CanReject = detail.CanReject
+        };
+    }
+
+    private static ReservationDetailDto MapReviewDetail(
+        Reservation reservation,
+        ReviewAccess access,
+        ReservationReviewScope scope,
+        IReadOnlyDictionary<string, ApparatusCustodianProfile> custodianProfiles)
+    {
+        var detail = MapDetail(reservation);
+        var extensionScope = (ReservationExtensionReviewScope)(int)scope;
+        detail.ExtensionRequests = reservation.ExtensionRequests.OrderByDescending(x => x.RequestedAt)
+            .Select(x => MapExtension(x, reservation, access, extensionScope, custodianProfiles)).ToList();
+        if (detail.Mode == ReservationMode.Direct)
+        {
+            detail.Items = reservation.Items.OrderBy(x => x.ApparatusId)
+                .Select(x => MapReviewItem(x, custodianProfiles)).ToList();
+            var directApparatus = reservation.Items.OrderBy(x => x.ApparatusId)
+                .Select(x => x.Apparatus)
+                .FirstOrDefault();
+            detail.CurrentOwnerTeamOptionId = directApparatus?.OwnerTeamOptionId;
+            detail.CurrentOwnerTeamName = directApparatus?.OwnerTeamOption?.Name;
+            var hasDirectScopeAccess = reservation.Items.Any(x => IsWithinReviewScope(x.Apparatus, access, scope));
+            detail.CanApprove = reservation.Status == ReservationStatus.Pending && hasDirectScopeAccess;
+            detail.CanReject = detail.CanApprove;
+            detail.ReviewResponsibility = "設備保管人、設備 Owner Team Leader 或 Admin（整張審核）";
+            return detail;
+        }
+
+        var group = reservation.EquipmentGroup;
+        detail.CurrentOwnerTeamOptionId = group?.OwnerTeamOptionId;
+        detail.CurrentOwnerTeamName = group?.OwnerTeamOption?.Name;
+        var hasScopeAccess = scope == ReservationReviewScope.All
+            ? access.IsAdmin
+            : scope == ReservationReviewScope.Team && group is not null
+                && access.LeaderTeamIds.Contains(group.OwnerTeamOptionId);
+        detail.CanApprove = reservation.Status == ReservationStatus.Pending && hasScopeAccess;
+        detail.CanReject = detail.CanApprove;
+        detail.ReviewResponsibility = string.IsNullOrWhiteSpace(detail.CurrentOwnerTeamName)
+            ? "Environment Group Owner Team Leader 或 Admin（整張審核）"
+            : $"{detail.CurrentOwnerTeamName} Team Leader 或 Admin（整張審核）";
+        return detail;
+    }
+
+    private static ReservationItemDto MapReviewItem(
+        ReservationItem item,
+        IReadOnlyDictionary<string, ApparatusCustodianProfile> custodianProfiles)
+    {
+        var dto = MapItem(item);
+        dto.CurrentCustodianAccount = Clean(item.Apparatus.CustodianAccount);
+        dto.CurrentCustodianName = Clean(ApparatusCustodianResolver.GetDisplayName(
+            custodianProfiles,
+            item.Apparatus.CustodianAccount));
+        dto.CurrentOwnerTeamOptionId = item.Apparatus.OwnerTeamOptionId;
+        dto.CurrentOwnerTeamName = item.Apparatus.OwnerTeamOption?.Name;
+        return dto;
+    }
 
     private static string FormatCapability(string? value) => string.IsNullOrWhiteSpace(value) ? string.Empty : $" / {value}";
 
@@ -1115,7 +1811,7 @@ public sealed class ReservationService : IReservationService
         StartTime = x.StartTime,
         EndTime = x.EndTime,
         Status = x.Status,
-        Mode = x.TestExecutionProfileId.HasValue ? ReservationMode.Environment : ReservationMode.Direct,
+        Mode = IsEnvironmentReservation(x) ? ReservationMode.Environment : ReservationMode.Direct,
         TestExecutionProfileId = x.TestExecutionProfileId,
         TestEnvironmentId = x.TestEnvironmentId,
         EquipmentGroupId = x.EquipmentGroupId,
@@ -1141,24 +1837,7 @@ public sealed class ReservationService : IReservationService
         ReturnedBy = x.ReturnedBy,
         IsOverdue = (x.Status == ReservationStatus.Approved || x.Status == ReservationStatus.Borrowed)
             && x.EndTime < DateTime.UtcNow,
-        Items = x.Items.OrderBy(i => i.ApparatusId).Select(i => new ReservationItemDto
-        {
-            Id = i.Id,
-            ApparatusId = i.ApparatusId,
-            ApparatusName = i.ApparatusName,
-            ProductsId = i.ProductsId,
-            Kind = i.Kind,
-            Brand = i.Brand,
-            Model = i.Model,
-            Number = i.Number,
-            Place = i.Place,
-            Custodian = i.Custodian,
-            CustodianDepartment = i.CustodianDepartment,
-            PriceUse = i.PriceUse,
-            EquipmentGroupRequirementId = i.EquipmentGroupRequirementId,
-            RequirementResourceTypeSnapshot = i.RequirementResourceTypeSnapshot,
-            RequirementCapabilityTagSnapshot = i.RequirementCapabilityTagSnapshot
-        }).ToList(),
+        Items = x.Items.OrderBy(i => i.ApparatusId).Select(MapItem).ToList(),
         ExtensionRequests = x.ExtensionRequests.OrderByDescending(e => e.RequestedAt)
             .Select(e => MapExtension(e, x)).ToList(),
         AuditEvents = x.AuditEvents.OrderBy(e => e.OccurredAt).ThenBy(e => e.Id)
@@ -1169,6 +1848,80 @@ public sealed class ReservationService : IReservationService
                 Reason = e.Reason, Details = e.Details
             }).ToList()
     };
+
+    private static ReservationItemDto MapItem(ReservationItem item) => new()
+    {
+        Id = item.Id,
+        ApparatusId = item.ApparatusId,
+        ApparatusName = item.ApparatusName,
+        ProductsId = item.ProductsId,
+        Kind = item.Kind,
+        Brand = item.Brand,
+        Model = item.Model,
+        Number = item.Number,
+        Place = item.Place,
+        Custodian = item.Custodian,
+        CustodianDepartment = item.CustodianDepartment,
+        PriceUse = item.PriceUse,
+        EquipmentGroupRequirementId = item.EquipmentGroupRequirementId,
+        RequirementResourceTypeSnapshot = item.RequirementResourceTypeSnapshot,
+        RequirementCapabilityTagSnapshot = item.RequirementCapabilityTagSnapshot
+    };
+
+    private static ReservationEnvironmentGroupDto MapEnvironmentGroup(EquipmentGroup group)
+    {
+        var devices = group.Devices.OrderByDescending(x => x.IsInEnvironment)
+            .ThenBy(x => x.Apparatus.ProductsId)
+            .ThenBy(x => x.Apparatus.Name)
+            .ToList();
+        var total = devices.Count;
+        var present = devices.Count(x => x.IsInEnvironment);
+        var completeness = EnvironmentGroupDeviceRules.GetCompletenessStatus(total, present);
+        var missingDevices = devices.Where(x => !x.IsInEnvironment).ToList();
+        var unavailableDevices = devices.Where(x => !ApparatusReservationRules.IsBookable(x.Apparatus)).ToList();
+        var blockingReasons = new List<string>();
+        if (completeness == EquipmentGroupCompletenessStatus.Unconfigured)
+            blockingReasons.Add("測試環境尚未設定設備。");
+        else if (completeness == EquipmentGroupCompletenessStatus.Incomplete)
+            blockingReasons.Add($"測試環境設備不齊全：{string.Join("、", missingDevices.Select(x => DeviceLabel(x.Apparatus)))}。");
+        if (unavailableDevices.Count != 0)
+            blockingReasons.Add($"設備目前狀態不可使用：{string.Join("、", unavailableDevices.Select(x => DeviceLabel(x.Apparatus)))}。");
+
+        return new ReservationEnvironmentGroupDto
+        {
+            Id = group.Id,
+            Code = group.Code,
+            Name = group.Name,
+            OwnerTeamOptionId = group.OwnerTeamOptionId,
+            OwnerTeamName = group.OwnerTeamOption?.Name ?? string.Empty,
+            Site = group.Site,
+            Status = group.Status,
+            TotalDeviceCount = total,
+            InEnvironmentDeviceCount = present,
+            CompletenessStatus = completeness,
+            MissingDevices = missingDevices.Select(x => new EquipmentGroupMissingDeviceDto
+            {
+                ApparatusId = x.ApparatusId,
+                ApparatusName = x.Apparatus.Name,
+                ProductsId = x.Apparatus.ProductsId
+            }).ToList(),
+            Devices = devices.Select(x => new ReservationEnvironmentGroupDeviceDto
+            {
+                ApparatusId = x.ApparatusId,
+                ProductsId = x.Apparatus.ProductsId,
+                Name = x.Apparatus.Name,
+                Kind = x.Apparatus.Kind,
+                Brand = x.Apparatus.Brand,
+                Model = x.Apparatus.Model,
+                ReservationStatus = x.Apparatus.ReservationStatus,
+                IsInEnvironment = x.IsInEnvironment
+            }).ToList(),
+            CanReserve = group.Status == EquipmentGroupStatus.Active
+                && completeness == EquipmentGroupCompletenessStatus.Complete
+                && unavailableDevices.Count == 0,
+            BlockingReasons = blockingReasons
+        };
+    }
 
     private void AddAudit(Reservation reservation, ReservationAuditEvent audit)
     {
@@ -1204,8 +1957,47 @@ public sealed class ReservationService : IReservationService
             ReviewedByAccount = x.ReviewedByAccount, ReviewedByName = x.ReviewedByName,
             RejectReason = x.RejectReason, ApplicantDepartment = reservation.ApplicantDepartment,
             ApplicantExtension = reservation.ApplicantExtension,
-            ApparatusNames = reservation.Items.OrderBy(i => i.ApparatusId).Select(i => i.ApparatusName).ToList()
+            ApparatusNames = reservation.Items.OrderBy(i => i.ApparatusId).Select(i => i.ApparatusName).ToList(),
+            Mode = IsEnvironmentReservation(reservation) ? ReservationMode.Environment : ReservationMode.Direct,
+            EquipmentGroupId = reservation.EquipmentGroupId,
+            EquipmentGroupName = reservation.EquipmentGroupNameSnapshot
         };
+
+    private static ReservationExtensionRequestDto MapExtension(
+        ReservationExtensionRequest extension,
+        Reservation reservation,
+        ReviewAccess access,
+        ReservationExtensionReviewScope scope,
+        IReadOnlyDictionary<string, ApparatusCustodianProfile> custodianProfiles)
+    {
+        var dto = MapExtension(extension, reservation);
+        if (dto.Mode == ReservationMode.Environment)
+        {
+            dto.OwnerTeamOptionId = reservation.EquipmentGroup?.OwnerTeamOptionId;
+            dto.OwnerTeamName = reservation.EquipmentGroup?.OwnerTeamOption?.Name;
+            var canReview = extension.Status == ReservationExtensionRequestStatus.Pending
+                && (access.IsAdmin || (scope == ReservationExtensionReviewScope.Team
+                    && reservation.EquipmentGroup is not null
+                    && access.LeaderTeamIds.Contains(reservation.EquipmentGroup.OwnerTeamOptionId)));
+            dto.CanApprove = canReview;
+            dto.CanReject = canReview;
+            return dto;
+        }
+
+        var apparatus = reservation.Items.SingleOrDefault()?.Apparatus;
+        if (apparatus is null) return dto;
+        dto.CustodianAccount = Clean(apparatus.CustodianAccount);
+        dto.CustodianName = Clean(ApparatusCustodianResolver.GetDisplayName(
+            custodianProfiles,
+            apparatus.CustodianAccount));
+        dto.OwnerTeamOptionId = apparatus.OwnerTeamOptionId;
+        dto.OwnerTeamName = apparatus.OwnerTeamOption?.Name;
+        var canReviewDirect = extension.Status == ReservationExtensionRequestStatus.Pending
+            && IsWithinExtensionReviewScope(apparatus, access, scope);
+        dto.CanApprove = canReviewDirect;
+        dto.CanReject = canReviewDirect;
+        return dto;
+    }
 
     private sealed record PreparedReservation(
         ReservationEnvironmentContext? EnvironmentContext,
@@ -1213,4 +2005,15 @@ public sealed class ReservationService : IReservationService
     {
         public string[] ApparatusIds => Items.Select(x => x.ApparatusId).OrderBy(x => x, StringComparer.Ordinal).ToArray();
     }
+
+    private sealed record ReviewAccess(
+        string Account,
+        string ActorName,
+        bool IsAdmin,
+        HashSet<Guid> LeaderTeamIds);
+
+    private sealed record TeamScopeContext(
+        List<ReservationTeamScopeOptionDto> Options,
+        Guid? SelectedTeamOptionId,
+        Guid[] TeamOptionIds);
 }

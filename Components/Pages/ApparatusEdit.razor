@@ -150,19 +150,8 @@
         </div>
 
         <div class="form-row">
-            <label>保管部門</label>
-            <select @bind="_form.CustodianDepartment">
-                <option value="">請選擇保管部門</option>
-                @foreach (var option in _departmentOptions)
-                {
-                    <option value="@option.Value">@option.Name</option>
-                }
-            </select>
-        </div>
-
-        <div class="form-row">
-            <label>設備所屬 Team</label>
-            <select @bind="_form.OwnerTeamOptionId">
+            <label>設備所屬 Team *</label>
+            <select required @bind="_form.OwnerTeamOptionId">
                 <option value="">請選擇設備所屬 Team</option>
                 @foreach (var team in _ownershipOptions.Teams)
                 {
@@ -172,19 +161,14 @@
         </div>
 
         <div class="form-row">
-            <label>保管人帳號</label>
-            <select value="@_form.CustodianAccount" @onchange="OnCustodianAccountChanged">
-                <option value="">請選擇保管人帳號</option>
+            <label>保管人 *</label>
+            <select required value="@_form.CustodianAccount" @onchange="OnCustodianAccountChanged">
+                <option value="">請選擇保管人</option>
                 @foreach (var user in _ownershipOptions.Users)
                 {
-                    <option value="@user.Account">@user.DisplayName (@user.Account)</option>
+                    <option value="@user.Account">@user.DisplayName</option>
                 }
             </select>
-        </div>
-
-        <div class="form-row">
-            <label>保管人 *</label>
-            <input @bind="_form.Custodian" />
         </div>
 
         <div class="form-row">
@@ -428,7 +412,6 @@
     private List<ApparatusFileDto> _files = new();
 
     private List<SystemOptionDto> _apparatusKindOptions = new();
-    private List<SystemOptionDto> _departmentOptions = new();
     private ApparatusOwnershipOptionsDto _ownershipOptions = new();
 
     protected override void OnParametersSet()
@@ -466,7 +449,6 @@
         _selectedFiles = new();
         _files = new();
         _apparatusKindOptions = new();
-        _departmentOptions = new();
         _ownershipOptions = new();
         _resourceCatalog = new();
         _resourceMappings = new();
@@ -511,8 +493,6 @@
                     YearsUse = detail.YearsUse,
                     DaysUse = detail.DaysUse,
                     PriceUse = detail.PriceUse,
-                    CustodianDepartment = detail.CustodianDepartment,
-                    Custodian = detail.Custodian,
                     CustodianAccount = detail.CustodianAccount,
                     OwnerTeamOptionId = detail.OwnerTeamOptionId,
                     Agent = detail.Agent,
@@ -531,9 +511,7 @@
                 }
 
                 EnsureCurrentOption(_apparatusKindOptions, _form.Kind);
-                EnsureCurrentOption(_departmentOptions, _form.CustodianDepartment);
-
-                Console.WriteLine($"[ApparatusEdit] Edit load done. id={_form.Id}, kind={_form.Kind}, dept={_form.CustodianDepartment}");
+                Console.WriteLine($"[ApparatusEdit] Edit load done. id={_form.Id}, kind={_form.Kind}");
             }
 
             _hasCreatedRecord = false;
@@ -620,10 +598,15 @@
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_form.Custodian))
+        if (IsEquipment && string.IsNullOrWhiteSpace(_form.CustodianAccount))
         {
-            _message = "保管人不可空白。";
-            Console.WriteLine("[ApparatusEdit] Save blocked. Custodian is empty.");
+            _message = "請選擇保管人。";
+            return;
+        }
+
+        if (IsEquipment && !_form.OwnerTeamOptionId.HasValue)
+        {
+            _message = "請選擇設備所屬 Team。";
             return;
         }
 
@@ -695,7 +678,7 @@
 
         if (string.IsNullOrWhiteSpace(_form.Name) ||
             string.IsNullOrWhiteSpace(_form.Kind) ||
-            string.IsNullOrWhiteSpace(_form.Custodian))
+            string.IsNullOrWhiteSpace(_form.CustodianAccount))
         {
             _message = "請先填寫名稱、類別、保管人，再上傳檔案。";
             Console.WriteLine("[ApparatusEdit] Upload blocked. Required field missing.");
@@ -802,14 +785,12 @@
         Console.WriteLine("[ApparatusEdit] LoadOptions start.");
 
         _apparatusKindOptions = await LoadOptionCategoryAsync("ApparatusKind");
-        _departmentOptions = await LoadOptionCategoryAsync("Department");
         _ownershipOptions = await Api.GetAsync<ApparatusOwnershipOptionsDto>(
             "/api/assets/ownership-options");
 
         EnsureCurrentOption(_apparatusKindOptions, _form.Kind);
-        EnsureCurrentOption(_departmentOptions, _form.CustodianDepartment);
 
-        Console.WriteLine($"[ApparatusEdit] LoadOptions done. kind={_apparatusKindOptions.Count}, dept={_departmentOptions.Count}");
+        Console.WriteLine($"[ApparatusEdit] LoadOptions done. kind={_apparatusKindOptions.Count}, teams={_ownershipOptions.Teams.Count}, users={_ownershipOptions.Users.Count}");
     }
 
     private async Task LoadEnvironmentAssignmentAsync()
@@ -851,10 +832,6 @@
     {
         var account = args.Value?.ToString()?.Trim();
         _form.CustodianAccount = string.IsNullOrWhiteSpace(account) ? null : account.ToLowerInvariant();
-        var selected = _ownershipOptions.Users.FirstOrDefault(x =>
-            string.Equals(x.Account, _form.CustodianAccount, StringComparison.OrdinalIgnoreCase));
-        if (selected is not null)
-            _form.Custodian = selected.DisplayName;
     }
 
     private async Task<List<SystemOptionDto>> LoadOptionCategoryAsync(string category)
@@ -1078,8 +1055,6 @@
         public string? YearsUse { get; set; }
         public string? DaysUse { get; set; }
         public string? PriceUse { get; set; }
-        public string? CustodianDepartment { get; set; }
-        public string? Custodian { get; set; }
         public string? CustodianAccount { get; set; }
         public Guid? OwnerTeamOptionId { get; set; }
         public string? Agent { get; set; }

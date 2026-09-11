@@ -14,6 +14,10 @@ public static class ReservationAuditActions
     public const string ExtensionApproved = "ExtensionApproved";
     public const string ExtensionRejected = "ExtensionRejected";
     public const string ExtensionCancelled = "ExtensionCancelled";
+    public const string ReservationItemApproved = "ReservationItemApproved";
+    public const string ReservationItemRejected = "ReservationItemRejected";
+    public const string ReservationExtensionItemApproved = "ReservationExtensionItemApproved";
+    public const string ReservationExtensionItemRejected = "ReservationExtensionItemRejected";
 }
 
 public sealed class ReservationAuditEvent

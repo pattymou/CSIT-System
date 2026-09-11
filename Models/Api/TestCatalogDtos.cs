@@ -40,6 +40,7 @@ public class EquipmentGroupDto : EquipmentGroupUpsertRequest
     public int TotalDeviceCount { get; set; }
     public int InEnvironmentDeviceCount { get; set; }
     public EquipmentGroupCompletenessStatus CompletenessStatus { get; set; }
+    public EnvironmentReadinessDto Readiness { get; set; } = new();
     public List<EquipmentGroupMissingDeviceDto> MissingDevices { get; set; } = new();
     public List<EquipmentGroupRequirementDto> Requirements { get; set; } = new();
 }

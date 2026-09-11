@@ -10,6 +10,10 @@
     else if (!string.IsNullOrWhiteSpace(_message)) { <div class="apparatus-calendar-empty error-text">@_message</div> }
     else
     {
+        @if (_items.Count == 0)
+        {
+            <div class="apparatus-calendar-empty">此月份目前沒有預約</div>
+        }
         <div class="apparatus-calendar-scroll">
             <div class="apparatus-calendar-grid">
                 <div class="apparatus-weekdays">@foreach (var day in Weekdays) { <div>@day</div> }</div>
@@ -34,6 +38,10 @@
     {
         <div class="apparatus-calendar-tooltip" style="left:@(_tooltipX)px;top:@(_tooltipY)px">
             <strong>@_hovered.ReservationNo</strong><span>@_hovered.ApplicantDepartment</span><span>@_hovered.ApplicantName　#@ReservationUi.Display(_hovered.ApplicantExtension)</span><span><LocalDateTime Value="_hovered.StartTime" /> ～ <LocalDateTime Value="_hovered.EndTime" /></span><span>@StatusText(_hovered.Status)</span><span>@ReservationUi.Display(_hovered.Purpose)</span>
+            @if (_hovered.RelatedDeviceCount > 0)
+            {
+                <span>預約方式：@ModeText(_hovered.Mode)</span><span>涉及設備：@_hovered.RelatedDeviceCount 台</span><span>@RelatedDevicesText(_hovered)</span>
+            }
         </div>
     }
 </div>
@@ -44,7 +52,8 @@
 </style>
 
 @code {
-    [Parameter, EditorRequired] public string ApparatusId { get; set; } = string.Empty;
+    [Parameter] public string? ApparatusId { get; set; }
+    [Parameter] public Guid? EnvironmentGroupId { get; set; }
     [Parameter] public bool IncludeHistory { get; set; }
     [Parameter] public EventCallback<ReservationOverviewDto> EventSelected { get; set; }
     private static readonly string[] Weekdays = ["一", "二", "三", "四", "五", "六", "日"];
@@ -52,22 +61,32 @@
     private List<ReservationOverviewDto> _items = [];
     private bool _loading;
     private string? _message;
-    private string _loadedApparatusId = string.Empty;
+    private string _loadedTargetKey = string.Empty;
     private bool _loadedHistory;
     private ReservationOverviewDto? _hovered;
     private double _tooltipX, _tooltipY;
     private IEnumerable<DateTime> Weeks => Enumerable.Range(0, 6).Select(x => CalendarStart.AddDays(x * 7));
     private DateTime CalendarStart { get { var offset = ((int)_month.DayOfWeek + 6) % 7; return _month.AddDays(-offset); } }
+    private string TargetKey => EnvironmentGroupId.HasValue
+        ? $"environment:{EnvironmentGroupId.Value}"
+        : string.IsNullOrWhiteSpace(ApparatusId) ? string.Empty : $"apparatus:{ApparatusId.Trim()}";
     protected override async Task OnParametersSetAsync()
     {
-        if (!string.Equals(_loadedApparatusId, ApparatusId, StringComparison.Ordinal) || _loadedHistory != IncludeHistory)
-        { _loadedApparatusId = ApparatusId; _loadedHistory = IncludeHistory; _month = new(DateTime.Today.Year, DateTime.Today.Month, 1); await LoadAsync(); }
+        var targetKey = TargetKey;
+        if (!string.Equals(_loadedTargetKey, targetKey, StringComparison.Ordinal) || _loadedHistory != IncludeHistory)
+        { _loadedTargetKey = targetKey; _loadedHistory = IncludeHistory; _month = new(DateTime.Today.Year, DateTime.Today.Month, 1); await LoadAsync(); }
     }
     private async Task LoadAsync()
     {
-        if (string.IsNullOrWhiteSpace(ApparatusId)) return;
+        if (string.IsNullOrWhiteSpace(TargetKey)) { _items = []; return; }
         _loading = true; _message = null; _hovered = null;
-        try { var from = DateTime.SpecifyKind(CalendarStart, DateTimeKind.Utc); _items = (await Api.OverviewAsync(new ReservationOverviewQuery { From = from, To = from.AddDays(42), ApparatusId = ApparatusId, IncludeHistory = IncludeHistory })).GroupBy(x => x.ReservationId).Select(x => x.First()).ToList(); }
+        try
+        {
+            var from = DateTime.SpecifyKind(CalendarStart, DateTimeKind.Utc);
+            _items = EnvironmentGroupId.HasValue
+                ? await Api.GetEnvironmentGroupCalendarAsync(EnvironmentGroupId.Value, from, from.AddDays(42), IncludeHistory)
+                : (await Api.OverviewAsync(new ReservationOverviewQuery { From = from, To = from.AddDays(42), ApparatusId = ApparatusId, IncludeHistory = IncludeHistory })).GroupBy(x => x.ReservationId).Select(x => x.First()).ToList();
+        }
         catch (Exception ex) { _items = []; _message = ex.Message; }
         finally { _loading = false; }
     }
@@ -83,6 +102,8 @@
     private void ShowTooltip(ReservationOverviewDto item, MouseEventArgs e) { _hovered = item; _tooltipX = Math.Min(e.ClientX + 14, Math.Max(12, e.ClientX)); _tooltipY = e.ClientY + 14; }
     private void HideTooltip() => _hovered = null;
     private static string BarText(ReservationOverviewDto item) => string.IsNullOrWhiteSpace(item.ApplicantExtension) ? $"{item.ApplicantDepartment}｜{item.ApplicantName}" : $"{item.ApplicantDepartment}｜{item.ApplicantName}｜#{item.ApplicantExtension}";
+    private static string ModeText(ReservationMode mode) => mode == ReservationMode.Environment ? "依測試環境配置" : "自行選擇設備";
+    private static string RelatedDevicesText(ReservationOverviewDto item) => string.Join("、", item.Apparatus.Select(x => string.IsNullOrWhiteSpace(x.ProductsId) ? x.Name : $"{x.ProductsId} / {x.Name}"));
     private static string StatusText(ReservationStatus status) => status switch { ReservationStatus.Draft => "草稿", ReservationStatus.Pending => "待審核", ReservationStatus.Approved => "已核准", ReservationStatus.Borrowed => "借用中", ReservationStatus.Returned => "已歸還", ReservationStatus.Rejected => "已拒絕", ReservationStatus.Cancelled => "已取消", _ => status.ToString() };
     private sealed record BarSegment(ReservationOverviewDto Item, int Column, int Span);
 }

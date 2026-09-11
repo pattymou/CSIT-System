@@ -1,0 +1,47 @@
+@if (AlwaysShow || TeamOptions.Count > 1)
+{
+    <label class="team-scope-filter">
+        <span>Team 篩選</span>
+        <select value="@SelectedValue" disabled="@Disabled" @onchange="OnChangedAsync">
+            <option value="">全部</option>
+            @foreach (var team in TeamOptions)
+            {
+                <option value="@team.TeamOptionId">@team.DisplayName</option>
+            }
+        </select>
+    </label>
+}
+
+<style>
+    .team-scope-filter { display:flex; align-items:center; gap:8px; color:#94a3b8; font-size:.8rem; font-weight:700; white-space:nowrap; }
+    .team-scope-filter select { min-width:210px; padding:8px 32px 8px 10px; }
+    @@media(max-width:720px) {
+        .team-scope-filter { align-items:stretch; flex-direction:column; white-space:normal; }
+        .team-scope-filter select { width:100%; min-width:0; }
+    }
+</style>
+
+@code {
+    [Parameter]
+    public IReadOnlyList<ReservationTeamScopeOptionDto> TeamOptions { get; set; } = [];
+
+    [Parameter]
+    public Guid? SelectedTeamOptionId { get; set; }
+
+    [Parameter]
+    public bool AlwaysShow { get; set; }
+
+    [Parameter]
+    public bool Disabled { get; set; }
+
+    [Parameter]
+    public EventCallback<Guid?> SelectionChanged { get; set; }
+
+    private string SelectedValue => SelectedTeamOptionId?.ToString("D") ?? string.Empty;
+
+    private async Task OnChangedAsync(ChangeEventArgs args)
+    {
+        var value = args.Value?.ToString();
+        await SelectionChanged.InvokeAsync(Guid.TryParse(value, out var id) ? id : null);
+    }
+}

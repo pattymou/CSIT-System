@@ -1,15 +1,19 @@
 ﻿@using SIT.DepartmentSystem.Web.Models.Api
 @using SIT.DepartmentSystem.Web.Services.Interfaces
 @using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.AspNetCore.Authorization
 @inject IMenuManagementService MenuService
 @inject AuthenticationStateProvider AuthProvider
+@inject IAuthorizationService AuthorizationService
 
 <div class="brand">
     <div class="brand-title">SIT System</div>
 </div>
 
 <div class="nav-scroll">
-    @foreach (var block in _sections.OrderBy(x => x.SortOrder))
+    @foreach (var block in _sections
+        .Where(CanDisplaySection)
+        .OrderBy(x => x.SortOrder))
     {
         <div class="nav-section">
             <div class="nav-section-title">@block.Icon @block.Name</div>
@@ -17,6 +21,8 @@
             @foreach (var item in _items
                          .Where(x => x.SectionId == block.Id)
                          .Where(x => x.IsEnabled)
+                         .Where(x => !x.AdminOnly || _isAdmin
+                             || (IsAdministrationSection(block) && _canAccessAdministration))
                          .OrderBy(x => x.SortOrder)
                          .ThenBy(x => x.Title))
             {
@@ -31,6 +37,15 @@
 @code {
     private List<MenuSectionDto> _sections = [];
     private List<MenuItemDto> _items = [];
+    private bool _isAdmin;
+    private bool _canAccessAdministration;
+
+    private bool CanDisplaySection(MenuSectionDto section) =>
+        !IsAdministrationSection(section) || _canAccessAdministration;
+
+    private static bool IsAdministrationSection(MenuSectionDto section) =>
+        string.Equals(section.Code, "administration", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(section.Name, "ADMINISTRATION", StringComparison.OrdinalIgnoreCase);
 
     private static string DisplayTitle(MenuItemDto item) =>
         string.Equals(item.RoutePath, "/reservation-review", StringComparison.OrdinalIgnoreCase)
@@ -44,6 +59,11 @@
 
     protected override async Task OnInitializedAsync()
     {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        _isAdmin = auth.User.IsInRole("Admin");
+        _canAccessAdministration = (await AuthorizationService.AuthorizeAsync(
+            auth.User,
+            SystemAuthorization.Policies.Administration)).Succeeded;
 
         _sections = (await MenuService.GetSectionsAsync())
             .Where(x => x.IsEnabled)
