@@ -31,7 +31,7 @@ public class ModuleTaskFilesController : ControllerBase
             await _fileService.UploadTaskFilesAsync(
                 taskId,
                 files.ToList(),
-                uploadEmp: "SYSTEM");
+                uploadEmp: GetUploadEmp());
 
             return Ok("上傳成功");
         }
@@ -64,7 +64,7 @@ public class ModuleTaskFilesController : ControllerBase
                 caseId,
                 taskNo,
                 files.ToList(),
-                uploadEmp: "SYSTEM");
+                uploadEmp: GetUploadEmp());
 
             return Ok("上傳成功");
         }
@@ -96,7 +96,7 @@ public class ModuleTaskFilesController : ControllerBase
             await _fileService.UploadTaskReportAsync(
                 taskId,
                 files.ToList(),
-                uploadEmp: "SYSTEM");
+                uploadEmp: GetUploadEmp());
 
             return Ok("測試報告上傳成功");
         }
@@ -122,7 +122,7 @@ public class ModuleTaskFilesController : ControllerBase
                 caseId,
                 taskNo,
                 files.ToList(),
-                uploadEmp: "SYSTEM");
+                uploadEmp: GetUploadEmp());
 
             return Ok("測試報告上傳成功");
         }
@@ -131,5 +131,11 @@ public class ModuleTaskFilesController : ControllerBase
             Console.WriteLine($"[ModuleTaskFilesController] UploadTaskReportsByTaskNo failed: {ex}");
             return StatusCode(500, ex.Message);
         }
+    }
+
+    private string GetUploadEmp()
+    {
+        var name = User?.Identity?.Name;
+        return string.IsNullOrWhiteSpace(name) ? "System" : name;
     }
 }

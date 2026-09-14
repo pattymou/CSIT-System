@@ -49,6 +49,8 @@ public class RawDataLatestPackageRequest
 
     public object Metadata { get; set; } = new();
 
+    public object? KmManifest { get; set; }
+
     public List<RawDataLatestPackageFile> Files { get; set; } = new();
 }
 
