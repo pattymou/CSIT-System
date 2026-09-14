@@ -17,7 +17,8 @@ public class AdAuthenticationService(IConfiguration configuration, IHostEnvironm
         var container = configuration["Ad:Container"];
         var developmentUser = ValidateDevelopmentCredentials(username, password);
         var stagingUser = ValidateStagingCredentials(username, password);
-        var localUser = developmentUser ?? stagingUser;
+        var stagingAdminUser = ValidateStagingAdminCredentials(username, password);
+        var localUser = developmentUser ?? stagingUser ?? stagingAdminUser;
         var authenticatedByLocalAuth = localUser is not null;
         var ok = authenticatedByLocalAuth;
 
@@ -183,6 +184,37 @@ public class AdAuthenticationService(IConfiguration configuration, IHostEnvironm
             Email = $"{account}@staging.local",
             Department = "CSIT",
             IsAdmin = false,
+            AccessScope = SystemAuthorization.AccessScopes.CsitStaff
+        };
+    }
+
+    private DevelopmentUser? ValidateStagingAdminCredentials(string username, string password)
+    {
+        if (!environment.IsStaging())
+        {
+            return null;
+        }
+
+        var stagingUsername = configuration["StagingAdminAuth:Username"];
+        var stagingPassword = configuration["StagingAdminAuth:Password"];
+
+        if (string.IsNullOrWhiteSpace(stagingUsername)
+            || string.IsNullOrEmpty(stagingPassword)
+            || !username.Equals(stagingUsername, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(password, stagingPassword, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var account = stagingUsername.Trim().ToLowerInvariant();
+        return new DevelopmentUser
+        {
+            Username = account,
+            Password = stagingPassword,
+            DisplayName = ValueOrDefault(configuration["StagingAdminAuth:DisplayName"], account),
+            Email = $"{account}@staging.local",
+            Department = "CSIT",
+            IsAdmin = true,
             AccessScope = SystemAuthorization.AccessScopes.CsitStaff
         };
     }
