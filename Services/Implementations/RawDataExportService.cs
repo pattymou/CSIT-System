@@ -223,6 +223,14 @@ public class RawDataExportService : IRawDataExportService
 
             await WriteJsonAsync(rawJsonPath, rawObject);
 
+            if (string.Equals(request.SourceType, "ThreeLevelProject", StringComparison.OrdinalIgnoreCase) &&
+                request.KmManifest != null)
+            {
+                var kmManifestPath = Path.Combine(targetFolder, "km-manifest.json");
+                await WriteJsonAsync(kmManifestPath, request.KmManifest);
+                Console.WriteLine($"[RawDataExportService] KM manifest written: {kmManifestPath}");
+            }
+
             Console.WriteLine($"[RawDataExportService] Latest package export success. folder={targetFolder}, files={exportedFiles.Count}");
 
             return new RawDataExportResult

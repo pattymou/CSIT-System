@@ -7,7 +7,6 @@ using SIT.DepartmentSystem.Web.Services.Interfaces;
 namespace SIT.DepartmentSystem.Web.Controllers;
 
 [ApiController]
-[Authorize(Policy = SystemAuthorization.Policies.Administration)]
 [Route("api/system-options")]
 public class SystemOptionsController : ControllerBase
 {
@@ -19,6 +18,7 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpGet]
+    [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<IActionResult> GetAll([FromQuery] string? category)
     {
         try
@@ -34,6 +34,7 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpGet("category/{category}")]
+    [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
     public async Task<IActionResult> GetByCategory(string category)
     {
         try
@@ -49,12 +50,14 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpGet("team-routings")]
+    [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<ActionResult<List<TeamRoutingDto>>> GetTeamRoutings(CancellationToken cancellationToken)
     {
         return Ok(await _service.GetTeamRoutingsAsync(cancellationToken));
     }
 
     [HttpPost("team-routings")]
+    [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<IActionResult> CreateTeamRouting(
         [FromBody] TeamRoutingUpsertRequest request,
         CancellationToken cancellationToken)
@@ -71,6 +74,7 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpPut("team-routings/{id:guid}")]
+    [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<IActionResult> UpdateTeamRouting(
         Guid id,
         [FromBody] TeamRoutingUpsertRequest request,
@@ -89,6 +93,7 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpPost]
+    [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<IActionResult> Create([FromBody] SystemOptionUpsertRequest request)
     {
         try
@@ -104,6 +109,7 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<IActionResult> Update(Guid id, [FromBody] SystemOptionUpsertRequest request)
     {
         try
@@ -119,6 +125,7 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<IActionResult> Delete(Guid id)
     {
         try

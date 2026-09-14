@@ -632,6 +632,81 @@ public class CaseFileService : ICaseFileService
             }).ToList()
         };
 
+        var rawDataNasRoot = GetRawDataRootPath();
+        var kmManifest = new
+        {
+            schema = "CSIT.KM.ProjectManifest",
+            schemaVersion = "1.0",
+            generatedAt = DateTime.UtcNow,
+            source = new
+            {
+                system = "CSIT",
+                type = "ThreeLevelProject",
+                moduleCode,
+                entityId = record.Id.ToString()
+            },
+            project = new
+            {
+                id = record.Id,
+                moduleId = record.ModuleId,
+                moduleCode,
+                recordNo = record.RecordNo,
+                name = record.Name,
+                customer = record.Customer,
+                status = record.Status,
+                createdAt = record.CreatedAt,
+                updatedAt = record.UpdatedAt,
+                cases = cases.Select(c => new
+                {
+                    id = c.Id,
+                    recordId = c.RecordId,
+                    caseNo = c.CaseNo,
+                    name = c.Name,
+                    status = c.Status,
+                    createdAt = c.CreatedAt,
+                    updatedAt = c.UpdatedAt,
+                    files = allFiles
+                        .Where(f =>
+                            f.CaseId == c.Id &&
+                            f.TaskId == null &&
+                            string.IsNullOrWhiteSpace(f.TaskNo) &&
+                            IsUnderFolder(Path.Combine(f.FilePath, f.FileName), projectFolder))
+                        .Select(f => ToKmFileObject(f, rawDataNasRoot, "Attachment"))
+                        .ToList(),
+                    tasks = tasks
+                        .Where(t => t.CaseId == c.Id)
+                        .Select(t => new
+                        {
+                            id = t.Id,
+                            caseId = t.CaseId,
+                            taskNo = t.TaskNo,
+                            name = t.Name,
+                            assignEngineer = t.AssignEngineer,
+                            status = t.Status,
+                            result = t.Result,
+                            progress = t.Progress,
+                            startDate = t.StartDate,
+                            expectedEndDate = t.ExpectedEndDate,
+                            createdAt = t.CreatedAt,
+                            updatedAt = t.UpdatedAt,
+                            files = allFiles
+                                .Where(f =>
+                                    f.TaskId == t.Id &&
+                                    IsUnderFolder(Path.Combine(f.FilePath, f.FileName), projectFolder))
+                                .Select(f => ToKmFileObject(f, rawDataNasRoot, "Attachment"))
+                                .ToList(),
+                            testReports = allFiles
+                                .Where(f =>
+                                    f.TaskId == t.Id &&
+                                    !IsUnderFolder(Path.Combine(f.FilePath, f.FileName), projectFolder))
+                                .Select(f => ToKmFileObject(f, rawDataNasRoot, "TestReport"))
+                                .ToList()
+                        })
+                        .ToList()
+                }).ToList()
+            }
+        };
+
         var result = await _rawDataExportService.ExportLatestPackageAsync(new RawDataLatestPackageRequest
         {
             SourceSystem = "CSIT",
@@ -640,6 +715,7 @@ public class CaseFileService : ICaseFileService
             EntityId = recordId.ToString(),
             LocalRootFolder = projectFolder,
             Metadata = metadata,
+            KmManifest = kmManifest,
             Files = projectFilesForMirror
         });
 
@@ -697,6 +773,40 @@ public class CaseFileService : ICaseFileService
             localFilePath = localFullPath,
             nasFolder = Path.GetDirectoryName(nasFilePath),
             nasFilePath
+        };
+    }
+
+    private object ToKmFileObject(ModuleCaseFile file, string rawDataNasRoot, string fileKind)
+    {
+        var localFullPath = Path.Combine(file.FilePath, file.FileName);
+        var nasFilePath = BuildNasFilePathByLocalPath(localFullPath);
+        var relativePath = Path.GetRelativePath(rawDataNasRoot, nasFilePath);
+
+        if (Path.IsPathRooted(relativePath) ||
+            string.Equals(relativePath, "..", StringComparison.Ordinal) ||
+            relativePath.StartsWith($"..{Path.DirectorySeparatorChar}", StringComparison.Ordinal) ||
+            relativePath.StartsWith($"..{Path.AltDirectorySeparatorChar}", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException($"KM manifest 檔案路徑不在 RawData NAS Root 內：{file.Id}");
+        }
+
+        relativePath = relativePath
+            .Replace(Path.DirectorySeparatorChar, '/')
+            .Replace(Path.AltDirectorySeparatorChar, '/');
+
+        return new
+        {
+            id = file.Id,
+            recordId = file.RecordId,
+            caseId = file.CaseId,
+            taskId = file.TaskId,
+            fileName = file.FileName,
+            fileKind,
+            contentType = file.ContentType,
+            fileSize = file.FileSize,
+            uploadedBy = file.UploadEmp,
+            createdAt = file.CreatedAt,
+            relativePath
         };
     }
 
