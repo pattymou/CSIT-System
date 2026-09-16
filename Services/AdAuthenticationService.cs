@@ -164,6 +164,43 @@ public class AdAuthenticationService(IConfiguration configuration, IHostEnvironm
             return null;
         }
 
+        var configuredUsers = configuration
+            .GetSection("StagingAuth:Users")
+            .GetChildren()
+            .Select(section => new DevelopmentUser
+            {
+                Username = section["Username"] ?? string.Empty,
+                Password = section["Password"] ?? string.Empty,
+                DisplayName = section["DisplayName"] ?? string.Empty,
+                Email = section["Email"] ?? string.Empty,
+                Department = section["Department"] ?? string.Empty,
+                IsAdmin = bool.TryParse(section["IsAdmin"], out var isAdmin) && isAdmin,
+                AccessScope = section["AccessScope"] ?? string.Empty
+            });
+
+        foreach (var configuredUser in configuredUsers)
+        {
+            if (string.IsNullOrWhiteSpace(configuredUser.Username)
+                || string.IsNullOrEmpty(configuredUser.Password)
+                || !username.Equals(configuredUser.Username, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(password, configuredUser.Password, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var configuredAccount = configuredUser.Username.Trim().ToLowerInvariant();
+            return new DevelopmentUser
+            {
+                Username = configuredAccount,
+                Password = configuredUser.Password,
+                DisplayName = ValueOrDefault(configuredUser.DisplayName, configuredAccount),
+                Email = ValueOrDefault(configuredUser.Email, $"{configuredAccount}@staging.local"),
+                Department = ValueOrDefault(configuredUser.Department, "CSIT"),
+                IsAdmin = configuredUser.IsAdmin,
+                AccessScope = configuredUser.AccessScope
+            };
+        }
+
         var stagingUsername = configuration["StagingAuth:Username"];
         var stagingPassword = configuration["StagingAuth:Password"];
 
@@ -245,7 +282,7 @@ public class AdAuthenticationService(IConfiguration configuration, IHostEnvironm
         }
 
         throw new InvalidOperationException(
-            $"DevAuth AccessScope for '{developmentUser.Username}' must be RdApplicant or CsitStaff.");
+            $"Local authentication AccessScope for '{developmentUser.Username}' must be RdApplicant or CsitStaff.");
     }
 
     private static string ValueOrDefault(string? value, string fallback) =>
