@@ -16,10 +16,13 @@ public class AdAuthenticationService(IConfiguration configuration, IHostEnvironm
         var domain = configuration["Ad:Domain"];
         var container = configuration["Ad:Container"];
         var developmentUser = ValidateDevelopmentCredentials(username, password);
-        var authenticatedByDevAuth = developmentUser is not null;
-        var ok = authenticatedByDevAuth;
+        var stagingUser = ValidateStagingCredentials(username, password);
+        var stagingAdminUser = ValidateStagingAdminCredentials(username, password);
+        var localUser = developmentUser ?? stagingUser ?? stagingAdminUser;
+        var authenticatedByLocalAuth = localUser is not null;
+        var ok = authenticatedByLocalAuth;
 
-        if (!authenticatedByDevAuth)
+        if (!authenticatedByLocalAuth)
         {
             try
             {
@@ -37,7 +40,7 @@ public class AdAuthenticationService(IConfiguration configuration, IHostEnvironm
 
         if (!ok) return null;
 
-        var account = developmentUser?.Username ?? username.ToLowerInvariant();
+        var account = localUser?.Username ?? username.ToLowerInvariant();
         var user = await db.Users.FirstOrDefaultAsync(x => x.Account == account);
 
         if (user is null)
@@ -45,25 +48,25 @@ public class AdAuthenticationService(IConfiguration configuration, IHostEnvironm
             user = new AppUser
             {
                 Account = account,
-                DisplayName = developmentUser?.DisplayName ?? username,
-                Department = developmentUser?.Department ?? "DA40",
-                Email = developmentUser?.Email ?? $"{account}@example.com",
-                IsAdmin = developmentUser?.IsAdmin ?? false
+                DisplayName = localUser?.DisplayName ?? username,
+                Department = localUser?.Department ?? "DA40",
+                Email = localUser?.Email ?? $"{account}@example.com",
+                IsAdmin = localUser?.IsAdmin ?? false
             };
 
             db.Users.Add(user);
             await db.SaveChangesAsync();
         }
-        else if (developmentUser is not null)
+        else if (localUser is not null)
         {
-            user.DisplayName = developmentUser.DisplayName;
-            user.Department = developmentUser.Department;
-            user.Email = developmentUser.Email;
-            user.IsAdmin = developmentUser.IsAdmin;
+            user.DisplayName = localUser.DisplayName;
+            user.Department = localUser.Department;
+            user.Email = localUser.Email;
+            user.IsAdmin = localUser.IsAdmin;
             await db.SaveChangesAsync();
         }
 
-        var accessScope = ResolveAccessScope(developmentUser, user);
+        var accessScope = ResolveAccessScope(localUser, user);
 
         var claims = new List<Claim>
         {
@@ -148,6 +151,68 @@ public class AdAuthenticationService(IConfiguration configuration, IHostEnvironm
             Password = devPassword,
             DisplayName = "Development Admin",
             Email = $"{legacyAccount}@dev.local",
+            Department = "CSIT",
+            IsAdmin = true,
+            AccessScope = SystemAuthorization.AccessScopes.CsitStaff
+        };
+    }
+
+    private DevelopmentUser? ValidateStagingCredentials(string username, string password)
+    {
+        if (!environment.IsStaging())
+        {
+            return null;
+        }
+
+        var stagingUsername = configuration["StagingAuth:Username"];
+        var stagingPassword = configuration["StagingAuth:Password"];
+
+        if (string.IsNullOrWhiteSpace(stagingUsername)
+            || string.IsNullOrEmpty(stagingPassword)
+            || !username.Equals(stagingUsername, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(password, stagingPassword, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var account = stagingUsername.Trim().ToLowerInvariant();
+        return new DevelopmentUser
+        {
+            Username = account,
+            Password = stagingPassword,
+            DisplayName = ValueOrDefault(configuration["StagingAuth:DisplayName"], account),
+            Email = $"{account}@staging.local",
+            Department = "CSIT",
+            IsAdmin = false,
+            AccessScope = SystemAuthorization.AccessScopes.CsitStaff
+        };
+    }
+
+    private DevelopmentUser? ValidateStagingAdminCredentials(string username, string password)
+    {
+        if (!environment.IsStaging())
+        {
+            return null;
+        }
+
+        var stagingUsername = configuration["StagingAdminAuth:Username"];
+        var stagingPassword = configuration["StagingAdminAuth:Password"];
+
+        if (string.IsNullOrWhiteSpace(stagingUsername)
+            || string.IsNullOrEmpty(stagingPassword)
+            || !username.Equals(stagingUsername, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(password, stagingPassword, StringComparison.Ordinal))
+        {
+            return null;
+        }
+
+        var account = stagingUsername.Trim().ToLowerInvariant();
+        return new DevelopmentUser
+        {
+            Username = account,
+            Password = stagingPassword,
+            DisplayName = ValueOrDefault(configuration["StagingAdminAuth:DisplayName"], account),
+            Email = $"{account}@staging.local",
             Department = "CSIT",
             IsAdmin = true,
             AccessScope = SystemAuthorization.AccessScopes.CsitStaff

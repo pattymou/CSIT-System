@@ -41,6 +41,13 @@ public sealed class BrowserApiClient(IJSRuntime js) : IAsyncDisposable
         return await module.InvokeAsync<BrowserApiResponse>("uploadFiles", url, inputContainer);
     }
 
+    public async Task<BrowserApiResponse> UploadFilesAsync(
+        string url, ElementReference inputContainer, IReadOnlyList<string> fileNames, bool clearInput)
+    {
+        var module = await GetModuleAsync();
+        return await module.InvokeAsync<BrowserApiResponse>("uploadFiles", url, inputContainer, fileNames, clearInput);
+    }
+
     private async Task<BrowserApiResponse> SendAsync(string method, string url, object? body)
     {
         var module = await GetModuleAsync();

@@ -1,8 +1,7 @@
 ﻿@page "/modules/{moduleCode}/detail/{id:guid}"
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode InteractiveServer
-@using global::System.Net.Http.Json
-@inject HttpClient Http
+@inject BrowserApiClient Api
 @inject NavigationManager Nav
 
 <div class="record-detail-page">
@@ -151,18 +150,36 @@
     private ModuleRecordDetailDto? _record;
     private List<ModuleCaseListItemDto> _cases = new();
     private string? _message;
+    private bool _reloadRequested;
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
     {
+        _reloadRequested = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_reloadRequested) return;
+        _reloadRequested = false;
         await LoadAsync();
+        StateHasChanged();
     }
 
     private async Task LoadAsync()
     {
         _message = null;
-        _record = await Http.GetFromJsonAsync<ModuleRecordDetailDto>($"/api/records/{id}");
-        var caseResult = await Http.GetFromJsonAsync<ListResponseDto<ModuleCaseListItemDto>>($"/api/records/{id}/cases");
-        _cases = caseResult?.Items ?? new();
+        try
+        {
+            _record = await Api.GetAsync<ModuleRecordDetailDto>($"/api/records/{id}");
+            var caseResult = await Api.GetAsync<ListResponseDto<ModuleCaseListItemDto>>($"/api/records/{id}/cases");
+            _cases = caseResult.Items;
+        }
+        catch (Exception ex)
+        {
+            _record = null;
+            _cases = new();
+            _message = $"載入 Project 失敗：{ex.Message}";
+        }
     }
 
     private void EditRecord() => Nav.NavigateTo($"/modules/{moduleCode}/edit/{id}");
@@ -174,7 +191,7 @@
     {
         _message = null;
 
-        var response = await Http.DeleteAsync($"/api/cases/{caseId}");
+        var response = await Api.DeleteAsync($"/api/cases/{caseId}");
 
         if (response.IsSuccessStatusCode)
         {
@@ -183,9 +200,8 @@
             return;
         }
 
-        var error = await response.Content.ReadAsStringAsync();
-        _message = $"刪除 Case 失敗：{response.StatusCode} {error}";
-        Console.WriteLine($"[ModuleRecordView] Delete case failed: {response.StatusCode} {error}");
+        _message = $"刪除 Case 失敗：{response.StatusCode} {response.Body}";
+        Console.WriteLine($"[ModuleRecordView] Delete case failed: {response.StatusCode} {response.Body}");
     }
 
     private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "-" : value;

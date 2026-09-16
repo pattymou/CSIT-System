@@ -13,7 +13,7 @@ export async function request(method, url, body) {
     return toResult(await fetch(url, options));
 }
 
-export async function uploadFiles(url, inputContainer) {
+export async function uploadFiles(url, inputContainer, fileNames = null, clearInput = true) {
     const input = inputContainer?.querySelector('input[type="file"]');
     if (!input || input.files.length === 0) {
         return { status: 400, body: "No files were selected." };
@@ -21,8 +21,12 @@ export async function uploadFiles(url, inputContainer) {
 
     const formData = new FormData();
     for (const file of input.files) {
-        formData.append("files", file, file.name);
+        if (!fileNames || fileNames.includes(file.name)) {
+            formData.append("files", file, file.name);
+        }
     }
+
+    if (!formData.has("files")) return { status: 400, body: "No matching files were selected." };
 
     const response = await fetch(url, {
         method: "POST",
@@ -31,7 +35,7 @@ export async function uploadFiles(url, inputContainer) {
         body: formData
     });
 
-    if (response.ok) input.value = "";
+    if (response.ok && clearInput) input.value = "";
     return toResult(response);
 }
 
