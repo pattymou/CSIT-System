@@ -281,6 +281,7 @@
     private ElementReference _startDateInput;
     private ElementReference _expectedEndDateInput;
     private ElementReference _sampleReadyDateInput;
+    private bool _reloadRequested;
 
     private Dictionary<string, List<SystemOptionDto>> _options = new();
 
@@ -291,7 +292,27 @@
         Location = "台北"
     };
 
-    protected override async Task OnParametersSetAsync()
+    protected override void OnParametersSet()
+    {
+        _reloadRequested = true;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_reloadRequested) return;
+        _reloadRequested = false;
+        try
+        {
+            await LoadAsync();
+        }
+        catch (Exception ex)
+        {
+            _message = $"載入主單失敗：{ex.Message}";
+        }
+        StateHasChanged();
+    }
+
+    private async Task LoadAsync()
     {
         _message = null;
 
