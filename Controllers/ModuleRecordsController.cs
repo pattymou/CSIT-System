@@ -40,16 +40,30 @@ public class ModuleRecordsController : ControllerBase
     [HttpPost("modules/{moduleCode}/records")]
     public async Task<ActionResult> Create(string moduleCode, [FromBody] ModuleRecordUpsertRequest request)
     {
-        var id = await _service.CreateAsync(moduleCode, request);
-        return Ok(new { id });
+        try
+        {
+            var id = await _service.CreateAsync(moduleCode, request);
+            return Ok(new { id });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 
     [HttpPut("records/{id:guid}")]
     public async Task<ActionResult> Update(Guid id, [FromBody] ModuleRecordUpsertRequest request)
     {
-        var ok = await _service.UpdateAsync(id, request);
-        if (!ok) return NotFound();
-        return NoContent();
+        try
+        {
+            var ok = await _service.UpdateAsync(id, request);
+            if (!ok) return NotFound();
+            return NoContent();
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 
     [HttpDelete("records/{id:guid}")]

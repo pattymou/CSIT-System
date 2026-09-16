@@ -54,6 +54,8 @@ public class ModuleRecordDetailDto
     public DateOnly? StartDate { get; set; }
     public DateOnly? ExpectedEndDate { get; set; }
     public DateOnly? SampleReadyDate { get; set; }
+    public DateOnly? EarliestTaskStartDate { get; set; }
+    public DateOnly? LatestTaskExpectedEndDate { get; set; }
 
     public string? Note { get; set; }
     public string? ApplicantNote { get; set; }

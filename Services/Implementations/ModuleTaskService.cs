@@ -2,6 +2,7 @@ using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
@@ -83,10 +84,17 @@ public class ModuleTaskService : IModuleTaskService
 
     public async Task<Guid> CreateAsync(Guid caseId, ModuleTaskUpsertRequest request)
     {
-        var recordId = await _db.ModuleRecordCases
+        var record = await _db.ModuleRecordCases
             .Where(x => x.Id == caseId)
-            .Select(x => x.RecordId)
+            .Select(x => new
+            {
+                x.RecordId,
+                x.Record.StartDate,
+                x.Record.ExpectedEndDate
+            })
             .FirstAsync();
+
+        ValidateTaskDates(request, record.StartDate, record.ExpectedEndDate);
 
         var taskNo = string.IsNullOrWhiteSpace(request.TaskNo)
             ? $"TSK-{DateTime.Now:yyyyMMddHHmmss}"
@@ -118,7 +126,7 @@ public class ModuleTaskService : IModuleTaskService
         await _db.SaveChangesAsync();
 
         await _caseFileService.BindFilesToTaskAsync(caseId, taskNo, entity.Id);
-        await _caseFileService.RebuildProjectRawDataAsync(recordId);
+        await _caseFileService.RebuildProjectRawDataAsync(record.RecordId);
 
         return entity.Id;
     }
@@ -129,6 +137,13 @@ public class ModuleTaskService : IModuleTaskService
             .Include(x => x.Case)
             .FirstOrDefaultAsync(x => x.Id == id);
         if (entity == null) return false;
+
+        var recordDates = await _db.ModuleRecords
+            .Where(x => x.Id == entity.Case.RecordId)
+            .Select(x => new { x.StartDate, x.ExpectedEndDate })
+            .FirstAsync();
+
+        ValidateTaskDates(request, recordDates.StartDate, recordDates.ExpectedEndDate);
 
         entity.Name = request.Name;
         entity.AssignEngineer = request.AssignEngineer;
@@ -150,6 +165,23 @@ public class ModuleTaskService : IModuleTaskService
         await _caseFileService.RebuildProjectRawDataAsync(entity.Case.RecordId);
 
         return true;
+    }
+
+    private static void ValidateTaskDates(
+        ModuleTaskUpsertRequest request,
+        DateOnly? recordStartDate,
+        DateOnly? recordExpectedEndDate)
+    {
+        var error = ModuleDateRangeValidation.GetTaskError(
+            request.StartDate,
+            request.ExpectedEndDate,
+            recordStartDate,
+            recordExpectedEndDate);
+
+        if (error is not null)
+        {
+            throw new ArgumentException(error);
+        }
     }
 
     public async Task<bool> DeleteAsync(Guid taskId)

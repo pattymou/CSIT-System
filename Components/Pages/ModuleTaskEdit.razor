@@ -267,6 +267,8 @@
     private string? _uploadMessage;
     private string _taskNo = string.Empty;
     private bool _isEdit => TaskId.HasValue;
+    private DateOnly? _recordStartDate;
+    private DateOnly? _recordExpectedEndDate;
 
     private ModuleTaskUpsertRequest _form = new()
     {
@@ -303,6 +305,10 @@
     {
         _message = null;
         _uploadMessage = null;
+
+        var record = await Api.GetAsync<ModuleRecordDateDto>($"/api/records/{RecordId}");
+        _recordStartDate = record.StartDate;
+        _recordExpectedEndDate = record.ExpectedEndDate;
 
         if (_isEdit)
         {
@@ -361,6 +367,17 @@
             string.IsNullOrWhiteSpace(_form.Result))
         {
             _message = "狀態為 Close 時，結果判定不得為空白。";
+            return;
+        }
+
+        var dateError = ModuleDateRangeValidation.GetTaskError(
+            _form.StartDate,
+            _form.ExpectedEndDate,
+            _recordStartDate,
+            _recordExpectedEndDate);
+        if (dateError is not null)
+        {
+            _message = dateError;
             return;
         }
 
@@ -595,6 +612,12 @@
     public class NewTaskNoResponse
     {
         public string TaskNo { get; set; } = string.Empty;
+    }
+
+    public class ModuleRecordDateDto
+    {
+        public DateOnly? StartDate { get; set; }
+        public DateOnly? ExpectedEndDate { get; set; }
     }
 
     public class ModuleTaskDetailDto

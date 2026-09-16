@@ -197,6 +197,8 @@ public class ModuleRecordService : IModuleRecordService
             return null;
         }
 
+        var taskDateRange = await GetTaskDateRangeAsync(id);
+
         return new ModuleRecordDetailDto
         {
             Id = entity.Id,
@@ -212,6 +214,8 @@ public class ModuleRecordService : IModuleRecordService
             StartDate = entity.StartDate,
             ExpectedEndDate = entity.ExpectedEndDate,
             SampleReadyDate = entity.SampleReadyDate,
+            EarliestTaskStartDate = taskDateRange.EarliestStartDate,
+            LatestTaskExpectedEndDate = taskDateRange.LatestExpectedEndDate,
             Note = entity.Note,
             ApplicantNote = entity.ApplicantNote,
 
@@ -245,6 +249,8 @@ public class ModuleRecordService : IModuleRecordService
 
     public async Task<Guid> CreateAsync(string moduleCode, ModuleRecordUpsertRequest request)
     {
+        ValidateRecordDates(request, null, null);
+
         var entity = await _creationService.CreateAsync(new ModuleRecordCreationRequest
         {
             ModuleCode = moduleCode,
@@ -299,6 +305,12 @@ public class ModuleRecordService : IModuleRecordService
             return false;
         }
 
+        var taskDateRange = await GetTaskDateRangeAsync(id);
+        ValidateRecordDates(
+            request,
+            taskDateRange.EarliestStartDate,
+            taskDateRange.LatestExpectedEndDate);
+
         entity.Name = request.Name.Trim();
         entity.Customer = request.Customer;
         entity.Owner = request.Owner;
@@ -345,6 +357,43 @@ public class ModuleRecordService : IModuleRecordService
         await _caseFileService.RebuildProjectRawDataAsync(entity.Id);
 
         return true;
+    }
+
+    private async Task<(DateOnly? EarliestStartDate, DateOnly? LatestExpectedEndDate)> GetTaskDateRangeAsync(
+        Guid recordId)
+    {
+        var taskDates = await _db.ModuleRecordTasks
+            .AsNoTracking()
+            .Where(x => x.Case.RecordId == recordId
+                && x.StartDate.HasValue
+                && x.ExpectedEndDate.HasValue)
+            .Select(x => new
+            {
+                StartDate = x.StartDate!.Value,
+                ExpectedEndDate = x.ExpectedEndDate!.Value
+            })
+            .ToListAsync();
+
+        return taskDates.Count == 0
+            ? (null, null)
+            : (taskDates.Min(x => x.StartDate), taskDates.Max(x => x.ExpectedEndDate));
+    }
+
+    private static void ValidateRecordDates(
+        ModuleRecordUpsertRequest request,
+        DateOnly? earliestTaskStartDate,
+        DateOnly? latestTaskExpectedEndDate)
+    {
+        var error = ModuleDateRangeValidation.GetRecordError(
+            request.StartDate,
+            request.ExpectedEndDate,
+            earliestTaskStartDate,
+            latestTaskExpectedEndDate);
+
+        if (error is not null)
+        {
+            throw new ArgumentException(error);
+        }
     }
 
     public async Task<bool> DeleteAsync(Guid recordId)

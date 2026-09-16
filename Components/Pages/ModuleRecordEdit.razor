@@ -282,6 +282,8 @@
     private ElementReference _expectedEndDateInput;
     private ElementReference _sampleReadyDateInput;
     private bool _reloadRequested;
+    private DateOnly? _earliestTaskStartDate;
+    private DateOnly? _latestTaskExpectedEndDate;
 
     private Dictionary<string, List<SystemOptionDto>> _options = new();
 
@@ -362,6 +364,8 @@
             ExpectedEndDateText = ToDateInputValue(data.ExpectedEndDate),
             SampleReadyDateText = ToDateInputValue(data.SampleReadyDate)
         };
+        _earliestTaskStartDate = data.EarliestTaskStartDate;
+        _latestTaskExpectedEndDate = data.LatestTaskExpectedEndDate;
     }
 
     private async Task LoadOptionsAsync()
@@ -412,6 +416,19 @@
 
     private async Task SaveAsync()
     {
+        var startDate = ParseDateOnly(_form.StartDateText);
+        var expectedEndDate = ParseDateOnly(_form.ExpectedEndDateText);
+        var dateError = ModuleDateRangeValidation.GetRecordError(
+            startDate,
+            expectedEndDate,
+            _isEdit ? _earliestTaskStartDate : null,
+            _isEdit ? _latestTaskExpectedEndDate : null);
+        if (dateError is not null)
+        {
+            _message = dateError;
+            return;
+        }
+
         var request = new RecordUpsertRequest
         {
             Name = _form.Name,
@@ -421,8 +438,8 @@
             Status = string.IsNullOrWhiteSpace(_form.Status) ? "Open" : _form.Status,
             Result = _form.Result,
             Progress = _form.Progress,
-            StartDate = ParseDateOnly(_form.StartDateText),
-            ExpectedEndDate = ParseDateOnly(_form.ExpectedEndDateText),
+            StartDate = startDate,
+            ExpectedEndDate = expectedEndDate,
             SampleReadyDate = ParseDateOnly(_form.SampleReadyDateText),
             Note = _form.Note,
             ApplicantNote = _form.ApplicantNote,
@@ -471,7 +488,9 @@
             }
         }
 
-        _message = $"儲存失敗：{response.StatusCode} {response.Body}";
+        _message = string.IsNullOrWhiteSpace(response.Body)
+            ? $"儲存失敗（{response.StatusCode}）。"
+            : response.Body;
     }
 
     private void BackToList()
@@ -516,6 +535,8 @@
         public DateOnly? StartDate { get; set; }
         public DateOnly? ExpectedEndDate { get; set; }
         public DateOnly? SampleReadyDate { get; set; }
+        public DateOnly? EarliestTaskStartDate { get; set; }
+        public DateOnly? LatestTaskExpectedEndDate { get; set; }
         public string? Note { get; set; }
         public string? ApplicantNote { get; set; }
 
