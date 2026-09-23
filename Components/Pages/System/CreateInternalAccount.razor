@@ -67,9 +67,9 @@
             <div class="account-alert account-alert-danger" role="alert">@CurrentFormMessage</div>
         }
 
-        <section class="surface-card option-panel account-editor-card" aria-label="帳號表單">
+        <section class="surface-card option-panel account-form-section" aria-label="帳號表單">
         <EditForm @key="_editorForm" Model="_editorForm" OnValidSubmit="SubmitAsync"
-                  FormName="internal-account-editor" class="account-create-form">
+                  FormName="internal-account-editor" id="account-editor-form" class="account-create-form">
             <DataAnnotationsValidator />
             <ValidationSummary class="account-validation-summary" />
 
@@ -208,26 +208,28 @@
                 {
                     <p class="account-edit-metadata-line">建立時間：@_editorForm.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss")　建立者：@ValueOrDash(_editorForm.CreatedByAccount)</p>
                 }
+        </EditForm>
+        </section>
 
-            <div class="form-actions account-form-footer @(IsEditMode ? "account-edit-command-bar" : "account-create-command-bar")">
+        <section class="option-panel account-form-actions-section" aria-label="帳號表單操作">
+            <div class="form-actions account-form-actions @(IsEditMode ? "account-edit-command-bar" : "account-create-command-bar")">
                 @if (IsEditMode)
                 {
                         <button type="button" class="btn-secondary account-cancel-button" @onclick="CancelEdit"
                                 disabled="@(_editSaving || !_interactiveReady)">取消編輯</button>
-                        <button type="submit" class="btn-primary account-save-button"
+                        <button type="submit" form="account-editor-form" class="btn-primary account-save-button"
                                 disabled="@(_editSaving || !_interactiveReady)">
                             @(_editSaving ? "儲存中…" : "儲存變更")
                         </button>
                 }
                 else
                 {
-                        <button class="btn-primary account-submit-button" type="submit"
+                        <button class="btn-primary account-submit-button" type="submit" form="account-editor-form"
                                 disabled="@(_submitting || !_interactiveReady)">
                             <span>@(_submitting ? "建立中…" : "建立帳號")</span>
                         </button>
                 }
             </div>
-        </EditForm>
         </section>
     }
     else if (!string.IsNullOrWhiteSpace(_message))

@@ -27,9 +27,7 @@
     text-transform: uppercase;
 }
 
-/* Mirror SystemOptions.razor: sibling option panels, headings and responsive grid.
-   Keep the action row inside the form panel so panel padding + page gap +
-   list panel padding provide the same separation as the parameter page. */
+/* Mirrors the sibling panels, headings and responsive grid in SystemOptions.razor. */
 .system-option-page {
     display: flex;
     flex-direction: column;
@@ -62,6 +60,14 @@
 .option-form-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 
 .account-permission-section { margin-top: 32px; }
+
+.account-form-actions-section {
+    padding-top: 0;
+}
+
+.account-form-actions-section .form-actions {
+    margin-top: 0;
+}
 
 .required-mark { color: #fb7185; }
 

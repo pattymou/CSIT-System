@@ -10,8 +10,10 @@
 }
 
 .nav-item-icon svg {
+    display: block;
     width: 18px;
     height: 18px;
+    overflow: visible;
 }
 
 .nav-item-label {
