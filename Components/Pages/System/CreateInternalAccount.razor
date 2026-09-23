@@ -1,0 +1,928 @@
+@page "/administration/accounts/create"
+@page "/administration/accounts"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@attribute [Authorize(Policy = SystemAuthorization.Policies.Administration)]
+@attribute [Authorize(Policy = SystemAuthorization.Policies.BusinessWrite)]
+@using SIT.DepartmentSystem.Web.Models
+@inject InternalAccountCreationService AccountCreation
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject IJSRuntime JS
+@inject ILogger<CreateInternalAccount> Logger
+
+<PageTitle>帳號管理</PageTitle>
+
+<div class="account-create-page">
+    <header class="account-page-heading">
+        <h1 class="page-title">帳號管理</h1>
+        <p class="page-subtitle">@(IsEditMode ? "編輯帳號" : "建立內部帳號")</p>
+    </header>
+
+    @if (_loading)
+    {
+        <div class="surface-card account-state-card" role="status">
+            <span class="account-loading-indicator" aria-hidden="true"></span>
+            <div>
+                <strong>正在載入帳號設定</strong>
+                <p>請稍候，系統正在準備可用的 Team 與權限選項。</p>
+            </div>
+        </div>
+    }
+    else if (_result is not null)
+    {
+        <section class="surface-card account-result-card" role="status">
+            <div class="account-result-icon" aria-hidden="true">✓</div>
+            <div class="account-result-content">
+                <div class="account-section-kicker">建立完成</div>
+                <h2>帳號建立成功</h2>
+                @if (_result.IsIdempotentReplay)
+                {
+                    <div class="account-alert account-alert-warning">
+                        帳號已建立成功，但一次性臨時密碼無法再次顯示。
+                    </div>
+                }
+                else
+                {
+                    <div class="account-alert account-alert-warning">此臨時密碼只顯示一次，請立即安全地交付給使用者。</div>
+                }
+                <dl class="account-result-list">
+                    <div><dt>Account</dt><dd>@_result.Account</dd></div>
+                    @if (!_result.IsIdempotentReplay && !string.IsNullOrEmpty(_result.TemporaryPassword))
+                    {
+                        <div><dt>Temporary Password</dt><dd><code class="user-select-all">@_result.TemporaryPassword</code></dd></div>
+                    }
+                    <div>
+                        <dt>有效期限</dt>
+                        <dd>@(_result.TemporaryPasswordExpiresAt?.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss") ?? "-")</dd>
+                    </div>
+                </dl>
+                <p class="account-result-note"><strong>首次登入必須修改密碼。</strong></p>
+            </div>
+        </section>
+    }
+    else if (_options is not null)
+    {
+        @if (!string.IsNullOrWhiteSpace(CurrentFormMessage))
+        {
+            <div class="account-alert account-alert-danger" role="alert">@CurrentFormMessage</div>
+        }
+
+        <EditForm @key="_editorForm" Model="_editorForm" OnValidSubmit="SubmitAsync"
+                  FormName="internal-account-editor" class="account-create-form">
+            <DataAnnotationsValidator />
+            <ValidationSummary class="account-validation-summary" />
+
+            <section class="surface-card record-edit-card account-editor-card" aria-label="帳號表單">
+                <div class="account-section">
+                <header class="account-section-heading">
+                    <div>
+                        <h2>基本資料</h2>
+                        <p>設定使用者的識別資料與組織資訊。</p>
+                    </div>
+                </header>
+
+                <div class="edit-grid account-form-grid">
+                    <div class="form-row">
+                        <label for="account-employee-no">工號 <span class="required-mark">*</span></label>
+                        <InputText id="account-employee-no" @bind-Value="_editorForm.EmployeeNo" autocomplete="off"
+                                   readonly="@(IsEditMode && !_options.Actor.IsAdmin)" />
+                        @if (IsEditMode && !_options.Actor.IsAdmin)
+                        {
+                            <div class="account-field-hint">僅 Admin 可修正工號。</div>
+                        }
+                        <ValidationMessage For="@(() => _editorForm.EmployeeNo)" />
+                    </div>
+                    <div class="form-row">
+                        <label for="account-name">Account <span class="required-mark">*</span></label>
+                        <InputText id="account-name" @bind-Value="_editorForm.Account" autocomplete="off"
+                                   readonly="@IsEditMode" />
+                        @if (IsEditMode)
+                        {
+                            <div class="account-field-hint">登入識別碼不可修改。</div>
+                        }
+                        <ValidationMessage For="@(() => _editorForm.Account)" />
+                    </div>
+                    <div class="form-row">
+                        <label for="account-display-name">姓名 <span class="required-mark">*</span></label>
+                        <InputText id="account-display-name" @bind-Value="_editorForm.DisplayName" autocomplete="off" />
+                        <ValidationMessage For="@(() => _editorForm.DisplayName)" />
+                    </div>
+                    <div class="form-row">
+                        <label for="account-department">Department <span class="required-mark">*</span></label>
+                        @if (_options.Departments.Count > 0)
+                        {
+                            <InputSelect id="account-department" @bind-Value="_editorForm.Department">
+                                <option value="">請選擇</option>
+                                @if (IsEditMode && !_options.Departments.Contains(_editorForm.Department, StringComparer.OrdinalIgnoreCase))
+                                {
+                                    <option value="@_editorForm.Department">@_editorForm.Department</option>
+                                }
+                                @foreach (var department in _options.Departments) { <option value="@department">@department</option> }
+                            </InputSelect>
+                        }
+                        else
+                        {
+                            <InputText id="account-department" @bind-Value="_editorForm.Department" autocomplete="off" />
+                        }
+                        <ValidationMessage For="@(() => _editorForm.Department)" />
+                    </div>
+                    <div class="form-row">
+                        <label for="account-team">Team <span class="required-mark">*</span></label>
+                        <InputSelect id="account-team" @bind-Value="_editorForm.TeamCode">
+                            <option value="">請選擇</option>
+                            @foreach (var team in _options.Actor.Teams) { <option value="@team.Code">@team.Name (@team.Code)</option> }
+                        </InputSelect>
+                        <ValidationMessage For="@(() => _editorForm.TeamCode)" />
+                    </div>
+                    <div class="form-row">
+                        <label for="account-position">Position / 職稱 <span class="required-mark">*</span></label>
+                        <InputText id="account-position" @bind-Value="_editorForm.Position" autocomplete="organization-title" />
+                        <ValidationMessage For="@(() => _editorForm.Position)" />
+                    </div>
+                    <div class="form-row">
+                        <label for="account-email">Email <span class="required-mark">*</span></label>
+                        <InputText id="account-email" type="email" @bind-Value="_editorForm.Email" autocomplete="email" />
+                        <ValidationMessage For="@(() => _editorForm.Email)" />
+                    </div>
+                    <div class="form-row">
+                        <label for="account-extension">Extension / 分機</label>
+                        <InputText id="account-extension" @bind-Value="_editorForm.Extension" autocomplete="tel-extension" />
+                        <ValidationMessage For="@(() => _editorForm.Extension)" />
+                    </div>
+                </div>
+                </div>
+
+                <div class="account-section account-permission-section">
+                <header class="account-section-heading">
+                    <div>
+                        <h2>權限</h2>
+                        <p>指定 CSIT 使用範圍與資料操作層級。</p>
+                    </div>
+                </header>
+
+                <div class="edit-grid account-form-grid">
+                    <div class="form-row">
+                        <label for="account-role">CSIT Role <span class="required-mark">*</span></label>
+                        <InputSelect id="account-role" @bind-Value="_editorForm.CsitRole" @bind-Value:after="RoleChanged"
+                                     disabled="@IsEditingSelfAdmin">
+                            <option value="">請選擇</option>
+                            <option value="@CsitProvisioningRole.RdApplicant">RdApplicant</option>
+                            <option value="@CsitProvisioningRole.CsitStaff">CsitStaff</option>
+                            @if (_options.Actor.IsAdmin) { <option value="@CsitProvisioningRole.Admin">Admin</option> }
+                        </InputSelect>
+                        <ValidationMessage For="@(() => _editorForm.CsitRole)" />
+                    </div>
+                    <div class="form-row">
+                        <label for="account-data-access">資料操作權限 <span class="required-mark">*</span></label>
+                        <InputSelect id="account-data-access" @bind-Value="_editorForm.DataAccessLevel"
+                                     disabled="@(_editorForm.CsitRole == CsitProvisioningRole.Admin)">
+                            <option value="">請選擇</option>
+                            <option value="@ProvisionedDataAccessLevel.ReadOnly">ReadOnly</option>
+                            <option value="@ProvisionedDataAccessLevel.Editor">Editor</option>
+                        </InputSelect>
+                        <ValidationMessage For="@(() => _editorForm.DataAccessLevel)" />
+                        @if (_editorForm.CsitRole == CsitProvisioningRole.Admin)
+                        {
+                            <div class="account-field-hint">Admin 固定為 Editor。</div>
+                        }
+                    </div>
+                    @if (IsEditMode)
+                    {
+                        <div class="form-row">
+                            <label for="account-status">帳號狀態 <span class="required-mark">*</span></label>
+                            <InputSelect id="account-status" @bind-Value="_editorForm.AccountStatus" disabled="@IsEditingSelf">
+                                <option value="@ManagedAccountStatus.Active">啟用</option>
+                                <option value="@ManagedAccountStatus.Disabled">停用</option>
+                            </InputSelect>
+                            @if (IsEditingSelf)
+                            {
+                                <div class="account-field-hint">不可停用自己的帳號。</div>
+                            }
+                            <ValidationMessage For="@(() => _editorForm.AccountStatus)" />
+                        </div>
+                    }
+                </div>
+                </div>
+
+                @if (IsEditMode)
+                {
+                    <aside class="account-edit-metadata-line" aria-label="帳號建立資訊">
+                        <span>建立時間：@_editorForm.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss")</span>
+                        <span class="account-metadata-divider" aria-hidden="true"></span>
+                        <span>建立者：@ValueOrDash(_editorForm.CreatedByAccount)</span>
+                    </aside>
+                }
+            </section>
+
+            <footer class="account-form-footer @(IsEditMode ? "account-edit-command-bar" : "account-create-command-bar")">
+                @if (IsEditMode)
+                {
+                    <div class="account-edit-actions">
+                        <button type="button" class="account-secondary-button" @onclick="CancelEdit"
+                                disabled="@(_editSaving || !_interactiveReady)">取消編輯</button>
+                        <button type="submit" class="primary-btn account-save-button"
+                                disabled="@(_editSaving || !_interactiveReady)">
+                            @(_editSaving ? "儲存中…" : "儲存變更")
+                        </button>
+                    </div>
+                }
+                else
+                {
+                    <div class="account-form-actions">
+                        <button class="primary-btn account-submit-button" type="submit"
+                                disabled="@(_submitting || !_interactiveReady)">
+                            <span>@(_submitting ? "建立中…" : "建立帳號")</span>
+                            @if (!_submitting) { <span aria-hidden="true">→</span> }
+                        </button>
+                    </div>
+                }
+            </footer>
+        </EditForm>
+    }
+    else if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="account-alert account-alert-danger" role="alert">@_message</div>
+    }
+
+    @if (!string.IsNullOrWhiteSpace(_editSuccess))
+    {
+        <div class="account-alert account-alert-success" role="status">@_editSuccess</div>
+    }
+
+    @if (_passwordResetResult is not null)
+    {
+        <section class="surface-card account-result-card account-password-result" role="status"
+                 aria-labelledby="password-reset-result-title">
+            <div class="account-result-icon" aria-hidden="true">✓</div>
+            <div class="account-result-content">
+                <div class="account-section-kicker">密碼重設</div>
+                <h2 id="password-reset-result-title">密碼重設成功</h2>
+                <div class="account-alert account-alert-warning">
+                    臨時密碼只顯示一次。請安全地提供給使用者；使用者下次登入時必須設定新密碼。
+                </div>
+                <dl class="account-result-list">
+                    <div><dt>Account</dt><dd>@_passwordResetResult.Account</dd></div>
+                    <div>
+                        <dt>Temporary Password</dt>
+                        <dd class="account-password-value">
+                            <code class="user-select-all">@_passwordResetResult.TemporaryPassword</code>
+                            <button type="button" class="account-copy-button" @onclick="CopyTemporaryPasswordAsync">
+                                複製
+                            </button>
+                        </dd>
+                    </div>
+                    <div>
+                        <dt>有效期限</dt>
+                        <dd>@(_passwordResetResult.TemporaryPasswordExpiresAt?.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss") ?? "-")</dd>
+                    </div>
+                </dl>
+            </div>
+        </section>
+    }
+
+    @if (!_loading && _options is not null)
+    {
+        <section class="surface-card account-list-section" aria-labelledby="account-list-title">
+            <header class="account-list-heading">
+                <div class="account-list-heading-copy">
+                    <h2 id="account-list-title">帳號清單</h2>
+                    <p>@(_options.Actor.IsAdmin ? "所有 CSIT 帳號" : "您負責 Team 的 CSIT 帳號")</p>
+                </div>
+                <span class="account-list-count" aria-label="目前顯示筆數">@FilteredAccounts.Count() 筆</span>
+            </header>
+
+            @if (!_interactiveReady)
+            {
+                <div class="account-interactivity-status" role="status" aria-live="polite">
+                    <span class="account-loading-indicator" aria-hidden="true"></span>
+                    <span>正在連線帳號操作功能，完成後即可編輯或刪除帳號…</span>
+                </div>
+            }
+
+            <div class="account-list-toolbar">
+                <label for="account-search">搜尋帳號</label>
+                <input id="account-search"
+                       type="search"
+                       @bind="_accountSearch"
+                       @bind:event="oninput"
+                       placeholder="搜尋工號、Account、姓名或 Email"
+                       autocomplete="off" />
+            </div>
+
+            @if (!string.IsNullOrWhiteSpace(_listActionMessage))
+            {
+                <div class="account-alert @(_listActionWarning ? "account-alert-warning" : "account-alert-danger") account-list-action-message"
+                     role="alert">
+                    @_listActionMessage
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(_listMessage))
+            {
+                <div class="account-alert account-alert-danger" role="alert">@_listMessage</div>
+            }
+            else if (_listLoading)
+            {
+                <div class="account-list-loading" role="status">
+                    <span class="account-loading-indicator" aria-hidden="true"></span>
+                    <span>正在更新帳號清單…</span>
+                </div>
+            }
+            else
+            {
+                <div class="project-table-wrap account-table-wrap">
+                    <table class="project-table account-table">
+                        <thead>
+                            <tr>
+                                <th class="account-actions-column">操作</th>
+                                <th>工號</th>
+                                <th>Account</th>
+                                <th>姓名</th>
+                                <th>Department</th>
+                                <th>Team</th>
+                                <th>Position / 職稱</th>
+                                <th>Email</th>
+                                <th>CSIT Role</th>
+                                <th>資料操作權限</th>
+                                <th>狀態</th>
+                                <th>建立時間</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @if (!FilteredAccounts.Any())
+                            {
+                                <tr><td colspan="12" class="empty-row">沒有符合條件的帳號。</td></tr>
+                            }
+                            else
+                            {
+                                @foreach (var account in FilteredAccounts)
+                                {
+                                    <tr @key="account.IdentityUserId">
+                                        <td class="account-actions-column">
+                                            <div class="account-row-actions">
+                                                <button type="button" class="account-action-button account-edit-button"
+                                                        disabled="@(!_interactiveReady || (!_options.Actor.IsAdmin && string.Equals(account.CsitRole, "Admin", StringComparison.Ordinal)))"
+                                                        @onclick="() => BeginEditAsync(account)"
+                                                        @onclick:stopPropagation="true">
+                                                    編輯
+                                                </button>
+                                                <button type="button" class="account-action-button account-reset-button"
+                                                        disabled="@(!_interactiveReady || account.IdentityUserId == _options.Actor.IdentityUserId)"
+                                                        @onclick="() => BeginPasswordReset(account)"
+                                                        @onclick:stopPropagation="true">
+                                                    重設密碼
+                                                </button>
+                                                <button type="button" class="account-action-button account-delete-button"
+                                                        disabled="@(!_interactiveReady)"
+                                                        title="@(!_interactiveReady ? "帳號操作功能連線中" : account.IdentityUserId == _options.Actor.IdentityUserId ? "目前登入帳號不可刪除自己" : $"刪除 {account.Account}")"
+                                                        aria-label="刪除帳號 @account.Account"
+                                                        @onclick="() => BeginDeleteAsync(account.IdentityUserId)"
+                                                        @onclick:stopPropagation="true">
+                                                    刪除
+                                                </button>
+                                            </div>
+                                        </td>
+                                        <td>@ValueOrDash(account.EmployeeNo)</td>
+                                        <td><strong class="account-primary-text">@account.Account</strong></td>
+                                        <td>@account.DisplayName</td>
+                                        <td>@account.Department</td>
+                                        <td>@ValueOrDash(account.TeamCode)</td>
+                                        <td>@ValueOrDash(account.Position)</td>
+                                        <td>@account.Email</td>
+                                        <td>
+                                            <div class="account-role-cell">
+                                                <span>@account.CsitRole</span>
+                                                @if (account.IsTeamLeader)
+                                                {
+                                                    <span class="account-leader-badge">Team Leader</span>
+                                                }
+                                            </div>
+                                        </td>
+                                        <td>@account.DataAccessLevel</td>
+                                        <td>
+                                            <span class="account-status-badge @(IsActive(account) ? "active" : "inactive")">
+                                                @StatusText(account)
+                                            </span>
+                                        </td>
+                                        <td>@account.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    }
+
+    @if (_passwordResetTarget is not null)
+    {
+        <div class="account-dialog-backdrop" role="presentation">
+            <section class="account-dialog" role="dialog" aria-modal="true"
+                     aria-labelledby="password-reset-title">
+                <div class="account-section-kicker">安全性操作</div>
+                <h2 id="password-reset-title">重設密碼</h2>
+                <p class="account-dialog-account">帳號：<strong>@_passwordResetTarget.Account</strong></p>
+                <p>重設後，使用者目前密碼將立即失效。系統會產生新的臨時密碼，使用者下次登入時必須重新設定密碼。</p>
+                @if (!string.IsNullOrWhiteSpace(_actionMessage))
+                {
+                    <div class="account-alert account-alert-danger" role="alert">@_actionMessage</div>
+                }
+                <div class="account-dialog-actions">
+                    <button type="button" class="account-secondary-button" @onclick="CancelPasswordReset"
+                            disabled="@_passwordResetting">取消</button>
+                    <button type="button" class="account-reset-confirm" @onclick="ConfirmPasswordResetAsync"
+                            disabled="@_passwordResetting">
+                        @(_passwordResetting ? "重設中…" : "確認重設")
+                    </button>
+                </div>
+            </section>
+        </div>
+    }
+
+    @if (_deleteTarget is not null)
+    {
+        <div class="account-dialog-backdrop" role="presentation">
+            <section class="account-dialog account-dialog-danger" role="alertdialog" aria-modal="true"
+                     aria-labelledby="account-delete-title">
+                <div class="account-section-kicker">高風險操作</div>
+                <h2 id="account-delete-title">刪除帳號</h2>
+                <p>確定要刪除以下帳號？</p>
+                <dl class="account-dialog-summary">
+                    <div><dt>Account</dt><dd>@_deleteTarget.Account</dd></div>
+                    <div><dt>姓名</dt><dd>@_deleteTarget.DisplayName</dd></div>
+                </dl>
+                <div class="account-alert account-alert-warning">
+                    刪除後使用者將無法登入，帳號會從清單移除；Identity UUID、歷史資料與 Audit 仍會保留。
+                </div>
+                @if (!string.IsNullOrWhiteSpace(_actionMessage))
+                {
+                    <div class="account-alert account-alert-danger" role="alert">@_actionMessage</div>
+                }
+                <div class="account-dialog-actions">
+                    <button type="button" class="account-secondary-button" @onclick="CancelDelete"
+                            disabled="@_deleting">取消</button>
+                    <button type="button" class="account-delete-confirm" @onclick="ConfirmDeleteAsync"
+                            disabled="@(_deleting || !_interactiveReady)">
+                        @(_deleting ? "刪除中…" : "確認刪除")
+                    </button>
+                </div>
+            </section>
+        </div>
+    }
+</div>
+
+@code {
+    private EditInternalAccountForm _editorForm = NewEditorForm();
+    private AccountProvisioningOptions? _options;
+    private List<ManagedAccountListItem> _accounts = [];
+    private InternalAccountProvisioningResult? _result;
+    private InternalAccountProvisioningResult? _passwordResetResult;
+    private ManagedAccountListItem? _passwordResetTarget;
+    private ManagedAccountListItem? _deleteTarget;
+    private string? _passwordResetIdempotencyKey;
+    private string? _idempotencyKey;
+    private string? _message;
+    private bool _loading = true;
+    private bool _listLoading;
+    private bool _submitting;
+    private string? _listMessage;
+    private string? _editMessage;
+    private string? _editSuccess;
+    private bool _editSaving;
+    private bool _passwordResetting;
+    private bool _deleting;
+    private bool _interactiveReady;
+    private string? _actionMessage;
+    private string? _listActionMessage;
+    private bool _listActionWarning;
+    private string _accountSearch = string.Empty;
+
+    private bool IsEditMode => _editorForm.IdentityUserId != Guid.Empty;
+    private bool IsEditingSelf => IsEditMode && _options is not null &&
+                                  _editorForm.IdentityUserId == _options.Actor.IdentityUserId;
+    private bool IsEditingSelfAdmin => IsEditingSelf && _editorForm.CsitRole == CsitProvisioningRole.Admin;
+    private string? CurrentFormMessage => IsEditMode ? _editMessage : _message;
+
+    private IEnumerable<ManagedAccountListItem> FilteredAccounts =>
+        string.IsNullOrWhiteSpace(_accountSearch)
+            ? _accounts
+            : _accounts.Where(MatchesSearch);
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            _options = await AccountCreation.GetOptionsAsync(state.User);
+            await LoadAccountsAsync();
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or InvalidOperationException)
+        {
+            _message = ex.Message;
+        }
+        finally { _loading = false; }
+    }
+
+    protected override Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _interactiveReady) return Task.CompletedTask;
+        _interactiveReady = true;
+        return InvokeAsync(StateHasChanged);
+    }
+
+    private void RoleChanged()
+    {
+        if (_editorForm.CsitRole == CsitProvisioningRole.Admin)
+            _editorForm.DataAccessLevel = ProvisionedDataAccessLevel.Editor;
+    }
+
+    private async Task BeginEditAsync(ManagedAccountListItem account)
+    {
+        _listActionMessage = null;
+        _listActionWarning = false;
+        if (_options is null ||
+            (!_options.Actor.IsAdmin && string.Equals(account.CsitRole, "Admin", StringComparison.Ordinal)))
+            return;
+        if (!Enum.TryParse<CsitProvisioningRole>(account.CsitRole, out var role) ||
+            !Enum.TryParse<ProvisionedDataAccessLevel>(account.DataAccessLevel, out var access))
+        {
+            _editMessage = "目前帳號的權限資料無法編輯。";
+            return;
+        }
+        _editorForm = new EditInternalAccountForm
+        {
+            IdentityUserId = account.IdentityUserId,
+            Account = account.Account,
+            EmployeeNo = account.EmployeeNo ?? string.Empty,
+            DisplayName = account.DisplayName,
+            Department = account.Department,
+            TeamCode = account.TeamCode ?? string.Empty,
+            Position = account.Position ?? string.Empty,
+            Email = account.Email,
+            Extension = account.Extension,
+            CsitRole = role,
+            DataAccessLevel = role == CsitProvisioningRole.Admin
+                ? ProvisionedDataAccessLevel.Editor : access,
+            AccountStatus = IsActive(account) ? ManagedAccountStatus.Active : ManagedAccountStatus.Disabled,
+            CreatedAt = account.CreatedAt,
+            CreatedByAccount = account.CreatedByAccount
+        };
+        _result = null;
+        _message = null;
+        _editMessage = null;
+        _editSuccess = null;
+        await InvokeAsync(StateHasChanged);
+        await JS.InvokeVoidAsync("scrollTo", new { top = 0, behavior = "smooth" });
+    }
+
+    private void CancelEdit()
+    {
+        _editorForm = NewEditorForm();
+        _idempotencyKey = null;
+        _message = null;
+        _editMessage = null;
+    }
+
+    private void BeginPasswordReset(ManagedAccountListItem account)
+    {
+        _listActionMessage = null;
+        _listActionWarning = false;
+        if (_options is null || account.IdentityUserId == _options.Actor.IdentityUserId) return;
+        _passwordResetTarget = account;
+        _deleteTarget = null;
+        _passwordResetResult = null;
+        _passwordResetIdempotencyKey = Guid.NewGuid().ToString("N");
+        _actionMessage = null;
+    }
+
+    private void CancelPasswordReset()
+    {
+        if (_passwordResetting) return;
+        _passwordResetTarget = null;
+        _passwordResetIdempotencyKey = null;
+        _actionMessage = null;
+    }
+
+    private async Task ConfirmPasswordResetAsync()
+    {
+        if (_passwordResetTarget is null || string.IsNullOrWhiteSpace(_passwordResetIdempotencyKey)) return;
+        _passwordResetting = true;
+        _actionMessage = null;
+        try
+        {
+            var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            _passwordResetResult = await AccountCreation.ReissueTemporaryPasswordAsync(state.User,
+                _passwordResetTarget.IdentityUserId, _passwordResetIdempotencyKey);
+            _passwordResetTarget = null;
+            _passwordResetIdempotencyKey = null;
+        }
+        catch (Exception ex) when (ex is SharedIdentityProvisioningException or
+                                   UnauthorizedAccessException or ArgumentException)
+        {
+            _actionMessage = ex.Message;
+        }
+        finally { _passwordResetting = false; }
+    }
+
+    private async Task CopyTemporaryPasswordAsync()
+    {
+        if (!string.IsNullOrEmpty(_passwordResetResult?.TemporaryPassword))
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", _passwordResetResult.TemporaryPassword);
+    }
+
+    private async Task BeginDeleteAsync(Guid identityUserId)
+    {
+        _editSuccess = null;
+        _listActionMessage = null;
+        _listActionWarning = false;
+        if (_options is null)
+        {
+            _listActionMessage = "帳號清單尚未載入完成，請稍後再試。";
+            return;
+        }
+
+        var account = _accounts.SingleOrDefault(x => x.IdentityUserId == identityUserId);
+        if (account is null)
+        {
+            _listActionMessage = "找不到要刪除的帳號，請重新整理帳號清單後再試。";
+            return;
+        }
+
+        if (account.IdentityUserId == _options.Actor.IdentityUserId)
+        {
+            _listActionMessage = "目前登入帳號不可刪除自己。";
+            Logger.LogWarning(
+                "Account delete UI rejected self-delete. TargetIdentityUserId {TargetIdentityUserId}, Account {Account}",
+                account.IdentityUserId, account.Account);
+            await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        _deleteTarget = account;
+        _passwordResetTarget = null;
+        _actionMessage = null;
+        Logger.LogInformation(
+            "Account delete confirmation opened. TargetIdentityUserId {TargetIdentityUserId}, Account {Account}",
+            account.IdentityUserId, account.Account);
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private void CancelDelete()
+    {
+        if (_deleting) return;
+        _deleteTarget = null;
+        _actionMessage = null;
+    }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        var target = _deleteTarget;
+        if (target is null) return;
+        _deleting = true;
+        _actionMessage = null;
+        await InvokeAsync(StateHasChanged);
+        try
+        {
+            var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            Logger.LogInformation(
+                "Account delete UI confirmed. TargetIdentityUserId {TargetIdentityUserId}, Account {Account}",
+                target.IdentityUserId, target.Account);
+            var result = await AccountCreation.DeprovisionAsync(state.User, target.IdentityUserId);
+            if (result.IdentityUserId != target.IdentityUserId)
+                throw new InvalidOperationException("帳號刪除結果與選取目標不一致。");
+
+            _accounts.RemoveAll(x => x.IdentityUserId == target.IdentityUserId);
+            if (_editorForm.IdentityUserId == target.IdentityUserId) _editorForm = NewEditorForm();
+            _deleteTarget = null;
+            _actionMessage = null;
+            _listActionMessage = null;
+            _listActionWarning = false;
+            _editSuccess = $"帳號已刪除：{target.Account}";
+            _deleting = false;
+            await InvokeAsync(StateHasChanged);
+            Logger.LogInformation(
+                "Account delete UI completed local refresh. TargetIdentityUserId {TargetIdentityUserId}, Account {Account}",
+                target.IdentityUserId, target.Account);
+            await SynchronizeAccountsAfterDeleteAsync(state.User, target);
+        }
+        catch (SharedIdentityProvisioningException ex)
+        {
+            _actionMessage = DeleteErrorMessage(ex, target);
+            Logger.LogWarning(ex,
+                "Account delete request failed. TargetIdentityUserId {TargetIdentityUserId}, Account {Account}, StatusCode {StatusCode}",
+                target.IdentityUserId, target.Account, ex.StatusCode);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            _actionMessage = target.IdentityUserId == _options?.Actor.IdentityUserId
+                ? "目前登入帳號不可刪除自己。"
+                : "您沒有權限刪除此帳號。";
+            Logger.LogWarning(ex,
+                "Account delete authorization failed. TargetIdentityUserId {TargetIdentityUserId}, Account {Account}",
+                target.IdentityUserId, target.Account);
+        }
+        catch (ArgumentException ex)
+        {
+            _actionMessage = ex.Message;
+            Logger.LogWarning(ex,
+                "Account delete validation failed. TargetIdentityUserId {TargetIdentityUserId}, Account {Account}",
+                target.IdentityUserId, target.Account);
+        }
+        catch (Exception ex)
+        {
+            _actionMessage = "無法刪除帳號，請稍後再試。";
+            Logger.LogError(ex,
+                "Unexpected account delete failure. TargetIdentityUserId {TargetIdentityUserId}, Account {Account}",
+                target.IdentityUserId, target.Account);
+        }
+        finally
+        {
+            _deleting = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private async Task SynchronizeAccountsAfterDeleteAsync(
+        global::System.Security.Claims.ClaimsPrincipal principal,
+        ManagedAccountListItem target)
+    {
+        try
+        {
+            var refreshed = (await AccountCreation.GetAccountsAsync(principal)).ToList();
+            if (refreshed.Any(x => x.IdentityUserId == target.IdentityUserId))
+            {
+                _listActionMessage = "帳號已刪除，但清單同步結果異常；畫面已先移除該帳號，請稍後重新進入本頁確認。";
+                _listActionWarning = true;
+                Logger.LogError(
+                    "Deleted account remained in authoritative account list. TargetIdentityUserId {TargetIdentityUserId}, Account {Account}",
+                    target.IdentityUserId, target.Account);
+                return;
+            }
+
+            _accounts = refreshed;
+            Logger.LogInformation(
+                "Account list synchronized after deletion. TargetIdentityUserId {TargetIdentityUserId}, Account {Account}",
+                target.IdentityUserId, target.Account);
+        }
+        catch (Exception ex) when (ex is SharedIdentityProvisioningException or
+                                   UnauthorizedAccessException or InvalidOperationException)
+        {
+            _listActionMessage = "帳號已刪除，但最新清單暫時無法同步；畫面已先移除該帳號。";
+            _listActionWarning = true;
+            Logger.LogWarning(ex,
+                "Account list refresh after deletion failed. TargetIdentityUserId {TargetIdentityUserId}, Account {Account}",
+                target.IdentityUserId, target.Account);
+        }
+        finally
+        {
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private static string DeleteErrorMessage(
+        SharedIdentityProvisioningException exception,
+        ManagedAccountListItem target)
+    {
+        if (exception.StatusCode == global::System.Net.HttpStatusCode.Forbidden)
+        {
+            if (exception.Message.Contains("last active administrator", StringComparison.OrdinalIgnoreCase))
+                return "至少必須保留一位啟用中的 Admin。";
+            if (exception.Message.Contains("delete itself", StringComparison.OrdinalIgnoreCase))
+                return "目前登入帳號不可刪除自己。";
+            if (exception.Message.Contains("Only an administrator", StringComparison.OrdinalIgnoreCase))
+                return "只有 Admin 可以刪除 Admin 帳號。";
+            return "您沒有權限刪除此帳號。";
+        }
+        if (exception.StatusCode == global::System.Net.HttpStatusCode.Conflict)
+            return exception.Message.Contains("already deleted", StringComparison.OrdinalIgnoreCase)
+                ? "此帳號已被刪除，清單將於重新載入後更新。"
+                : "帳號狀態已被其他操作變更，請重新載入清單後再試。";
+        if (exception.StatusCode == global::System.Net.HttpStatusCode.Unauthorized)
+            return "刪除授權已失效，請重新登入後再試。";
+        if (exception.StatusCode == global::System.Net.HttpStatusCode.NotFound)
+            return "找不到要刪除的帳號，該帳號可能已被其他管理者刪除。";
+        if (exception.StatusCode == global::System.Net.HttpStatusCode.BadRequest)
+            return "帳號刪除要求無法處理，請重新載入清單後再試。";
+        if (exception.StatusCode is global::System.Net.HttpStatusCode.RequestTimeout or
+            global::System.Net.HttpStatusCode.BadGateway or
+            global::System.Net.HttpStatusCode.ServiceUnavailable or
+            global::System.Net.HttpStatusCode.GatewayTimeout)
+            return "身分服務暫時無法完成刪除，請稍後再試。";
+        if (exception.InnerException is global::System.OperationCanceledException)
+            return "刪除帳號逾時，請稍後再試。";
+        if (exception.InnerException is global::System.Net.Http.HttpRequestException)
+            return "目前無法連線至身分服務，請稍後再試。";
+        return "無法刪除帳號，請稍後再試。";
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (!IsEditMode) return;
+        _editSaving = true;
+        _editMessage = null;
+        _editSuccess = null;
+        try
+        {
+            var account = _editorForm.Account;
+            var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            await AccountCreation.UpdateAsync(state.User, _editorForm);
+            _editorForm = NewEditorForm();
+            _idempotencyKey = null;
+            await LoadAccountsAsync();
+            _editSuccess = $"帳號 {account} 已更新。";
+        }
+        catch (Exception ex) when (ex is SharedIdentityProvisioningException or
+                                   UnauthorizedAccessException or ArgumentException)
+        {
+            _editMessage = ex.Message;
+        }
+        finally { _editSaving = false; }
+    }
+
+    private async Task CreateAsync()
+    {
+        _submitting = true;
+        _message = null;
+        _listActionMessage = null;
+        _listActionWarning = false;
+        _idempotencyKey ??= Guid.NewGuid().ToString("N");
+        try
+        {
+            var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            _result = await AccountCreation.CreateAsync(state.User, ToCreateForm(_editorForm), _idempotencyKey);
+            await LoadAccountsAsync();
+        }
+        catch (Exception ex) when (ex is SharedIdentityProvisioningException or
+                                   UnauthorizedAccessException or ArgumentException)
+        {
+            _message = ex.Message;
+        }
+        finally { _submitting = false; }
+    }
+
+    private Task SubmitAsync() => IsEditMode ? SaveEditAsync() : CreateAsync();
+
+    private static EditInternalAccountForm NewEditorForm() => new()
+    {
+        AccountStatus = ManagedAccountStatus.Active
+    };
+
+    private static CreateInternalAccountForm ToCreateForm(EditInternalAccountForm source) => new()
+    {
+        EmployeeNo = source.EmployeeNo,
+        Account = source.Account,
+        DisplayName = source.DisplayName,
+        Department = source.Department,
+        TeamCode = source.TeamCode,
+        Position = source.Position,
+        Email = source.Email,
+        Extension = source.Extension,
+        CsitRole = source.CsitRole,
+        DataAccessLevel = source.DataAccessLevel
+    };
+
+    private async Task LoadAccountsAsync()
+    {
+        _listLoading = true;
+        _listMessage = null;
+        try
+        {
+            var state = await AuthenticationStateProvider.GetAuthenticationStateAsync();
+            _accounts = (await AccountCreation.GetAccountsAsync(state.User)).ToList();
+        }
+        catch (Exception ex) when (ex is SharedIdentityProvisioningException or
+                                   UnauthorizedAccessException or InvalidOperationException)
+        {
+            _listMessage = ex.Message;
+        }
+        finally { _listLoading = false; }
+    }
+
+    private bool MatchesSearch(ManagedAccountListItem account)
+    {
+        var search = _accountSearch.Trim();
+        return Contains(account.EmployeeNo, search) ||
+               Contains(account.Account, search) ||
+               Contains(account.DisplayName, search) ||
+               Contains(account.Email, search);
+    }
+
+    private static bool Contains(string? value, string search) =>
+        value?.Contains(search, StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsActive(ManagedAccountListItem account) =>
+        string.Equals(account.AccountStatus, "Active", StringComparison.Ordinal) &&
+        string.Equals(account.SystemAccessStatus, "Active", StringComparison.Ordinal);
+
+    private static string StatusText(ManagedAccountListItem account)
+    {
+        if (IsActive(account)) return "啟用";
+        if (string.Equals(account.AccountStatus, "Disabled", StringComparison.Ordinal) ||
+            string.Equals(account.SystemAccessStatus, "Disabled", StringComparison.Ordinal))
+            return "停用";
+        return "待處理";
+    }
+
+    private static string ValueOrDash(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "-" : value;
+}

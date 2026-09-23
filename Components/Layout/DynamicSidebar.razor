@@ -30,6 +30,12 @@
                     @item.Icon @DisplayTitle(item)
                 </NavLink>
             }
+            @if (IsAdministrationSection(block) && _canAccessAdministration)
+            {
+                <NavLink class="nav-link-custom" href="/administration/accounts" Match="NavLinkMatch.Prefix">
+                    <span aria-hidden="true">↪</span> 帳號管理
+                </NavLink>
+            }
         </div>
     }
 </div>
