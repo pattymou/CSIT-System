@@ -17,6 +17,7 @@
         <p class="page-subtitle">@(IsEditMode ? "編輯帳號" : "建立內部帳號")</p>
     </header>
 
+    <div class="system-option-page">
     @if (_loading)
     {
         <div class="surface-card account-state-card" role="status">
@@ -66,21 +67,21 @@
             <div class="account-alert account-alert-danger" role="alert">@CurrentFormMessage</div>
         }
 
+        <section class="surface-card option-panel account-editor-card" aria-label="帳號表單">
         <EditForm @key="_editorForm" Model="_editorForm" OnValidSubmit="SubmitAsync"
                   FormName="internal-account-editor" class="account-create-form">
             <DataAnnotationsValidator />
             <ValidationSummary class="account-validation-summary" />
 
-            <section class="surface-card record-edit-card account-editor-card" aria-label="帳號表單">
                 <div class="account-section">
-                <header class="account-section-heading">
+                <header class="option-section-title">
                     <div>
-                        <h2>基本資料</h2>
+                        <h3>基本資料</h3>
                         <p>設定使用者的識別資料與組織資訊。</p>
                     </div>
                 </header>
 
-                <div class="edit-grid account-form-grid">
+                <div class="edit-grid option-form-grid">
                     <div class="form-row">
                         <label for="account-employee-no">工號 <span class="required-mark">*</span></label>
                         <InputText id="account-employee-no" @bind-Value="_editorForm.EmployeeNo" autocomplete="off"
@@ -152,14 +153,14 @@
                 </div>
 
                 <div class="account-section account-permission-section">
-                <header class="account-section-heading">
+                <header class="option-section-title">
                     <div>
-                        <h2>權限</h2>
+                        <h3>權限</h3>
                         <p>指定 CSIT 使用範圍與資料操作層級。</p>
                     </div>
                 </header>
 
-                <div class="edit-grid account-form-grid">
+                <div class="edit-grid option-form-grid">
                     <div class="form-row">
                         <label for="account-role">CSIT Role <span class="required-mark">*</span></label>
                         <InputSelect id="account-role" @bind-Value="_editorForm.CsitRole" @bind-Value:after="RoleChanged"
@@ -205,38 +206,29 @@
 
                 @if (IsEditMode)
                 {
-                    <aside class="account-edit-metadata-line" aria-label="帳號建立資訊">
-                        <span>建立時間：@_editorForm.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss")</span>
-                        <span class="account-metadata-divider" aria-hidden="true"></span>
-                        <span>建立者：@ValueOrDash(_editorForm.CreatedByAccount)</span>
-                    </aside>
+                    <p class="account-edit-metadata-line">建立時間：@_editorForm.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss")　建立者：@ValueOrDash(_editorForm.CreatedByAccount)</p>
                 }
-            </section>
 
-            <footer class="account-form-footer @(IsEditMode ? "account-edit-command-bar" : "account-create-command-bar")">
+            <div class="form-actions account-form-footer @(IsEditMode ? "account-edit-command-bar" : "account-create-command-bar")">
                 @if (IsEditMode)
                 {
-                    <div class="account-edit-actions">
-                        <button type="button" class="account-secondary-button" @onclick="CancelEdit"
+                        <button type="button" class="btn-secondary account-cancel-button" @onclick="CancelEdit"
                                 disabled="@(_editSaving || !_interactiveReady)">取消編輯</button>
-                        <button type="submit" class="primary-btn account-save-button"
+                        <button type="submit" class="btn-primary account-save-button"
                                 disabled="@(_editSaving || !_interactiveReady)">
                             @(_editSaving ? "儲存中…" : "儲存變更")
                         </button>
-                    </div>
                 }
                 else
                 {
-                    <div class="account-form-actions">
-                        <button class="primary-btn account-submit-button" type="submit"
+                        <button class="btn-primary account-submit-button" type="submit"
                                 disabled="@(_submitting || !_interactiveReady)">
                             <span>@(_submitting ? "建立中…" : "建立帳號")</span>
-                            @if (!_submitting) { <span aria-hidden="true">→</span> }
                         </button>
-                    </div>
                 }
-            </footer>
+            </div>
         </EditForm>
+        </section>
     }
     else if (!string.IsNullOrWhiteSpace(_message))
     {
@@ -281,13 +273,12 @@
 
     @if (!_loading && _options is not null)
     {
-        <section class="surface-card account-list-section" aria-labelledby="account-list-title">
-            <header class="account-list-heading">
-                <div class="account-list-heading-copy">
-                    <h2 id="account-list-title">帳號清單</h2>
-                    <p>@(_options.Actor.IsAdmin ? "所有 CSIT 帳號" : "您負責 Team 的 CSIT 帳號")</p>
+        <section class="surface-card option-panel account-list-section" aria-labelledby="account-list-title">
+            <header class="option-section-title account-list-heading">
+                <div>
+                    <h3 id="account-list-title">帳號清單</h3>
+                    <p>@(_options.Actor.IsAdmin ? "所有 CSIT 帳號" : "您負責 Team 的 CSIT 帳號") · <span aria-label="目前顯示筆數">@FilteredAccounts.Count() 筆</span></p>
                 </div>
-                <span class="account-list-count" aria-label="目前顯示筆數">@FilteredAccounts.Count() 筆</span>
             </header>
 
             @if (!_interactiveReady)
@@ -298,7 +289,7 @@
                 </div>
             }
 
-            <div class="account-list-toolbar">
+            <div class="form-row account-list-toolbar">
                 <label for="account-search">搜尋帳號</label>
                 <input id="account-search"
                        type="search"
@@ -413,6 +404,8 @@
             }
         </section>
     }
+
+    </div>
 
     @if (_passwordResetTarget is not null)
     {

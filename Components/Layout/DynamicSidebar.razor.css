@@ -1,0 +1,19 @@
+.nav-item-icon {
+    display: inline-flex;
+    flex: 0 0 18px;
+    width: 18px;
+    height: 18px;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    line-height: 1;
+}
+
+.nav-item-icon svg {
+    width: 18px;
+    height: 18px;
+}
+
+.nav-item-label {
+    min-width: 0;
+}
