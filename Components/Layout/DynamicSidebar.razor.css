@@ -9,11 +9,8 @@
     line-height: 1;
 }
 
-.nav-item-icon svg {
-    display: block;
-    width: 18px;
-    height: 18px;
-    overflow: visible;
+.nav-link-custom:hover {
+    transform: none;
 }
 
 .nav-item-label {
