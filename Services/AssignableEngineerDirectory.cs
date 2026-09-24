@@ -15,16 +15,18 @@ public sealed class AssignableEngineerDirectory(
         var record = await db.ModuleRecords
             .AsNoTracking()
             .Where(x => x.Id == recordId)
-            .Select(x => new { x.Team })
+            .Select(x => new { x.Location, x.Team })
             .SingleOrDefaultAsync(cancellationToken)
             ?? throw new KeyNotFoundException("找不到主單。");
 
         var team = Clean(record.Team);
-        if (team is null) return [];
+        if (team is null || !DepartmentFamilyMatcher.IsRecognizedLocation(record.Location))
+            return [];
 
         var accounts = await provisioningClient.ListAccountsAsync(cancellationToken);
         return accounts
             .Where(x =>
+                DepartmentFamilyMatcher.MatchesLocation(x.Department, record.Location) &&
                 string.Equals(Clean(x.TeamCode), team, StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(x.AccountStatus, "Active", StringComparison.OrdinalIgnoreCase) &&
                 string.Equals(x.SystemAccessStatus, "Active", StringComparison.OrdinalIgnoreCase) &&
@@ -53,7 +55,7 @@ public sealed class AssignableEngineerDirectory(
         var match = engineers.FirstOrDefault(x =>
             string.Equals(x.Account, candidate, StringComparison.OrdinalIgnoreCase));
         if (match is null)
-            throw new ArgumentException("指派工程師必須是目前主單 Team 的有效工程師。");
+            throw new ArgumentException("指派工程師必須符合目前主單的地點、Department family 與 Team。");
 
         return match.Account;
     }

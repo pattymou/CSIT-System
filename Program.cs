@@ -70,6 +70,7 @@ builder.Services.AddScoped<IPlannedTestItemService, PlannedTestItemService>();
 builder.Services.AddScoped<IModuleCaseService, ModuleCaseService>();
 builder.Services.AddScoped<IModuleTaskService, ModuleTaskService>();
 builder.Services.AddScoped<AssignableEngineerDirectory>();
+builder.Services.AddScoped<LabOwnerDirectory>();
 builder.Services.AddScoped<SharedIdentityProvisioningClient>();
 builder.Services.AddHttpClient(nameof(SharedIdentityProvisioningClient), (services, http) =>
 {

@@ -111,17 +111,21 @@
 
 <div class="form-card">
     <h3>指派工程師</h3>
-    @if (string.IsNullOrWhiteSpace(_recordTeam))
+    @if (!HasRecognizedRecordLocation)
+    {
+        <p class="hint-text">目前主單地點沒有可用的工程師名單。</p>
+    }
+    else if (string.IsNullOrWhiteSpace(_recordTeam))
     {
         <p class="hint-text">主單尚未設定 Team，請先回主單設定 Team。</p>
     }
     else if (!_engineersLoading && _assignableEngineers.Count == 0)
     {
-        <p class="hint-text">目前 Team 尚無可指派工程師。</p>
+        <p class="hint-text">目前地點與 Team 尚無可指派工程師。</p>
     }
     else
     {
-        <p class="hint-text">工程師清單依主單 Team 自動帶入。</p>
+        <p class="hint-text">工程師清單依主單地點與 Team 自動帶入。</p>
     }
 
     <div class="form-grid">
@@ -290,12 +294,16 @@
     private bool _isEdit => TaskId.HasValue;
     private DateOnly? _recordStartDate;
     private DateOnly? _recordExpectedEndDate;
+    private string? _recordLocation;
     private string? _recordTeam;
     private bool _engineersLoading;
     private string? _legacyAssignEngineer;
     private List<AssignableEngineerDto> _assignableEngineers = new();
+    private bool HasRecognizedRecordLocation =>
+        string.Equals(_recordLocation?.Trim(), "台北", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(_recordLocation?.Trim(), "吳江", StringComparison.OrdinalIgnoreCase);
     private bool EngineerSelectionDisabled =>
-        _engineersLoading || string.IsNullOrWhiteSpace(_recordTeam);
+        _engineersLoading || !HasRecognizedRecordLocation || string.IsNullOrWhiteSpace(_recordTeam);
 
     private ModuleTaskUpsertRequest _form = new()
     {
@@ -336,6 +344,7 @@
         var record = await Api.GetAsync<ModuleRecordDateDto>($"/api/records/{RecordId}");
         _recordStartDate = record.StartDate;
         _recordExpectedEndDate = record.ExpectedEndDate;
+        _recordLocation = record.Location;
         _recordTeam = record.Team;
         await LoadAssignableEngineersAsync();
 
@@ -674,6 +683,7 @@
     {
         public DateOnly? StartDate { get; set; }
         public DateOnly? ExpectedEndDate { get; set; }
+        public string? Location { get; set; }
         public string? Team { get; set; }
     }
 

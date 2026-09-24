@@ -23,7 +23,7 @@
 
         <div class="form-row">
             <label>地點</label>
-            <select @bind="_form.Location">
+            <select @bind="_form.Location" @bind:after="LocationChangedAsync">
                 <option value="台北">台北</option>
                 <option value="吳江">吳江</option>
             </select>
@@ -53,7 +53,22 @@
 
         <div class="form-row">
             <label>實驗室負責人</label>
-            <input @bind="_form.Owner" />
+            <select @bind="_form.Owner" disabled="@LabOwnerSelectionDisabled">
+                <option value="">請選擇實驗室負責人</option>
+                @foreach (var owner in _labOwners)
+                {
+                    <option value="@owner.Account">@LabOwnerLabel(owner)</option>
+                }
+                @if (!string.IsNullOrWhiteSpace(_legacyOwner))
+                {
+                    <option value="@_legacyOwner" disabled>@_legacyOwner（既有資料）</option>
+                }
+            </select>
+            @if (!_labOwnersLoading &&
+                 (!HasRecognizedLocation || _labOwners.Count == 0))
+            {
+                <span class="hint-text">目前地點沒有可用的實驗室負責人名單。</span>
+            }
         </div>
 
         <div class="form-row">
@@ -284,6 +299,15 @@
     private bool _reloadRequested;
     private DateOnly? _earliestTaskStartDate;
     private DateOnly? _latestTaskExpectedEndDate;
+    private bool _labOwnersLoading;
+    private int _labOwnerLoadVersion;
+    private string? _legacyOwner;
+    private List<LabOwnerOptionDto> _labOwners = new();
+    private bool HasRecognizedLocation =>
+        string.Equals(_form.Location?.Trim(), "台北", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(_form.Location?.Trim(), "吳江", StringComparison.OrdinalIgnoreCase);
+    private bool LabOwnerSelectionDisabled =>
+        _labOwnersLoading || !HasRecognizedLocation || _labOwners.Count == 0;
 
     private Dictionary<string, List<SystemOptionDto>> _options = new();
 
@@ -321,7 +345,10 @@
         await LoadOptionsAsync();
 
         if (!_isEdit)
+        {
+            await LoadLabOwnersAsync(preserveLegacy: false);
             return;
+        }
 
         var data = await Api.GetOptionalAsync<RecordDetailDto>($"/api/records/{id}");
         if (data is null)
@@ -366,7 +393,67 @@
         };
         _earliestTaskStartDate = data.EarliestTaskStartDate;
         _latestTaskExpectedEndDate = data.LatestTaskExpectedEndDate;
+        await LoadLabOwnersAsync(preserveLegacy: true);
     }
+
+    private async Task LocationChangedAsync()
+    {
+        await LoadLabOwnersAsync(preserveLegacy: false);
+    }
+
+    private async Task LoadLabOwnersAsync(bool preserveLegacy)
+    {
+        var loadVersion = ++_labOwnerLoadVersion;
+        var currentOwner = string.IsNullOrWhiteSpace(_form.Owner) ? null : _form.Owner.Trim();
+        _labOwnersLoading = true;
+        _legacyOwner = null;
+        _labOwners = new();
+
+        try
+        {
+            if (HasRecognizedLocation)
+            {
+                var location = _form.Location!.Trim();
+                var result = await Api.GetAsync<List<LabOwnerOptionDto>>(
+                    $"/api/directory/lab-owners?location={Uri.EscapeDataString(location)}");
+                if (loadVersion != _labOwnerLoadVersion)
+                    return;
+
+                _labOwners = result;
+            }
+
+            var match = currentOwner is null
+                ? null
+                : _labOwners.FirstOrDefault(x => string.Equals(
+                    x.Account,
+                    currentOwner,
+                    StringComparison.OrdinalIgnoreCase));
+
+            if (match is not null)
+            {
+                _form.Owner = match.Account;
+            }
+            else if (preserveLegacy && currentOwner is not null)
+            {
+                _legacyOwner = currentOwner;
+                _form.Owner = currentOwner;
+            }
+            else
+            {
+                _form.Owner = null;
+            }
+        }
+        finally
+        {
+            if (loadVersion == _labOwnerLoadVersion)
+                _labOwnersLoading = false;
+        }
+    }
+
+    private static string LabOwnerLabel(LabOwnerOptionDto owner) =>
+        string.IsNullOrWhiteSpace(owner.DisplayName)
+            ? owner.Account
+            : $"{owner.DisplayName}（{owner.Account}）";
 
     private async Task LoadOptionsAsync()
     {
@@ -521,6 +608,14 @@
         public int Sort { get; set; }
         public bool IsEnabled { get; set; }
         public string? Note { get; set; }
+    }
+
+    public sealed class LabOwnerOptionDto
+    {
+        public Guid IdentityUserId { get; set; }
+        public string Account { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public string? EmployeeNo { get; set; }
     }
 
     public class RecordDetailDto
