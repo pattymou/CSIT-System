@@ -11,11 +11,16 @@ public class ModuleTaskService : IModuleTaskService
 {
     private readonly AppDbContext _db;
     private readonly ICaseFileService _caseFileService;
+    private readonly AssignableEngineerDirectory _engineerDirectory;
 
-    public ModuleTaskService(AppDbContext db, ICaseFileService caseFileService)
+    public ModuleTaskService(
+        AppDbContext db,
+        ICaseFileService caseFileService,
+        AssignableEngineerDirectory engineerDirectory)
     {
         _db = db;
         _caseFileService = caseFileService;
+        _engineerDirectory = engineerDirectory;
     }
 
     public async Task<ListResponseDto<ModuleTaskListItemDto>> GetListAsync(Guid caseId, int page, int pageSize, string? status)
@@ -95,6 +100,9 @@ public class ModuleTaskService : IModuleTaskService
             .FirstAsync();
 
         ValidateTaskDates(request, record.StartDate, record.ExpectedEndDate);
+        var assignEngineer = await _engineerDirectory.ResolveAssignableAccountAsync(
+            record.RecordId,
+            request.AssignEngineer);
 
         var taskNo = string.IsNullOrWhiteSpace(request.TaskNo)
             ? $"TSK-{DateTime.Now:yyyyMMddHHmmss}"
@@ -106,7 +114,7 @@ public class ModuleTaskService : IModuleTaskService
             CaseId = caseId,
             TaskNo = taskNo,
             Name = request.Name,
-            AssignEngineer = request.AssignEngineer,
+            AssignEngineer = assignEngineer,
             Status = string.IsNullOrWhiteSpace(request.Status) ? "Open" : request.Status,
             Result = request.Result,
             Progress = request.Progress,
@@ -144,9 +152,17 @@ public class ModuleTaskService : IModuleTaskService
             .FirstAsync();
 
         ValidateTaskDates(request, recordDates.StartDate, recordDates.ExpectedEndDate);
+        var assignEngineer = string.Equals(
+            request.AssignEngineer,
+            entity.AssignEngineer,
+            StringComparison.Ordinal)
+            ? entity.AssignEngineer
+            : await _engineerDirectory.ResolveAssignableAccountAsync(
+                entity.Case.RecordId,
+                request.AssignEngineer);
 
         entity.Name = request.Name;
-        entity.AssignEngineer = request.AssignEngineer;
+        entity.AssignEngineer = assignEngineer;
         entity.Status = string.IsNullOrWhiteSpace(request.Status) ? "Open" : request.Status;
         entity.Result = request.Result;
         entity.Progress = request.Progress;

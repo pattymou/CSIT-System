@@ -69,6 +69,17 @@ builder.Services.AddScoped<IEnvironmentAvailabilityService, EnvironmentAvailabil
 builder.Services.AddScoped<IPlannedTestItemService, PlannedTestItemService>();
 builder.Services.AddScoped<IModuleCaseService, ModuleCaseService>();
 builder.Services.AddScoped<IModuleTaskService, ModuleTaskService>();
+builder.Services.AddScoped<AssignableEngineerDirectory>();
+builder.Services.AddScoped<SharedIdentityProvisioningClient>();
+builder.Services.AddHttpClient(nameof(SharedIdentityProvisioningClient), (services, http) =>
+{
+    var configuration = services.GetRequiredService<IConfiguration>();
+    var authority = configuration["SharedIdentity:Authority"];
+    if (!Uri.TryCreate(authority, UriKind.Absolute, out var uri) || uri.Scheme != Uri.UriSchemeHttps)
+        throw new InvalidOperationException("Shared Identity provisioning authority must be HTTPS.");
+    http.BaseAddress = uri;
+    http.Timeout = TimeSpan.FromSeconds(15);
+});
 builder.Services.AddScoped<IMenuManagementService, MenuManagementService>();
 builder.Services.AddScoped<IAuthorizationHandler, AdministrationAccessHandler>();
 builder.Services.AddScoped<AdAuthenticationService>();

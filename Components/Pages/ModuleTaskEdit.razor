@@ -111,12 +111,33 @@
 
 <div class="form-card">
     <h3>指派工程師</h3>
-    <p class="hint-text">多人請用逗號分隔，對齊舊系統 assign 欄位。</p>
+    @if (string.IsNullOrWhiteSpace(_recordTeam))
+    {
+        <p class="hint-text">主單尚未設定 Team，請先回主單設定 Team。</p>
+    }
+    else if (!_engineersLoading && _assignableEngineers.Count == 0)
+    {
+        <p class="hint-text">目前 Team 尚無可指派工程師。</p>
+    }
+    else
+    {
+        <p class="hint-text">工程師清單依主單 Team 自動帶入。</p>
+    }
 
     <div class="form-grid">
         <div class="form-row full-width">
             <label>指派工程師</label>
-            <textarea class="text-area" rows="4" @bind="_form.AssignEngineer" placeholder="例如：Tom, Mary, Alex"></textarea>
+            <select @bind="_form.AssignEngineer" disabled="@EngineerSelectionDisabled">
+                <option value="">請選擇工程師</option>
+                @foreach (var engineer in _assignableEngineers)
+                {
+                    <option value="@engineer.Account">@EngineerLabel(engineer)</option>
+                }
+                @if (!string.IsNullOrWhiteSpace(_legacyAssignEngineer))
+                {
+                    <option value="@_legacyAssignEngineer" disabled>@_legacyAssignEngineer（既有資料）</option>
+                }
+            </select>
         </div>
     </div>
 </div>
@@ -269,6 +290,12 @@
     private bool _isEdit => TaskId.HasValue;
     private DateOnly? _recordStartDate;
     private DateOnly? _recordExpectedEndDate;
+    private string? _recordTeam;
+    private bool _engineersLoading;
+    private string? _legacyAssignEngineer;
+    private List<AssignableEngineerDto> _assignableEngineers = new();
+    private bool EngineerSelectionDisabled =>
+        _engineersLoading || string.IsNullOrWhiteSpace(_recordTeam);
 
     private ModuleTaskUpsertRequest _form = new()
     {
@@ -309,6 +336,8 @@
         var record = await Api.GetAsync<ModuleRecordDateDto>($"/api/records/{RecordId}");
         _recordStartDate = record.StartDate;
         _recordExpectedEndDate = record.ExpectedEndDate;
+        _recordTeam = record.Team;
+        await LoadAssignableEngineersAsync();
 
         if (_isEdit)
         {
@@ -336,6 +365,13 @@
                     Reimburse = data.Reimburse,
                     Note = data.Note
                 };
+                _legacyAssignEngineer = string.IsNullOrWhiteSpace(data.AssignEngineer) ||
+                                        _assignableEngineers.Any(x => string.Equals(
+                                            x.Account,
+                                            data.AssignEngineer,
+                                            StringComparison.OrdinalIgnoreCase))
+                    ? null
+                    : data.AssignEngineer;
             }
 
             await LoadTaskFilesAsync();
@@ -353,6 +389,21 @@
         }
 
         await LoadTaskFilesAsync();
+    }
+
+    private async Task LoadAssignableEngineersAsync()
+    {
+        _engineersLoading = true;
+        _legacyAssignEngineer = null;
+        try
+        {
+            _assignableEngineers = await Api.GetAsync<List<AssignableEngineerDto>>(
+                $"/api/records/{RecordId}/assignable-engineers");
+        }
+        finally
+        {
+            _engineersLoading = false;
+        }
     }
 
     private async Task SaveAsync()
@@ -602,6 +653,11 @@
         return string.IsNullOrWhiteSpace(value) ? "-" : value;
     }
 
+    private static string EngineerLabel(AssignableEngineerDto engineer) =>
+        string.IsNullOrWhiteSpace(engineer.DisplayName)
+            ? engineer.Account
+            : $"{engineer.DisplayName}（{engineer.Account}）";
+
     private static string FormatSize(long size)
     {
         if (size >= 1024 * 1024) return $"{size / 1024d / 1024d:0.##} MB";
@@ -618,6 +674,15 @@
     {
         public DateOnly? StartDate { get; set; }
         public DateOnly? ExpectedEndDate { get; set; }
+        public string? Team { get; set; }
+    }
+
+    public sealed class AssignableEngineerDto
+    {
+        public Guid IdentityUserId { get; set; }
+        public string Account { get; set; } = string.Empty;
+        public string DisplayName { get; set; } = string.Empty;
+        public string? EmployeeNo { get; set; }
     }
 
     public class ModuleTaskDetailDto

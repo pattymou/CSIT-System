@@ -12,10 +12,14 @@ namespace SIT.DepartmentSystem.Web.Controllers;
 public class ModuleRecordsController : ControllerBase
 {
     private readonly IModuleRecordService _service;
+    private readonly AssignableEngineerDirectory _engineerDirectory;
 
-    public ModuleRecordsController(IModuleRecordService service)
+    public ModuleRecordsController(
+        IModuleRecordService service,
+        AssignableEngineerDirectory engineerDirectory)
     {
         _service = service;
+        _engineerDirectory = engineerDirectory;
     }
 
     [HttpGet("modules/{moduleCode}/records")]
@@ -35,6 +39,21 @@ public class ModuleRecordsController : ControllerBase
         var result = await _service.GetByIdAsync(id);
         if (result == null) return NotFound();
         return Ok(result);
+    }
+
+    [HttpGet("records/{id:guid}/assignable-engineers")]
+    public async Task<ActionResult<IReadOnlyList<AssignableEngineerDto>>> GetAssignableEngineers(
+        Guid id,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Ok(await _engineerDirectory.GetForRecordAsync(id, cancellationToken));
+        }
+        catch (KeyNotFoundException)
+        {
+            return NotFound();
+        }
     }
 
     [HttpPost("modules/{moduleCode}/records")]
