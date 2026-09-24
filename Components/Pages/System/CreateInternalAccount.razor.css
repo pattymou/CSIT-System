@@ -293,8 +293,8 @@
 .account-actions-column {
     position: sticky;
     left: 0;
-    width: 220px;
-    min-width: 220px;
+    width: 260px;
+    min-width: 260px;
     border-right: 1px solid rgba(96, 165, 250, .22) !important;
     box-shadow: 12px 0 20px -18px rgba(125, 211, 252, .85);
 }
@@ -311,8 +311,10 @@
 
 .account-row-actions {
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
+    align-items: center;
     gap: 7px;
+    white-space: nowrap;
 }
 
 .account-dialog-backdrop {
@@ -431,7 +433,7 @@
     .account-create-page { padding-bottom: 20px; }
     .account-result-card { flex-direction: column; }
     .account-result-list > div { grid-template-columns: 1fr; gap: 4px; }
-    .account-actions-column { width: 190px; min-width: 190px; }
+    .account-actions-column { width: 260px; min-width: 260px; }
     .account-row-actions { gap: 6px; }
     .account-action-button { padding-inline: 8px; font-size: .74rem; }
     .account-dialog-backdrop { padding: 12px; place-items: end center; }
