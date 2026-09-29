@@ -2,6 +2,7 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using SIT.DepartmentSystem.Web.Data;
@@ -11,9 +12,11 @@ using SIT.DepartmentSystem.Web.Data;
 namespace SIT.DepartmentSystem.Web.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260917015844_AddTestReportVersionReviewV1")]
+    partial class AddTestReportVersionReviewV1
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -50,9 +53,6 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.Property<string>("DaysUse")
                         .HasColumnType("text");
-
-                    b.Property<Guid?>("DepartmentOptionId")
-                        .HasColumnType("uuid");
 
                     b.Property<string>("Feature")
                         .HasColumnType("text");
@@ -149,8 +149,6 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.HasKey("Id");
 
                     b.HasIndex("CustodianAccount");
-
-                    b.HasIndex("DepartmentOptionId");
 
                     b.HasIndex("OwnerTeamOptionId");
 
@@ -2266,18 +2264,6 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("returned_at");
 
-                    b.Property<string>("RoutingDepartmentCode")
-                        .HasColumnType("text")
-                        .HasColumnName("routing_department_code");
-
-                    b.Property<string>("RoutingDepartmentName")
-                        .HasColumnType("text")
-                        .HasColumnName("routing_department_name");
-
-                    b.Property<Guid?>("RoutingDepartmentOptionId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("routing_department_option_id");
-
                     b.Property<string>("SampleMacAddress")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
@@ -2351,8 +2337,6 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.HasIndex("ModuleRecordId")
                         .IsUnique()
                         .HasFilter("module_record_id IS NOT NULL");
-
-                    b.HasIndex("RoutingDepartmentOptionId");
 
                     b.HasIndex("ApplicantAccount", "Status");
 
@@ -2509,35 +2493,21 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("text")
                         .HasColumnName("email");
 
-                    b.Property<Guid?>("IdentityUserId")
-                        .HasColumnType("uuid")
-                        .HasColumnName("identity_user_id");
-
                     b.Property<bool>("IsAdmin")
                         .HasColumnType("boolean")
                         .HasColumnName("is_admin");
 
                     b.HasKey("Id");
 
-                    b.HasIndex("IdentityUserId")
-                        .IsUnique();
-
                     b.ToTable("users", (string)null);
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.Apparatus", b =>
                 {
-                    b.HasOne("SIT.DepartmentSystem.Web.Entities.SystemOption", "DepartmentOption")
-                        .WithMany()
-                        .HasForeignKey("DepartmentOptionId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
                     b.HasOne("SIT.DepartmentSystem.Web.Entities.SystemOption", "OwnerTeamOption")
                         .WithMany()
                         .HasForeignKey("OwnerTeamOptionId")
                         .OnDelete(DeleteBehavior.Restrict);
-
-                    b.Navigation("DepartmentOption");
 
                     b.Navigation("OwnerTeamOption");
                 });
@@ -2858,11 +2828,6 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.HasOne("SIT.DepartmentSystem.Web.Entities.ModuleRecord", "ModuleRecord")
                         .WithOne()
                         .HasForeignKey("SIT.DepartmentSystem.Web.Entities.VerificationApplication", "ModuleRecordId")
-                        .OnDelete(DeleteBehavior.Restrict);
-
-                    b.HasOne("SIT.DepartmentSystem.Web.Entities.SystemOption", null)
-                        .WithMany()
-                        .HasForeignKey("RoutingDepartmentOptionId")
                         .OnDelete(DeleteBehavior.Restrict);
 
                     b.Navigation("ModuleRecord");

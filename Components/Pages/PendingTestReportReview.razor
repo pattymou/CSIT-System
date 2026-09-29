@@ -1,0 +1,61 @@
+@page "/test-report-review"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.Administration)]
+@rendermode InteractiveServer
+@using SIT.DepartmentSystem.Web.Models.Api
+@inject BrowserApiClient Api
+
+<PageTitle>待主管確認報告</PageTitle>
+<h1>待主管確認報告</h1>
+<p class="page-subtitle">確認工程師上傳的測試報告版本；核准後該版本會成為目前 Final。</p>
+
+@if (!string.IsNullOrWhiteSpace(_message)) { <div class="form-card @(_isError ? "error-text" : "")">@_message</div> }
+<div class="page-actions"><button class="primary-btn" @onclick="LoadAsync" disabled="@_loading">@(_loading ? "載入中..." : "重新整理")</button></div>
+
+@if (_loading) { <div class="surface-card">Loading...</div> }
+else if (_items.Count == 0) { <div class="record-empty-box"><strong>目前沒有待確認報告</strong></div> }
+else
+{
+    <div class="project-table-wrap"><table class="project-table">
+        <thead><tr><th>Project</th><th>Case</th><th>Task</th><th>Report</th><th>系統版本</th><th>原始檔名</th><th>上傳者</th><th>上傳時間</th><th>Comment</th><th>操作</th></tr></thead>
+        <tbody>
+        @foreach (var item in _items)
+        {
+            <tr>
+                <td>@item.ProjectNo<br /><span class="hint-text">@item.ProjectName</span></td>
+                <td>@item.CaseNo<br /><span class="hint-text">@item.CaseName</span></td>
+                <td>@item.TaskNo<br /><span class="hint-text">@item.TaskName</span></td>
+                <td>@item.FileName<br /><span class="hint-text">@item.DocumentId</span></td>
+                <td>v@item.VersionNo</td><td>@item.FileName</td><td>@Display(item.UploadEmp)</td><td>@item.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                <td><input value="@GetComment(item.Id)" @oninput="e => SetComment(item.Id, e.Value?.ToString())" maxlength="2000" placeholder="審核意見（選填）" /></td>
+                <td class="action-cell"><a class="table-link-btn" href="@($"/api/files/{item.Id}/download")" target="_blank">下載</a><button class="table-chip-btn" @onclick='() => ReviewAsync(item.Id, "Approved")'>核准</button><button class="table-chip-btn danger" @onclick='() => ReviewAsync(item.Id, "Rejected")'>退回</button></td>
+            </tr>
+        }
+        </tbody>
+    </table></div>
+}
+
+@code {
+    private List<PendingTestReportDto> _items = [];
+    private readonly Dictionary<Guid, string> _comments = [];
+    private bool _loading;
+    private string? _message;
+    private bool _isError;
+
+    protected override Task OnInitializedAsync() => LoadAsync();
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try { _items = await Api.GetAsync<List<PendingTestReportDto>>("/api/test-reports/pending"); _message = null; }
+        catch (Exception ex) { _message = $"載入失敗：{ex.Message}"; _isError = true; }
+        finally { _loading = false; }
+    }
+    private string GetComment(Guid id) => _comments.TryGetValue(id, out var value) ? value : string.Empty;
+    private void SetComment(Guid id, string? value) => _comments[id] = value ?? string.Empty;
+    private async Task ReviewAsync(Guid id, string decision)
+    {
+        var response = await Api.PostJsonAsync($"/api/test-reports/{id}/review", new TestReportReviewRequest { Decision = decision, Comment = GetComment(id) });
+        if (!response.IsSuccessStatusCode) { _message = response.Body; _isError = true; return; }
+        _message = decision == "Approved" ? "報告已核准並設為 Final。" : "報告已退回並保留版本紀錄。"; _isError = false; _comments.Remove(id); await LoadAsync();
+    }
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "-" : value;
+}

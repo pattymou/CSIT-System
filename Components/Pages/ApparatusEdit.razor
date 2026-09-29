@@ -149,20 +149,33 @@
             <input @bind="_form.PriceUse" />
         </div>
 
+        @if (IsEquipment)
+        {
+            <div class="form-row">
+                <label>部門 *</label>
+                <select required @bind="_form.DepartmentOptionId" @bind:after="OnDepartmentChanged">
+                    <option value="">請選擇部門</option>
+                    @foreach (var department in _ownershipOptions.Departments)
+                    {
+                        <option value="@department.Id">@DepartmentTeamRules.DisplayName(department.Name, department.Value)</option>
+                    }
+                </select>
+            </div>
+        }
         <div class="form-row">
             <label>設備所屬 Team *</label>
             <select required @bind="_form.OwnerTeamOptionId">
                 <option value="">請選擇設備所屬 Team</option>
-                @foreach (var team in _ownershipOptions.Teams)
+                @foreach (var team in AllowedOwnerTeams)
                 {
-                    <option value="@team.Id">@team.Name / @team.Value</option>
+                    <option value="@team.Id">@DepartmentTeamRules.DisplayName(team.Name, team.Value)</option>
                 }
             </select>
         </div>
 
         <div class="form-row">
             <label>保管人 *</label>
-            <select required value="@_form.CustodianAccount" @onchange="OnCustodianAccountChanged">
+            <select required @bind="_form.CustodianAccount">
                 <option value="">請選擇保管人</option>
                 @foreach (var user in _ownershipOptions.Users)
                 {
@@ -413,6 +426,12 @@
 
     private List<SystemOptionDto> _apparatusKindOptions = new();
     private ApparatusOwnershipOptionsDto _ownershipOptions = new();
+    private IReadOnlyList<ApparatusOwnerTeamOptionDto> AllowedOwnerTeams => !IsEquipment
+        ? _ownershipOptions.Teams
+        : !_form.DepartmentOptionId.HasValue ? []
+        : DepartmentTeamRules.GetAllowedTeamsForDepartment(
+            _ownershipOptions.Departments.FirstOrDefault(x => x.Id == _form.DepartmentOptionId)?.Value,
+            _ownershipOptions.Teams, team => team.Name, team => team.Value);
 
     protected override void OnParametersSet()
     {
@@ -494,6 +513,7 @@
                     DaysUse = detail.DaysUse,
                     PriceUse = detail.PriceUse,
                     CustodianAccount = detail.CustodianAccount,
+                    DepartmentOptionId = detail.DepartmentOptionId,
                     OwnerTeamOptionId = detail.OwnerTeamOptionId,
                     Agent = detail.Agent,
                     ReservationStatus = string.IsNullOrWhiteSpace(detail.ReservationStatus) ? "可借用" : detail.ReservationStatus,
@@ -506,6 +526,9 @@
 
                 if (IsEquipment)
                 {
+                    if (_ownershipOptions.Departments.All(x => x.Id != _form.DepartmentOptionId))
+                        _form.DepartmentOptionId = null;
+                    OnDepartmentChanged();
                     await LoadResourceCapabilitiesAsync();
                     await LoadEnvironmentAssignmentAsync();
                 }
@@ -601,6 +624,12 @@
         if (IsEquipment && string.IsNullOrWhiteSpace(_form.CustodianAccount))
         {
             _message = "請選擇保管人。";
+            return;
+        }
+
+        if (IsEquipment && !_form.DepartmentOptionId.HasValue)
+        {
+            _message = "請選擇部門。";
             return;
         }
 
@@ -828,10 +857,13 @@
         }
     }
 
-    private void OnCustodianAccountChanged(ChangeEventArgs args)
+    private void OnDepartmentChanged()
     {
-        var account = args.Value?.ToString()?.Trim();
-        _form.CustodianAccount = string.IsNullOrWhiteSpace(account) ? null : account.ToLowerInvariant();
+        if (_form.OwnerTeamOptionId.HasValue &&
+            AllowedOwnerTeams.All(team => team.Id != _form.OwnerTeamOptionId.Value))
+        {
+            _form.OwnerTeamOptionId = null;
+        }
     }
 
     private async Task<List<SystemOptionDto>> LoadOptionCategoryAsync(string category)
@@ -996,6 +1028,7 @@
 
     public sealed class ApparatusOwnershipOptionsDto
     {
+        public List<ApparatusOwnerTeamOptionDto> Departments { get; set; } = new();
         public List<ApparatusOwnerTeamOptionDto> Teams { get; set; } = new();
         public List<ApparatusCustodianOptionDto> Users { get; set; } = new();
     }
@@ -1056,6 +1089,7 @@
         public string? DaysUse { get; set; }
         public string? PriceUse { get; set; }
         public string? CustodianAccount { get; set; }
+        public Guid? DepartmentOptionId { get; set; }
         public Guid? OwnerTeamOptionId { get; set; }
         public string? Agent { get; set; }
         public string? ReservationStatus { get; set; }

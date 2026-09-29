@@ -73,7 +73,15 @@ public class ApparatusService : IApparatusService
             })
             .ToListAsync(cancellationToken);
 
-        return new ApparatusOwnershipOptionsDto { Teams = teams, Users = users };
+        var departments = await _db.SystemOptions.AsNoTracking()
+            .Where(x => x.Category == SystemOptionCategories.Department && x.IsEnabled)
+            .OrderBy(x => x.Sort).ThenBy(x => x.Name).ToListAsync(cancellationToken);
+        return new ApparatusOwnershipOptionsDto
+        {
+            Departments = departments.Where(x => DepartmentFamilyMatcher.IsDa40Family(x.Value))
+                .Select(x => new ApparatusOwnerTeamOptionDto { Id = x.Id, Name = x.Name, Value = x.Value }).ToList(),
+            Teams = teams, Users = users
+        };
     }
 
     public async Task<List<ApparatusListItemDto>> GetListAsync(string moduleCode, string? keyword, string? kind)
@@ -120,8 +128,12 @@ public class ApparatusService : IApparatusService
                     .Select(user => user.DisplayName)
                     .FirstOrDefault(),
                 CustodianAccount = x.CustodianAccount,
+                DepartmentOptionId = x.DepartmentOptionId,
+                DepartmentName = x.DepartmentOption == null
+                    ? null
+                    : DepartmentTeamRules.DisplayName(x.DepartmentOption.Name, x.DepartmentOption.Value),
                 OwnerTeamOptionId = x.OwnerTeamOptionId,
-                OwnerTeamName = x.OwnerTeamOption == null ? null : x.OwnerTeamOption.Name,
+                OwnerTeamName = x.OwnerTeamOption == null ? null : (string.IsNullOrWhiteSpace(x.OwnerTeamOption.Name) ? x.OwnerTeamOption.Value : x.OwnerTeamOption.Name),
                 Agent = x.Agent,
                 Note = x.Note,
                 EnvironmentGroupDeviceId = x.EnvironmentGroupDevices
@@ -154,6 +166,7 @@ public class ApparatusService : IApparatusService
 
         var entity = await _db.Apparatuses
             .Include(x => x.Files)
+            .Include(x => x.DepartmentOption)
             .Include(x => x.OwnerTeamOption)
             .Include(x => x.EnvironmentGroupDevices).ThenInclude(x => x.EquipmentGroup)
             .FirstOrDefaultAsync(x => x.ModuleCode == moduleCode && x.Id == id);
@@ -216,6 +229,7 @@ public class ApparatusService : IApparatusService
             DaysUse = request.DaysUse,
             PriceUse = request.PriceUse,
             CustodianAccount = ownership.CustodianAccount,
+            DepartmentOptionId = request.DepartmentOptionId,
             OwnerTeamOptionId = ownership.OwnerTeamOptionId,
             Agent = request.Agent,
             ReservationStatus = string.IsNullOrWhiteSpace(request.ReservationStatus) ? "可借用" : request.ReservationStatus,
@@ -278,6 +292,7 @@ public class ApparatusService : IApparatusService
         entity.DaysUse = request.DaysUse;
         entity.PriceUse = request.PriceUse;
         entity.CustodianAccount = ownership.CustodianAccount;
+        entity.DepartmentOptionId = request.DepartmentOptionId;
         entity.OwnerTeamOptionId = ownership.OwnerTeamOptionId;
         entity.Agent = request.Agent;
         entity.ReservationStatus = request.ReservationStatus;
@@ -751,8 +766,12 @@ public class ApparatusService : IApparatusService
             PriceUse = x.PriceUse,
             Custodian = custodianDisplayName,
             CustodianAccount = x.CustodianAccount,
+            DepartmentOptionId = x.DepartmentOptionId,
+            DepartmentName = x.DepartmentOption == null
+                ? null
+                : DepartmentTeamRules.DisplayName(x.DepartmentOption.Name, x.DepartmentOption.Value),
             OwnerTeamOptionId = x.OwnerTeamOptionId,
-            OwnerTeamName = x.OwnerTeamOption?.Name,
+            OwnerTeamName = x.OwnerTeamOption == null ? null : DepartmentTeamRules.DisplayName(x.OwnerTeamOption.Name, x.OwnerTeamOption.Value),
             Agent = x.Agent,
             ReservationStatus = x.ReservationStatus,
             Feature = x.Feature,
@@ -803,6 +822,9 @@ public class ApparatusService : IApparatusService
         CancellationToken cancellationToken)
     {
         string? custodianAccount = null;
+        SystemOption? department = null;
+        if (requireEquipmentOwnership || request.DepartmentOptionId.HasValue)
+            department = await RoutingDepartmentOptions.RequireAsync(_db, request.DepartmentOptionId, cancellationToken);
         if (!string.IsNullOrWhiteSpace(request.CustodianAccount))
         {
             custodianAccount = request.CustodianAccount.Trim().ToLowerInvariant();
@@ -821,13 +843,18 @@ public class ApparatusService : IApparatusService
 
         if (request.OwnerTeamOptionId.HasValue)
         {
-            var teamExists = await _db.SystemOptions.AsNoTracking().AnyAsync(
-                x => x.Id == request.OwnerTeamOptionId.Value
-                    && x.Category == SystemOptionCategories.Team
-                    && x.IsEnabled,
-                cancellationToken);
-            if (!teamExists)
-                throw new InvalidOperationException("設備所屬 Team 必須是啟用中的 Team 選項。");
+            var enabledTeams = await _db.SystemOptions.AsNoTracking()
+                .Where(x => x.Category == SystemOptionCategories.Team && x.IsEnabled)
+                .ToListAsync(cancellationToken);
+            var allowedTeams = requireEquipmentOwnership
+                ? DepartmentTeamRules.GetAllowedTeamsForDepartment(
+                    department?.Value,
+                    enabledTeams,
+                    team => team.Name,
+                    team => team.Value)
+                : enabledTeams;
+            if (allowedTeams.All(team => team.Id != request.OwnerTeamOptionId.Value))
+                throw new InvalidOperationException("設備所屬 Team 必須是所選部門可使用的啟用 Team 選項。");
         }
         else if (requireEquipmentOwnership)
         {

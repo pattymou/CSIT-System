@@ -132,6 +132,10 @@ public class AppDbContext : DbContext
             entity.Property(x => x.Id).HasColumnName("id");
             entity.Property(x => x.ApplicationNo).HasColumnName("application_no").HasMaxLength(32).IsRequired();
             entity.Property(x => x.ModuleCode).HasColumnName("module_code").HasMaxLength(100);
+            entity.Property(x => x.RoutingDepartmentOptionId).HasColumnName("routing_department_option_id");
+            entity.Property(x => x.RoutingDepartmentCode).HasColumnName("routing_department_code");
+            entity.Property(x => x.RoutingDepartmentName).HasColumnName("routing_department_name");
+            entity.HasOne<SystemOption>().WithMany().HasForeignKey(x => x.RoutingDepartmentOptionId).OnDelete(DeleteBehavior.Restrict);
             entity.Property(x => x.TeamOptionId).HasColumnName("team_option_id");
             entity.Property(x => x.TeamCode).HasColumnName("team_code").HasMaxLength(200);
             entity.Property(x => x.TeamName).HasColumnName("team_name").HasMaxLength(200);
@@ -307,11 +311,13 @@ public class AppDbContext : DbContext
             entity.HasKey(x => x.Id);
 
             entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.IdentityUserId).HasColumnName("identity_user_id");
             entity.Property(x => x.Account).HasColumnName("account");
             entity.Property(x => x.DisplayName).HasColumnName("display_name");
             entity.Property(x => x.Department).HasColumnName("department");
             entity.Property(x => x.Email).HasColumnName("email");
             entity.Property(x => x.IsAdmin).HasColumnName("is_admin");
+            entity.HasIndex(x => x.IdentityUserId).IsUnique();
         });
 
         modelBuilder.Entity<ModuleCaseFile>(entity =>
@@ -331,6 +337,24 @@ public class AppDbContext : DbContext
             entity.Property(x => x.FileSize).HasColumnName("file_size");
             entity.Property(x => x.UploadEmp).HasColumnName("upload_emp");
             entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.Property(x => x.DocumentId).HasColumnName("document_id");
+            entity.Property(x => x.VersionNo).HasColumnName("version_no");
+            entity.Property(x => x.FileKind).HasColumnName("file_kind").HasMaxLength(30);
+            entity.Property(x => x.ReviewStatus).HasColumnName("review_status").HasMaxLength(30);
+            entity.Property(x => x.ReviewedAt).HasColumnName("reviewed_at");
+            entity.Property(x => x.ReviewedBy).HasColumnName("reviewed_by").HasMaxLength(200);
+            entity.Property(x => x.ReviewComment).HasColumnName("review_comment").HasMaxLength(2000);
+            entity.Property(x => x.IsFinal).HasColumnName("is_final");
+            entity.Property(x => x.FinalizedAt).HasColumnName("finalized_at");
+            entity.Property(x => x.FinalizedBy).HasColumnName("finalized_by").HasMaxLength(200);
+            entity.Property(x => x.Sha256).HasColumnName("sha256").HasMaxLength(64);
+            entity.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+
+            entity.HasIndex(x => new { x.DocumentId, x.VersionNo }).IsUnique();
+            entity.HasIndex(x => x.DocumentId)
+                .IsUnique()
+                .HasFilter("\"is_final\" = TRUE");
+            entity.HasIndex(x => new { x.ReviewStatus, x.IsFinal });
 
             entity.HasOne(x => x.Record)
                 .WithMany()
@@ -363,6 +387,7 @@ public class AppDbContext : DbContext
             entity.Property(x => x.Xmin).HasColumnName("xmin").HasColumnType("xid").ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
 
             entity.HasIndex(x => x.CustodianAccount);
+            entity.HasOne(x => x.DepartmentOption).WithMany().HasForeignKey(x => x.DepartmentOptionId).OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => x.OwnerTeamOptionId);
             entity.HasOne(x => x.OwnerTeamOption)
                 .WithMany()

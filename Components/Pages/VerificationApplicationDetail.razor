@@ -19,7 +19,9 @@ else if (_item is not null)
         <div class="detail-grid">
             <div><span class="label">申請編號</span><strong>@_item.ApplicationNo</strong></div>
             <div><span class="label">狀態</span><strong>@StatusText(_item.Status)</strong></div>
+            <div><span class="label">部門</span><strong>@Display(_item.RoutingDepartmentName ?? _item.RoutingDepartmentCode)</strong></div>
             <div><span class="label">Team</span><strong>@Display(_item.TeamName)</strong></div>
+            <div><span class="label">申請人部門</span><strong>@Display(_item.Department)</strong></div>
             <div><span class="label">專案名稱</span><strong>@_item.ProjectName</strong></div>
             <div><span class="label">客戶</span><strong>@Display(_item.Customer)</strong></div>
             <div><span class="label">產品型號</span><strong>@Display(_item.ProductModel)</strong></div>

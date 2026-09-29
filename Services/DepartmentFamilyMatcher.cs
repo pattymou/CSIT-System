@@ -4,6 +4,8 @@ public static class DepartmentFamilyMatcher
 {
     private const string WujiangSuffix = "-WJ";
 
+    public static bool IsDa40Family(string? department) => TryParseDa40Family(department, out _);
+
     public static bool IsRecognizedLocation(string? location) =>
         string.Equals(location?.Trim(), "台北", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(location?.Trim(), "吳江", StringComparison.OrdinalIgnoreCase);

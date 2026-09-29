@@ -1,5 +1,6 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Data;
+using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
@@ -11,15 +12,18 @@ public class ModuleRecordService : IModuleRecordService
     private readonly AppDbContext _db;
     private readonly ICaseFileService _caseFileService;
     private readonly IModuleRecordCreationService _creationService;
+    private readonly IBusinessWriteAuthorizationGuard _businessWrite;
 
     public ModuleRecordService(
         AppDbContext db,
         ICaseFileService caseFileService,
-        IModuleRecordCreationService creationService)
+        IModuleRecordCreationService creationService,
+        IBusinessWriteAuthorizationGuard businessWrite)
     {
         _db = db;
         _caseFileService = caseFileService;
         _creationService = creationService;
+        _businessWrite = businessWrite;
     }
 
     public async Task<ListResponseDto<ModuleRecordListItemDto>> GetListAsync(
@@ -249,7 +253,9 @@ public class ModuleRecordService : IModuleRecordService
 
     public async Task<Guid> CreateAsync(string moduleCode, ModuleRecordUpsertRequest request)
     {
+        await _businessWrite.DemandAsync();
         ValidateRecordDates(request, null, null);
+        await ValidateTeamForLocationAsync(request.Location, request.Team);
 
         var entity = await _creationService.CreateAsync(new ModuleRecordCreationRequest
         {
@@ -299,6 +305,7 @@ public class ModuleRecordService : IModuleRecordService
 
     public async Task<bool> UpdateAsync(Guid id, ModuleRecordUpsertRequest request)
     {
+        await _businessWrite.DemandAsync();
         var entity = await _db.ModuleRecords.FirstOrDefaultAsync(x => x.Id == id);
         if (entity == null)
         {
@@ -310,6 +317,7 @@ public class ModuleRecordService : IModuleRecordService
             request,
             taskDateRange.EarliestStartDate,
             taskDateRange.LatestExpectedEndDate);
+        await ValidateTeamForLocationAsync(request.Location, request.Team);
 
         entity.Name = request.Name.Trim();
         entity.Customer = request.Customer;
@@ -396,8 +404,35 @@ public class ModuleRecordService : IModuleRecordService
         }
     }
 
+    private async Task ValidateTeamForLocationAsync(string? location, string? teamValue)
+    {
+        if (string.IsNullOrWhiteSpace(teamValue))
+            return;
+
+        if (!DepartmentTeamRules.IsSupportedLocation(location))
+            throw new ArgumentException("Team 有值時，地點必須是台北或吳江。");
+
+        var enabledTeams = await _db.SystemOptions.AsNoTracking()
+            .Where(option => option.Category == SystemOptionCategories.Team && option.IsEnabled)
+            .ToListAsync();
+        var allowedTeams = DepartmentTeamRules.GetAllowedTeamsForLocation(
+            location,
+            enabledTeams,
+            option => option.Name,
+            option => option.Value);
+
+        if (allowedTeams.All(option => !string.Equals(
+            option.Value,
+            teamValue.Trim(),
+            StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new ArgumentException("Team 必須是目前地點可使用的啟用 Team 選項。");
+        }
+    }
+
     public async Task<bool> DeleteAsync(Guid recordId)
     {
+        await _businessWrite.DemandAsync();
         Console.WriteLine($"[ModuleRecordService] Delete record start. recordId={recordId}");
 
         var record = await _db.ModuleRecords

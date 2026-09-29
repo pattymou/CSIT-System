@@ -3,6 +3,9 @@ namespace SIT.DepartmentSystem.Web.Entities;
 // Team/Leader comes from the system Team master; ModuleCode comes from the workflow rule.
 // Both are resolved and snapshotted at Submit/Resubmit time.
 public sealed record VerificationApplicationRouting(
+    Guid RoutingDepartmentOptionId,
+    string RoutingDepartmentCode,
+    string RoutingDepartmentName,
     Guid TeamOptionId,
     string TeamCode,
     string TeamName,
@@ -39,6 +42,9 @@ public class VerificationApplication
     public Guid Id { get; private set; }
     public string ApplicationNo { get; private set; } = string.Empty;
     public string? ModuleCode { get; private set; }
+    public Guid? RoutingDepartmentOptionId { get; private set; }
+    public string? RoutingDepartmentCode { get; private set; }
+    public string? RoutingDepartmentName { get; private set; }
     public Guid? TeamOptionId { get; private set; }
     public string? TeamCode { get; private set; }
     public string? TeamName { get; private set; }
@@ -92,6 +98,7 @@ public class VerificationApplication
     public static VerificationApplication CreateDraft(
         Guid id,
         string applicationNo,
+        Guid routingDepartmentOptionId,
         Guid teamOptionId,
         string applicantAccount,
         string applicantName,
@@ -105,6 +112,7 @@ public class VerificationApplication
         {
             Id = id,
             ApplicationNo = applicationNo,
+            RoutingDepartmentOptionId = routingDepartmentOptionId,
             TeamOptionId = teamOptionId,
             ApplicantAccount = applicantAccount,
             ApplicantName = applicantName,
@@ -118,9 +126,10 @@ public class VerificationApplication
         return entity;
     }
 
-    public void UpdateContent(Guid teamOptionId, VerificationApplicationContent content, DateTime now)
+    public void UpdateContent(Guid routingDepartmentOptionId, Guid teamOptionId, VerificationApplicationContent content, DateTime now)
     {
         EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
+        RoutingDepartmentOptionId = routingDepartmentOptionId;
         TeamOptionId = teamOptionId;
         ApplyContent(content);
         UpdatedAt = now;
@@ -132,6 +141,10 @@ public class VerificationApplication
         ArgumentNullException.ThrowIfNull(routing);
         if (TeamOptionId != routing.TeamOptionId)
             throw new InvalidOperationException("Resolved Team does not match the application.");
+        if (RoutingDepartmentOptionId != routing.RoutingDepartmentOptionId)
+            throw new InvalidOperationException("Resolved Department does not match the application.");
+        RoutingDepartmentCode = RequiredRoutingValue(routing.RoutingDepartmentCode, nameof(routing.RoutingDepartmentCode));
+        RoutingDepartmentName = RequiredRoutingValue(routing.RoutingDepartmentName, nameof(routing.RoutingDepartmentName));
         TeamCode = RequiredRoutingValue(routing.TeamCode, nameof(routing.TeamCode));
         TeamName = RequiredRoutingValue(routing.TeamName, nameof(routing.TeamName));
         ModuleCode = RequiredRoutingValue(routing.ModuleCode, nameof(routing.ModuleCode));
@@ -193,6 +206,9 @@ public class VerificationApplication
         AddIfMissing(missing, ProductModel, nameof(ProductModel));
         AddIfMissing(missing, ValidationRequirement, nameof(ValidationRequirement));
         if (!RequestedFinishDate.HasValue) missing.Add(nameof(RequestedFinishDate));
+        if (!RoutingDepartmentOptionId.HasValue) missing.Add(nameof(RoutingDepartmentOptionId));
+        AddIfMissing(missing, RoutingDepartmentCode, nameof(RoutingDepartmentCode));
+        AddIfMissing(missing, RoutingDepartmentName, nameof(RoutingDepartmentName));
         if (!TeamOptionId.HasValue) missing.Add(nameof(TeamOptionId));
         AddIfMissing(missing, TeamCode, nameof(TeamCode));
         AddIfMissing(missing, TeamName, nameof(TeamName));

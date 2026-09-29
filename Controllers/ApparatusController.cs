@@ -89,12 +89,14 @@ public class ApparatusController : ControllerBase
     }
 
     [HttpPost("api/apparatus")]
+    [BusinessWrite]
     public Task<IActionResult> LegacyCreate([FromBody] ApparatusUpsertRequest request)
     {
         return Create("equipment", request);
     }
 
     [HttpPost("api/assets/{moduleCode}")]
+    [BusinessWrite]
     public async Task<IActionResult> Create(string moduleCode, [FromBody] ApparatusUpsertRequest request)
     {
         try
@@ -113,12 +115,14 @@ public class ApparatusController : ControllerBase
     }
 
     [HttpPut("api/apparatus/{id}")]
+    [BusinessWrite]
     public Task<IActionResult> LegacyUpdate(string id, [FromBody] ApparatusUpsertRequest request)
     {
         return Update("equipment", id, request);
     }
 
     [HttpPut("api/assets/{moduleCode}/{id}")]
+    [BusinessWrite]
     public async Task<IActionResult> Update(string moduleCode, string id, [FromBody] ApparatusUpsertRequest request)
     {
         try
@@ -137,12 +141,14 @@ public class ApparatusController : ControllerBase
     }
 
     [HttpDelete("api/apparatus/{id}")]
+    [BusinessWrite]
     public Task<IActionResult> LegacyDelete(string id)
     {
         return Delete("equipment", id);
     }
 
     [HttpDelete("api/assets/{moduleCode}/{id}")]
+    [BusinessWrite]
     public async Task<IActionResult> Delete(string moduleCode, string id)
     {
         moduleCode = NormalizeModuleCode(moduleCode);
@@ -174,12 +180,14 @@ public class ApparatusController : ControllerBase
     }
 
     [HttpPost("api/apparatus/{id}/files")]
+    [BusinessWrite]
     public Task<IActionResult> LegacyUploadFiles(string id)
     {
         return UploadFiles("equipment", id);
     }
 
     [HttpPost("api/assets/{moduleCode}/{id}/files")]
+    [BusinessWrite]
     public async Task<IActionResult> UploadFiles(string moduleCode, string id)
     {
         try
@@ -219,6 +227,7 @@ public class ApparatusController : ControllerBase
 
     [HttpDelete("api/apparatus/files/{fileId:guid}")]
     [HttpDelete("api/assets/files/{fileId:guid}")]
+    [BusinessWrite]
     public async Task<IActionResult> DeleteFile(Guid fileId)
     {
         var ok = await _service.DeleteFileAsync(fileId);

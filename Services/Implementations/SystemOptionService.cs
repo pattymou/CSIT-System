@@ -3,16 +3,19 @@ using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
 public class SystemOptionService : ISystemOptionService
 {
     private readonly AppDbContext _db;
+    private readonly IBusinessWriteAuthorizationGuard _businessWrite;
 
-    public SystemOptionService(AppDbContext db)
+    public SystemOptionService(AppDbContext db, IBusinessWriteAuthorizationGuard businessWrite)
     {
         _db = db;
+        _businessWrite = businessWrite;
     }
 
     public async Task<List<SystemOptionDto>> GetAllAsync(string? category)
@@ -105,7 +108,7 @@ public class SystemOptionService : ISystemOptionService
         return new TeamLeaderResolution(
             routing.TeamOptionId,
             Required(team.Value, "Team code"),
-            Required(team.Name, "Team name"),
+            DepartmentTeamRules.DisplayName(team.Name, team.Value),
             routing.LeaderAccount.Trim().ToLowerInvariant(),
             routing.LeaderDisplayName.Trim());
     }
@@ -114,6 +117,7 @@ public class SystemOptionService : ISystemOptionService
         TeamRoutingUpsertRequest request,
         CancellationToken cancellationToken = default)
     {
+        await _businessWrite.DemandAsync(cancellationToken);
         ArgumentNullException.ThrowIfNull(request);
         var values = await ValidateTeamRoutingAsync(request, null, cancellationToken);
         var now = DateTime.UtcNow;
@@ -137,6 +141,7 @@ public class SystemOptionService : ISystemOptionService
         TeamRoutingUpsertRequest request,
         CancellationToken cancellationToken = default)
     {
+        await _businessWrite.DemandAsync(cancellationToken);
         ArgumentNullException.ThrowIfNull(request);
         var entity = await _db.TeamRoutings.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (entity is null) return false;
@@ -152,6 +157,7 @@ public class SystemOptionService : ISystemOptionService
 
     public async Task<Guid> CreateAsync(SystemOptionUpsertRequest request)
     {
+        await _businessWrite.DemandAsync();
         Console.WriteLine($"[SystemOptionService] CreateAsync start. category={request.Category}, name={request.Name}");
 
         ValidateRequest(request);
@@ -190,6 +196,7 @@ public class SystemOptionService : ISystemOptionService
 
     public async Task<bool> UpdateAsync(Guid id, SystemOptionUpsertRequest request)
     {
+        await _businessWrite.DemandAsync();
         Console.WriteLine($"[SystemOptionService] UpdateAsync start. id={id}");
 
         ValidateRequest(request);
@@ -231,6 +238,7 @@ public class SystemOptionService : ISystemOptionService
 
     public async Task<bool> DeleteAsync(Guid id)
     {
+        await _businessWrite.DemandAsync();
         Console.WriteLine($"[SystemOptionService] DeleteAsync start. id={id}");
 
         var entity = await _db.SystemOptions.FirstOrDefaultAsync(x => x.Id == id);

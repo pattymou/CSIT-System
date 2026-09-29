@@ -39,6 +39,7 @@ public class MenuManagementController : ControllerBase
     }
 
     [HttpPost("sections/{sectionId:guid}/items")]
+    [BusinessWrite]
     public async Task<ActionResult> CreateItem(Guid sectionId, [FromBody] MenuItemUpsertRequest request)
     {
         var id = await _service.CreateItemAsync(sectionId, request);
@@ -46,6 +47,7 @@ public class MenuManagementController : ControllerBase
     }
 
     [HttpPut("items/{id:guid}")]
+    [BusinessWrite]
     public async Task<ActionResult> UpdateItem(Guid id, [FromBody] MenuItemUpsertRequest request)
     {
         var ok = await _service.UpdateItemAsync(id, request);
@@ -54,6 +56,7 @@ public class MenuManagementController : ControllerBase
     }
 
     [HttpDelete("items/{id:guid}")]
+    [BusinessWrite]
     public async Task<ActionResult> DeleteItem(Guid id)
     {
         var ok = await _service.DeleteItemAsync(id);

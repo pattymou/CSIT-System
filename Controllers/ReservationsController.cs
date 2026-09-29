@@ -27,6 +27,7 @@ public class ReservationsController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
     public async Task<IActionResult> Update(
         Guid id,
@@ -130,6 +131,7 @@ public class ReservationsController : ControllerBase
         Ok(await _reservationService.GetApplicationOptionsAsync(User, cancellationToken));
 
     [HttpPost]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
     public async Task<IActionResult> Create(
         [FromBody] CreateReservationRequest request,
@@ -241,16 +243,19 @@ public class ReservationsController : ControllerBase
     }
 
     [HttpPost("{id:guid}/submit")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
     public Task<IActionResult> Submit(Guid id, CancellationToken cancellationToken) =>
         RunTransitionAsync(() => _reservationService.SubmitAsync(id, User, cancellationToken));
 
     [HttpPost("{id:guid}/approve")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
     public Task<IActionResult> Approve(Guid id, CancellationToken cancellationToken) =>
         RunTransitionAsync(() => _reservationService.ApproveAsync(id, User, cancellationToken));
 
     [HttpPost("{id:guid}/reject")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
     public Task<IActionResult> Reject(
         Guid id,
@@ -259,6 +264,7 @@ public class ReservationsController : ControllerBase
         RunTransitionAsync(() => _reservationService.RejectAsync(id, User, request.Reason, cancellationToken));
 
     [HttpPost("{id:guid}/cancel")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
     public Task<IActionResult> Cancel(
         Guid id,
@@ -267,16 +273,19 @@ public class ReservationsController : ControllerBase
         RunTransitionAsync(() => _reservationService.CancelAsync(id, User, request.Reason, cancellationToken));
 
     [HttpPost("{id:guid}/checkout")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
     public Task<IActionResult> Checkout(Guid id, CancellationToken cancellationToken) =>
         RunTransitionAsync(() => _reservationService.CheckoutAsync(id, User, cancellationToken));
 
     [HttpPost("{id:guid}/return")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
     public Task<IActionResult> Return(Guid id, CancellationToken cancellationToken) =>
         RunTransitionAsync(() => _reservationService.ReturnAsync(id, User, cancellationToken));
 
     [HttpPost("{id:guid}/extensions")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
     public async Task<IActionResult> RequestExtension(
         Guid id, [FromBody] ReservationExtensionCreateRequest request, CancellationToken cancellationToken)
@@ -286,6 +295,7 @@ public class ReservationsController : ControllerBase
     }
 
     [HttpPost("extensions/{extensionId:guid}/approve")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
     public async Task<IActionResult> ApproveExtension(Guid extensionId, CancellationToken cancellationToken)
     {
@@ -294,6 +304,7 @@ public class ReservationsController : ControllerBase
     }
 
     [HttpPost("extensions/{extensionId:guid}/reject")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
     public async Task<IActionResult> RejectExtension(
         Guid extensionId, [FromBody] ReservationExtensionReviewRequest request, CancellationToken cancellationToken)
@@ -303,6 +314,7 @@ public class ReservationsController : ControllerBase
     }
 
     [HttpPost("extensions/{extensionId:guid}/cancel")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
     public async Task<IActionResult> CancelExtension(Guid extensionId, CancellationToken cancellationToken)
     {

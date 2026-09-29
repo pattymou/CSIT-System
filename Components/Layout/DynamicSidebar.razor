@@ -11,6 +11,13 @@
 </div>
 
 <div class="nav-scroll">
+    @if (_canAccessAdministration)
+    {
+        <div class="nav-section">
+            <div class="nav-section-title">REPORT REVIEW</div>
+            <NavLink class="nav-link-custom" href="/test-report-review" Match="NavLinkMatch.Prefix">待主管確認報告</NavLink>
+        </div>
+    }
     @foreach (var block in _sections
         .Where(CanDisplaySection)
         .OrderBy(x => x.SortOrder))

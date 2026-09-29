@@ -3,6 +3,7 @@
 public class AppUser
 {
     public Guid Id { get; set; }
+    public Guid? IdentityUserId { get; set; }
     public string Account { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string Department { get; set; } = string.Empty;

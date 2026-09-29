@@ -28,6 +28,30 @@ public class ModuleCaseFile
 
     public DateTime CreatedAt { get; set; }
 
+    public Guid DocumentId { get; set; }
+
+    public int VersionNo { get; set; }
+
+    public string FileKind { get; set; } = ModuleCaseFileKinds.Attachment;
+
+    public string? ReviewStatus { get; set; }
+
+    public DateTime? ReviewedAt { get; set; }
+
+    public string? ReviewedBy { get; set; }
+
+    public string? ReviewComment { get; set; }
+
+    public bool IsFinal { get; set; }
+
+    public DateTime? FinalizedAt { get; set; }
+
+    public string? FinalizedBy { get; set; }
+
+    public string? Sha256 { get; set; }
+
+    public DateTime UpdatedAt { get; set; }
+
     public ModuleRecord Record { get; set; } = null!;
 
     public ModuleRecordCase? Case { get; set; }
@@ -55,4 +79,17 @@ public class ModuleCaseFile
 
     [Column("raw_data_export_error")]
     public string? RawDataExportError { get; set; }
+}
+
+public static class ModuleCaseFileKinds
+{
+    public const string Attachment = "Attachment";
+    public const string TestReport = "TestReport";
+}
+
+public static class TestReportReviewStatuses
+{
+    public const string Pending = "Pending";
+    public const string Approved = "Approved";
+    public const string Rejected = "Rejected";
 }

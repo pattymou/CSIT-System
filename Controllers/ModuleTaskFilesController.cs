@@ -2,6 +2,7 @@
 using Microsoft.AspNetCore.Authorization;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using System.Security.Claims;
 
 namespace SIT.DepartmentSystem.Web.Controllers;
 
@@ -11,14 +12,17 @@ namespace SIT.DepartmentSystem.Web.Controllers;
 public class ModuleTaskFilesController : ControllerBase
 {
     private readonly ICaseFileService _fileService;
+    private readonly IAuthorizationService _authorizationService;
 
-    public ModuleTaskFilesController(ICaseFileService fileService)
+    public ModuleTaskFilesController(ICaseFileService fileService, IAuthorizationService authorizationService)
     {
         _fileService = fileService;
+        _authorizationService = authorizationService;
     }
 
     // Task 一般附件：已建立 TaskId
     [HttpPost("tasks/{taskId:guid}/files")]
+    [BusinessWrite]
     public async Task<IActionResult> UploadTaskFiles(Guid taskId)
     {
         try
@@ -51,6 +55,7 @@ public class ModuleTaskFilesController : ControllerBase
 
     // Task 一般附件：Task 尚未正式儲存，先用 TaskNo 綁檔案
     [HttpPost("cases/{caseId:guid}/tasks/upload/{taskNo}/files")]
+    [BusinessWrite]
     public async Task<IActionResult> UploadTaskFilesByTaskNo(Guid caseId, string taskNo)
     {
         try
@@ -84,6 +89,7 @@ public class ModuleTaskFilesController : ControllerBase
 
     // Task 測試報告：已建立 TaskId
     [HttpPost("tasks/{taskId:guid}/test-reports")]
+    [BusinessWrite]
     public async Task<IActionResult> UploadTaskReports(Guid taskId)
     {
         try
@@ -96,9 +102,14 @@ public class ModuleTaskFilesController : ControllerBase
             await _fileService.UploadTaskReportAsync(
                 taskId,
                 files.ToList(),
-                uploadEmp: GetUploadEmp());
+                uploadEmp: GetUploadEmp(),
+                autoApprove: await CanReviewAsync());
 
             return Ok("測試報告上傳成功");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
         }
         catch (Exception ex)
         {
@@ -109,6 +120,7 @@ public class ModuleTaskFilesController : ControllerBase
 
     // Task 測試報告：Task 尚未正式儲存，先用 TaskNo 綁檔案
     [HttpPost("cases/{caseId:guid}/tasks/upload/{taskNo}/test-reports")]
+    [BusinessWrite]
     public async Task<IActionResult> UploadTaskReportsByTaskNo(Guid caseId, string taskNo)
     {
         try
@@ -122,9 +134,14 @@ public class ModuleTaskFilesController : ControllerBase
                 caseId,
                 taskNo,
                 files.ToList(),
-                uploadEmp: GetUploadEmp());
+                uploadEmp: GetUploadEmp(),
+                autoApprove: await CanReviewAsync());
 
             return Ok("測試報告上傳成功");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
         }
         catch (Exception ex)
         {
@@ -133,9 +150,41 @@ public class ModuleTaskFilesController : ControllerBase
         }
     }
 
+    [HttpPost("files/{fileId:guid}/versions")]
+    [BusinessWrite]
+    [RequestSizeLimit(200_000_000)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 200_000_000)]
+    public async Task<IActionResult> UploadNewVersion(Guid fileId)
+    {
+        try
+        {
+            var files = Request.Form.Files;
+            if (files.Count != 1)
+                return BadRequest("上傳新版時一次只能選擇一個檔案。");
+
+            await _fileService.UploadNewTestReportVersionAsync(
+                fileId,
+                files[0],
+                GetUploadEmp(),
+                await CanReviewAsync());
+            return Ok("測試報告新版上傳成功");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
+    }
+
+    private async Task<bool> CanReviewAsync() =>
+        (await _authorizationService.AuthorizeAsync(
+            User,
+            SystemAuthorization.Policies.Administration)).Succeeded;
+
     private string GetUploadEmp()
     {
-        var name = User?.Identity?.Name;
+        var name = User?.FindFirstValue("account")
+            ?? User?.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User?.Identity?.Name;
         return string.IsNullOrWhiteSpace(name) ? "System" : name;
     }
 }

@@ -22,10 +22,12 @@ public sealed class TestCatalogController(
         (await service.GetTestEnvironmentAsync(id, cancellationToken)) is { } item ? Ok(item) : NotFound();
 
     [HttpPost("environments")]
+    [BusinessWrite]
     public Task<IActionResult> CreateEnvironment(TestEnvironmentUpsertRequest request, CancellationToken cancellationToken) =>
         RunCreateAsync(() => service.CreateTestEnvironmentAsync(request, cancellationToken), nameof(GetEnvironment));
 
     [HttpPut("environments/{id:guid}")]
+    [BusinessWrite]
     public Task<IActionResult> UpdateEnvironment(Guid id, TestEnvironmentUpsertRequest request, CancellationToken cancellationToken) =>
         RunUpdateAsync(() => service.UpdateTestEnvironmentAsync(id, request, cancellationToken));
 
@@ -50,10 +52,12 @@ public sealed class TestCatalogController(
         RunReadAsync(async () => Ok(await service.ListMatchingEquipmentAsync(resourceType, capabilityTag, User, cancellationToken)));
 
     [HttpPost("equipment-groups")]
+    [BusinessWrite]
     public Task<IActionResult> CreateEquipmentGroup(EquipmentGroupUpsertRequest request, CancellationToken cancellationToken) =>
         RunCreateAsync(() => service.CreateEquipmentGroupAsync(request, User, cancellationToken), nameof(GetEquipmentGroup));
 
     [HttpPut("equipment-groups/{id:guid}")]
+    [BusinessWrite]
     public Task<IActionResult> UpdateEquipmentGroup(Guid id, EquipmentGroupUpsertRequest request, CancellationToken cancellationToken) =>
         RunUpdateAsync(() => service.UpdateEquipmentGroupAsync(id, request, User, cancellationToken));
 
@@ -69,6 +73,7 @@ public sealed class TestCatalogController(
         RunReadAsync(async () => Ok(await groupDeviceService.ListCandidatesAsync(groupId, keyword, User, cancellationToken)));
 
     [HttpPost("equipment-groups/{groupId:guid}/devices")]
+    [BusinessWrite]
     public Task<IActionResult> AddGroupDevices(
         Guid groupId,
         AddEquipmentGroupDevicesRequest request,
@@ -76,10 +81,12 @@ public sealed class TestCatalogController(
         RunReadAsync(async () => Ok(await groupDeviceService.AddDevicesAsync(groupId, request, User, cancellationToken)));
 
     [HttpDelete("equipment-group-devices/{id:guid}")]
+    [BusinessWrite]
     public Task<IActionResult> DeleteGroupDevice(Guid id, CancellationToken cancellationToken) =>
         RunDeleteAsync(() => groupDeviceService.DeleteDeviceAsync(id, User, cancellationToken));
 
     [HttpPut("equipment-group-devices/{id:guid}/presence")]
+    [BusinessWrite]
     public Task<IActionResult> UpdateGroupDevicePresence(
         Guid id,
         UpdateEquipmentGroupDevicePresenceRequest request,
@@ -91,6 +98,7 @@ public sealed class TestCatalogController(
         => await RunReadAsync(async () => Ok(await service.ListEquipmentGroupRequirementsAsync(groupId, User, cancellationToken)));
 
     [HttpPost("equipment-groups/{groupId:guid}/requirements")]
+    [BusinessWrite]
     public Task<IActionResult> CreateRequirement(
         Guid groupId,
         EquipmentGroupRequirementUpsertRequest request,
@@ -98,6 +106,7 @@ public sealed class TestCatalogController(
         RunCreateAsync(() => service.AddEquipmentGroupRequirementAsync(groupId, request, User, cancellationToken));
 
     [HttpPut("equipment-group-requirements/{id:guid}")]
+    [BusinessWrite]
     public Task<IActionResult> UpdateRequirement(
         Guid id,
         EquipmentGroupRequirementUpsertRequest request,
@@ -105,6 +114,7 @@ public sealed class TestCatalogController(
         RunUpdateAsync(() => service.UpdateEquipmentGroupRequirementAsync(id, request, User, cancellationToken));
 
     [HttpDelete("equipment-group-requirements/{id:guid}")]
+    [BusinessWrite]
     public Task<IActionResult> DeleteRequirement(Guid id, CancellationToken cancellationToken) =>
         RunDeleteAsync(() => service.DeleteEquipmentGroupRequirementAsync(id, User, cancellationToken));
 
@@ -117,10 +127,12 @@ public sealed class TestCatalogController(
         (await service.GetTestCapabilityAsync(id, cancellationToken)) is { } item ? Ok(item) : NotFound();
 
     [HttpPost("capabilities")]
+    [BusinessWrite]
     public Task<IActionResult> CreateCapability(TestCapabilityUpsertRequest request, CancellationToken cancellationToken) =>
         RunCreateAsync(() => service.CreateTestCapabilityAsync(request, cancellationToken), nameof(GetCapability));
 
     [HttpPut("capabilities/{id:guid}")]
+    [BusinessWrite]
     public Task<IActionResult> UpdateCapability(Guid id, TestCapabilityUpsertRequest request, CancellationToken cancellationToken) =>
         RunUpdateAsync(() => service.UpdateTestCapabilityAsync(id, request, cancellationToken));
 
@@ -133,10 +145,12 @@ public sealed class TestCatalogController(
         (await service.GetTestPlanTemplateAsync(id, cancellationToken)) is { } item ? Ok(item) : NotFound();
 
     [HttpPost("test-plan-templates")]
+    [BusinessWrite]
     public Task<IActionResult> CreateTestPlanTemplate(TestPlanTemplateUpsertRequest request, CancellationToken cancellationToken) =>
         RunCreateAsync(() => service.CreateTestPlanTemplateAsync(request, cancellationToken), nameof(GetTestPlanTemplate));
 
     [HttpPut("test-plan-templates/{id:guid}")]
+    [BusinessWrite]
     public Task<IActionResult> UpdateTestPlanTemplate(Guid id, TestPlanTemplateUpsertRequest request, CancellationToken cancellationToken) =>
         RunUpdateAsync(() => service.UpdateTestPlanTemplateAsync(id, request, cancellationToken));
 
@@ -149,10 +163,12 @@ public sealed class TestCatalogController(
         (await service.GetReportTemplateAsync(id, cancellationToken)) is { } item ? Ok(item) : NotFound();
 
     [HttpPost("report-templates")]
+    [BusinessWrite]
     public Task<IActionResult> CreateReportTemplate(ReportTemplateUpsertRequest request, CancellationToken cancellationToken) =>
         RunCreateAsync(() => service.CreateReportTemplateAsync(request, cancellationToken), nameof(GetReportTemplate));
 
     [HttpPut("report-templates/{id:guid}")]
+    [BusinessWrite]
     public Task<IActionResult> UpdateReportTemplate(Guid id, ReportTemplateUpsertRequest request, CancellationToken cancellationToken) =>
         RunUpdateAsync(() => service.UpdateReportTemplateAsync(id, request, cancellationToken));
 
@@ -165,10 +181,12 @@ public sealed class TestCatalogController(
         (await service.GetTestExecutionProfileAsync(id, cancellationToken)) is { } item ? Ok(item) : NotFound();
 
     [HttpPost("profiles")]
+    [BusinessWrite]
     public Task<IActionResult> CreateProfile(TestExecutionProfileUpsertRequest request, CancellationToken cancellationToken) =>
         RunCreateAsync(() => service.CreateTestExecutionProfileAsync(request, cancellationToken), nameof(GetProfile));
 
     [HttpPut("profiles/{id:guid}")]
+    [BusinessWrite]
     public Task<IActionResult> UpdateProfile(Guid id, TestExecutionProfileUpsertRequest request, CancellationToken cancellationToken) =>
         RunUpdateAsync(() => service.UpdateTestExecutionProfileAsync(id, request, cancellationToken));
 

@@ -2,17 +2,29 @@
 @page "/modules/{ModuleCode}/{RecordId:guid}/cases/{CaseId:guid}/tasks/{TaskId:guid}/edit"
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @using Microsoft.AspNetCore.Components.Forms
+@using STJ = global::System.Text.Json
 @inject BrowserApiClient Api
+@inject ReservationApiClient ReservationApi
 @inject NavigationManager Nav
 @using SIT.DepartmentSystem.Web.Components.Shared
 
 <h3>@(_isEdit ? "編輯子任務" : "新增子任務")</h3>
-<p class="page-subtitle">Task File-First Upload / 測試報告先上傳模式</p>
 
 @if (!string.IsNullOrWhiteSpace(_message))
 {
     <div class="form-card error-text">@_message</div>
 }
+
+<AppMessageDialog Visible="@_showMessageDialog"
+                  Title="@_dialogTitle"
+                  Message="@_dialogMessage"
+                  Type="@_dialogType"
+                  OnClose="CloseMessageDialog" />
+
+<AppToast Visible="@_showToast"
+          Message="@_toastMessage"
+          Type="@_toastType"
+          OnClose="CloseToast" />
 
 <div class="form-card">
     <div class="case-card-head">
@@ -59,12 +71,32 @@
 
             <div class="form-row">
                 <label>開始日期</label>
-                <input type="date" @bind="_form.StartDate" />
+                <div class="datetime-control module-record-date-picker">
+                    <input @ref="_startDateInput"
+                           class="datetime-input"
+                           type="date"
+                           @bind="_form.StartDate" />
+                    <button type="button"
+                            class="picker-button"
+                            title="選擇開始日期"
+                            aria-label="選擇開始日期"
+                            @onclick="OpenStartDatePickerAsync">▣</button>
+                </div>
             </div>
 
             <div class="form-row">
                 <label>預計完成日期</label>
-                <input type="date" @bind="_form.ExpectedEndDate" />
+                <div class="datetime-control module-record-date-picker">
+                    <input @ref="_expectedEndDateInput"
+                           class="datetime-input"
+                           type="date"
+                           @bind="_form.ExpectedEndDate" />
+                    <button type="button"
+                            class="picker-button"
+                            title="選擇預計完成日期"
+                            aria-label="選擇預計完成日期"
+                            @onclick="OpenExpectedEndDatePickerAsync">▣</button>
+                </div>
             </div>
 
             <div class="form-row">
@@ -147,6 +179,8 @@
     </div>
 </div>
 
+@if (_isEdit)
+{
 <div class="form-card">
     <div class="case-card-head">
         <div>
@@ -156,7 +190,7 @@
 
         <button class="primary-btn"
                 @onclick="UploadTaskFilesAsync"
-                disabled="@(!_taskNoReady || _selectedFiles.Count == 0 || _uploading)">
+                disabled="@(!_isEdit || !_taskNoReady || _selectedFiles.Count == 0 || _uploading)">
             @(_uploading ? "上傳中..." : "開始上傳")
         </button>
     </div>
@@ -170,6 +204,15 @@
     }
     else
     {
+        <div class="form-grid">
+            <label>檔案種類
+                <select @bind="_uploadKind">
+                    <option value="Attachment">一般附件</option>
+                    <option value="TestReport">測試報告</option>
+                </select>
+            </label>
+        </div>
+        <p class="hint-text">檔案種類由此欄位保存，不再依檔名自動判斷。</p>
         <div class="upload-box" @ref="_fileInputContainer">
             <InputFile OnChange="OnFilesSelected" multiple />
             <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案，單檔上限 200MB。</span>
@@ -208,6 +251,11 @@
             @(_loadingFiles ? "載入中..." : "重新整理")
         </button>
     </div>
+
+    @if (!string.IsNullOrWhiteSpace(_fileListMessage))
+    {
+        <p class="hint-text error-text">@_fileListMessage</p>
+    }
 
     @if (!_taskNoReady)
     {
@@ -253,11 +301,18 @@
                                     下載
                                 </a>
 
-                                <button type="button"
-                                        class="table-chip-btn danger"
-                                        @onclick="() => DeleteTaskFileAsync(file.Id)">
-                                    刪除
-                                </button>
+                                @if (IsApprovedTestReport(file))
+                                {
+                                    <span class="hint-text">已核准</span>
+                                }
+                                else
+                                {
+                                    <button type="button"
+                                            class="table-chip-btn danger"
+                                            @onclick="() => DeleteTaskFileAsync(file.Id)">
+                                        刪除
+                                    </button>
+                                }
                             </td>
                         </tr>
                     }
@@ -266,6 +321,7 @@
         </div>
     }
 </div>
+}
 
 <div class="form-actions">
     <button class="primary-btn" @onclick="SaveAsync" disabled="@(!_taskNoReady || _saving)">
@@ -294,8 +350,13 @@
     private string _dialogTitle = string.Empty;
     private string _dialogMessage = string.Empty;
     private AppMessageDialogType _dialogType = AppMessageDialogType.Info;
+    private bool _showToast;
+    private string _toastMessage = string.Empty;
+    private AppToastType _toastType = AppToastType.Info;
     private string? _uploadMessage;
+    private string? _fileListMessage;
     private string _taskNo = string.Empty;
+    private string _uploadKind = "Attachment";
     private bool _isEdit => TaskId.HasValue;
     private DateOnly? _recordStartDate;
     private DateOnly? _recordExpectedEndDate;
@@ -319,6 +380,8 @@
     private List<IBrowserFile> _selectedFiles = new();
     private List<ModuleCaseFileDto> _taskFiles = new();
     private ElementReference _fileInputContainer;
+    private ElementReference _startDateInput;
+    private ElementReference _expectedEndDateInput;
     private bool _reloadRequested;
 
     protected override void OnParametersSet()
@@ -402,7 +465,8 @@
             Console.WriteLine($"[ModuleTaskEdit] New TaskNo ready: {_taskNo}");
         }
 
-        await LoadTaskFilesAsync();
+        _taskFiles = new();
+        _fileListMessage = null;
     }
 
     private async Task LoadAssignableEngineersAsync()
@@ -458,9 +522,20 @@
 
             if (response.IsSuccessStatusCode)
             {
-                Nav.NavigateTo(_isEdit
-                    ? $"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}/tasks/{TaskId}"
-                    : $"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}");
+                if (_isEdit)
+                {
+                    Nav.NavigateTo($"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}/tasks/{TaskId}");
+                    return;
+                }
+
+                if (TryGetCreatedTaskId(response.Body, out var newTaskId))
+                {
+                    Nav.NavigateTo($"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}/tasks/{newTaskId}");
+                    return;
+                }
+
+                Console.Error.WriteLine($"[ModuleTaskEdit] Task created but response did not contain a valid id. Body={response.Body}");
+                ShowOperationError("無法開啟子任務", "子任務已建立，但無法取得新建立的 Task ID，請回 Case 頁確認。");
                 return;
             }
 
@@ -488,8 +563,28 @@
 
     private void ShowSaveApiError(BrowserApiResponse response)
     {
-        _dialogTitle = "儲存失敗";
-        _dialogMessage = GetSafeSaveFailureMessage(response);
+        ShowOperationError("儲存失敗", GetSafeFailureMessage(response, "儲存失敗，請稍後再試。"));
+    }
+
+    private void ShowUploadError(string message)
+    {
+        ShowOperationError("無法上傳", message);
+    }
+
+    private void ShowUploadApiError(BrowserApiResponse response)
+    {
+        ShowOperationError("上傳失敗", GetSafeFailureMessage(response, "上傳失敗，請稍後再試。"));
+    }
+
+    private void ShowDeleteApiError(BrowserApiResponse response)
+    {
+        ShowOperationError("刪除失敗", GetSafeFailureMessage(response, "刪除失敗，請稍後再試。"));
+    }
+
+    private void ShowOperationError(string title, string message)
+    {
+        _dialogTitle = title;
+        _dialogMessage = message;
         _dialogType = AppMessageDialogType.Error;
         _showMessageDialog = true;
     }
@@ -499,12 +594,24 @@
         _showMessageDialog = false;
     }
 
-    private static string GetSafeSaveFailureMessage(BrowserApiResponse response)
+    private void ShowToast(string message, AppToastType type = AppToastType.Success)
+    {
+        _toastMessage = message;
+        _toastType = type;
+        _showToast = true;
+    }
+
+    private void CloseToast()
+    {
+        _showToast = false;
+    }
+
+    private static string GetSafeFailureMessage(BrowserApiResponse response, string fallback)
     {
         var message = response.Body?.Trim();
         return IsSafeUserMessage(message)
             ? message!
-            : "儲存失敗，請稍後再試。";
+            : fallback;
     }
 
     private static bool IsSafeUserMessage(string? message)
@@ -519,6 +626,26 @@
                    .Any(marker => lowered.Contains(marker));
     }
 
+    private static bool TryGetCreatedTaskId(string? responseBody, out Guid taskId)
+    {
+        taskId = Guid.Empty;
+        if (string.IsNullOrWhiteSpace(responseBody)) return false;
+
+        try
+        {
+            using var document = STJ.JsonDocument.Parse(responseBody);
+            return document.RootElement.ValueKind == STJ.JsonValueKind.Object
+                   && document.RootElement.TryGetProperty("id", out var idElement)
+                   && idElement.ValueKind == STJ.JsonValueKind.String
+                   && Guid.TryParse(idElement.GetString(), out taskId)
+                   && taskId != Guid.Empty;
+        }
+        catch (STJ.JsonException)
+        {
+            return false;
+        }
+    }
+
     private void OnFilesSelected(InputFileChangeEventArgs e)
     {
         _selectedFiles = e.GetMultipleFiles(20).ToList();
@@ -527,15 +654,15 @@
 
     private async Task UploadTaskFilesAsync()
     {
-        if (!_taskNoReady || string.IsNullOrWhiteSpace(_taskNo))
+        if (!_isEdit || !TaskId.HasValue)
         {
-            _uploadMessage = "尚未取得 TaskNo。";
+            ShowUploadError("請先儲存子任務，儲存完成後即可上傳附件。");
             return;
         }
 
         if (_selectedFiles.Count == 0)
         {
-            _uploadMessage = "請先選擇檔案。";
+            ShowUploadError("請先選擇檔案。");
             return;
         }
 
@@ -544,69 +671,34 @@
 
         try
         {
-            var normalFiles = _selectedFiles
-                .Where(x => !IsTestReportFileName(x.Name))
-                .ToList();
+            var isTestReport = _uploadKind == "TestReport";
+            var endpoint = isTestReport
+                ? $"/api/tasks/{TaskId.Value}/test-reports"
+                : $"/api/tasks/{TaskId.Value}/files";
 
-            var testReportFiles = _selectedFiles
-                .Where(x => IsTestReportFileName(x.Name))
-                .ToList();
-
-            var successCount = 0;
-            var messages = new List<string>();
-
-            if (normalFiles.Count > 0)
+            var response = await UploadFilesToEndpointAsync(_selectedFiles, endpoint, true);
+            if (!response.IsSuccessStatusCode)
             {
-                var response = await UploadFilesToEndpointAsync(
-                    normalFiles,
-                    _isEdit && TaskId.HasValue
-                        ? $"/api/tasks/{TaskId}/files"
-                        : $"/api/cases/{CaseId}/tasks/upload/{Uri.EscapeDataString(_taskNo)}/files",
-                    testReportFiles.Count == 0);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    _uploadMessage = $"一般附件上傳失敗：{response.StatusCode} {response.Body}";
-                    return;
-                }
-
-                successCount += normalFiles.Count;
-                messages.Add($"一般附件 {normalFiles.Count} 個");
+                Console.Error.WriteLine($"[ModuleTaskEdit] Upload API failed. Status={response.StatusCode}, Body={response.Body}");
+                ShowUploadApiError(response);
+                return;
             }
 
-            if (testReportFiles.Count > 0)
-            {
-                var response = await UploadFilesToEndpointAsync(
-                    testReportFiles,
-                    _isEdit && TaskId.HasValue
-                        ? $"/api/tasks/{TaskId}/test-reports"
-                        : $"/api/cases/{CaseId}/tasks/upload/{Uri.EscapeDataString(_taskNo)}/test-reports",
-                    true);
-
-                if (!response.IsSuccessStatusCode)
-                {
-                    _uploadMessage = $"測試報告上傳失敗：{response.StatusCode} {response.Body}";
-                    return;
-                }
-
-                successCount += testReportFiles.Count;
-                messages.Add($"測試報告 {testReportFiles.Count} 個");
-            }
-
-            _uploadMessage = $"上傳成功：{string.Join("、", messages)}";
+            var uploadedCount = _selectedFiles.Count;
             _selectedFiles.Clear();
             await LoadTaskFilesAsync();
+            ShowToast($"上傳成功：{(isTestReport ? "測試報告" : "一般附件")} {uploadedCount} 個");
         }
         catch (Exception ex)
         {
-            _uploadMessage = $"上傳發生例外：{ex.Message}";
+            Console.Error.WriteLine($"[ModuleTaskEdit] Upload failed: {ex}");
+            ShowUploadError("系統暫時無法完成上傳，請稍後再試。");
         }
         finally
         {
             _uploading = false;
         }
     }
-
     private Task<BrowserApiResponse> UploadFilesToEndpointAsync(
         IReadOnlyList<IBrowserFile> files,
         string url,
@@ -616,43 +708,20 @@
         return Api.UploadFilesAsync(url, _fileInputContainer, files.Select(file => file.Name).ToList(), clearInput);
     }
 
-    private static bool IsTestReportFileName(string fileName)
-    {
-        var name = Path.GetFileNameWithoutExtension(fileName);
-        var parts = name.Split(
-            '-',
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        return parts.Length >= 5
-            && string.Equals(parts[0], "SIT", StringComparison.OrdinalIgnoreCase)
-            && string.Equals(parts[1], "TR", StringComparison.OrdinalIgnoreCase);
-    }
-
     private async Task LoadTaskFilesAsync()
     {
-        if (!_taskNoReady || string.IsNullOrWhiteSpace(_taskNo))
+        if (!_isEdit || !TaskId.HasValue)
         {
             _taskFiles = new();
             return;
         }
 
         _loadingFiles = true;
+        _fileListMessage = null;
 
         try
         {
-            string url;
-
-            if (_isEdit && TaskId.HasValue)
-            {
-                url = $"/api/tasks/{TaskId}/files";
-            }
-            else
-            {
-                var encodedTaskNo = Uri.EscapeDataString(_taskNo);
-                url = $"/api/cases/{CaseId}/tasks/{encodedTaskNo}/files";
-            }
-
-            var files = await Api.GetOptionalAsync<List<ModuleCaseFileDto>>(url);
+            var files = await Api.GetOptionalAsync<List<ModuleCaseFileDto>>($"/api/tasks/{TaskId.Value}/files");
 
             if (files is null)
             {
@@ -664,7 +733,8 @@
         }
         catch (Exception ex)
         {
-            _message = $"載入檔案清單失敗：{ex.Message}";
+            Console.Error.WriteLine($"[ModuleTaskEdit] Load task files failed: {ex}");
+            _fileListMessage = "檔案清單載入失敗，請稍後重新整理。";
             _taskFiles = new();
         }
         finally
@@ -675,15 +745,24 @@
 
     private async Task DeleteTaskFileAsync(Guid fileId)
     {
-        var response = await Api.DeleteAsync($"/api/files/{fileId}");
+        try
+        {
+            var response = await Api.DeleteAsync($"/api/files/{fileId}");
 
-        if (response.IsSuccessStatusCode)
-        {
-            await LoadTaskFilesAsync();
+            if (response.IsSuccessStatusCode)
+            {
+                await LoadTaskFilesAsync();
+                ShowToast("檔案已刪除。");
+                return;
+            }
+
+            Console.Error.WriteLine($"[ModuleTaskEdit] Delete file API failed. Status={response.StatusCode}, Body={response.Body}");
+            ShowDeleteApiError(response);
         }
-        else
+        catch (Exception ex)
         {
-            _message = $"刪除失敗：{response.StatusCode} {response.Body}";
+            Console.Error.WriteLine($"[ModuleTaskEdit] Delete file failed: {ex}");
+            ShowOperationError("刪除失敗", "系統暫時無法完成刪除，請稍後再試。");
         }
     }
 
@@ -698,10 +777,12 @@
         return string.IsNullOrWhiteSpace(value) ? "-" : value;
     }
 
-    private static string EngineerLabel(AssignableEngineerDto engineer) =>
-        string.IsNullOrWhiteSpace(engineer.DisplayName)
-            ? engineer.Account
-            : $"{engineer.DisplayName}（{engineer.Account}）";
+    private Task OpenStartDatePickerAsync() => ReservationApi.ShowDateTimePickerAsync(_startDateInput);
+    private Task OpenExpectedEndDatePickerAsync() => ReservationApi.ShowDateTimePickerAsync(_expectedEndDateInput);
+
+    private static bool IsApprovedTestReport(ModuleCaseFileDto file) =>
+        string.Equals(file.FileKind, "TestReport", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(file.ReviewStatus, "Approved", StringComparison.OrdinalIgnoreCase);
 
     private static string FormatSize(long size)
     {
@@ -714,6 +795,11 @@
     {
         public string TaskNo { get; set; } = string.Empty;
     }
+
+    private static string EngineerLabel(AssignableEngineerDto engineer) =>
+        string.IsNullOrWhiteSpace(engineer.DisplayName)
+            ? engineer.Account
+            : $"{engineer.DisplayName}（{engineer.Account}）";
 
     public class ModuleRecordDateDto
     {
@@ -781,5 +867,7 @@
         public long FileSize { get; set; }
         public string? UploadEmp { get; set; }
         public DateTime CreatedAt { get; set; }
+        public string FileKind { get; set; } = string.Empty;
+        public string? ReviewStatus { get; set; }
     }
 }

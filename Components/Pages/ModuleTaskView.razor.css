@@ -1,0 +1,5 @@
+.task-upload-button {
+    flex: 0 0 auto;
+    min-width: 72px;
+    white-space: nowrap;
+}

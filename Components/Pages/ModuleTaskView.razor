@@ -1,135 +1,90 @@
 @page "/modules/{ModuleCode}/{RecordId:guid}/cases/{CaseId:guid}/tasks/{TaskId:guid}"
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode InteractiveServer
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
 @using Microsoft.AspNetCore.Components.Forms
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Components.Shared
 @inject BrowserApiClient Api
 @inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+@inject IAuthorizationService AuthorizationService
 
-<h3>檢視子任務</h3>
-
-@if (!string.IsNullOrWhiteSpace(_message))
-{
-    <div class="form-card error-text">@_message</div>
-}
-
-@if (_task == null)
-{
-    <div class="surface-card">Loading...</div>
-}
+<h3>子任務明細</h3>
+<AppMessageDialog Visible="@_showMessageDialog"
+                  Title="@_dialogTitle"
+                  Message="@_dialogMessage"
+                  Type="@_dialogType"
+                  ShowCancel="@_dialogShowCancel"
+                  ConfirmText="@_dialogConfirmText"
+                  ConfirmIsDanger="@_dialogConfirmIsDanger"
+                  OnConfirm="ConfirmMessageDialogAsync"
+                  OnClose="CloseMessageDialog" />
+<AppToast Visible="@_showToast" Message="@_toastMessage" Type="@_toastType" OnClose="CloseToast" />
+@if (!string.IsNullOrWhiteSpace(_message)) { <div class="form-card @(_isError ? "error-text" : "")">@_message</div> }
+@if (_task is null) { <div class="surface-card">Loading...</div> }
 else
 {
-    <div class="page-actions">
-        <a class="primary-btn" href="@($"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}/tasks/{TaskId}/edit")">修改此子任務</a>
-        <button type="button" class="table-chip-btn danger" @onclick="DeleteTaskAsync" disabled="@_deleting">
-            @(_deleting ? "刪除中..." : "刪除此子任務")
-        </button>
-    </div>
+    <div class="page-actions"><a class="btn-secondary" href="@($"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}")">回上一頁</a><a class="primary-btn" href="@($"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}/tasks/{TaskId}/edit")">修改子任務</a><button type="button" class="table-chip-btn danger" @onclick="DeleteTaskAsync" disabled="@_deleting">刪除子任務</button></div>
+    <div class="form-card"><div class="project-table-wrap"><table class="project-table"><tbody>
+        <tr><th>子任務名稱</th><td>@_task.Name</td><th>Task No</th><td>@_task.TaskNo</td></tr>
+        <tr><th>指派工程師</th><td>@Display(_task.AssignEngineer)</td><th>狀態</th><td>@_task.Status</td></tr>
+        <tr><th>開始日期</th><td>@DisplayDate(_task.StartDate)</td><th>預計完成日期</th><td>@DisplayDate(_task.ExpectedEndDate)</td></tr>
+        <tr><th>結果</th><td>@Display(_task.Result)</td><th>進度</th><td>@_task.Progress%</td></tr>
+    </tbody></table></div></div>
 
     <div class="form-card">
-        <div class="project-table-wrap">
-            <table class="project-table">
-                <tbody>
-                    <tr><th>子任務名稱</th><td>@_task.Name</td><th>子任務ID</th><td>@_task.TaskNo</td></tr>
-                    <tr><th>Sub PU</th><td>@Display(_task.SubPu)</td><th>機種名稱</th><td>@Display(_task.ModelName)</td></tr>
-                    <tr><th>指派工程師</th><td>@Display(_task.AssignEngineer)</td><th>狀態</th><td>@_task.Status</td></tr>
-                    <tr><th>開始日期</th><td>@DisplayDate(_task.StartDate)</td><th>預計完成日</th><td>@DisplayDate(_task.ExpectedEndDate)</td></tr>
-                    <tr><th>結果判定</th><td>@Display(_task.Result)</td><th>進度</th><td>@_task.Progress</td></tr>
-                    <tr><th>實驗室名稱</th><td colspan="3">@Display(_task.Lab)</td></tr>
-                    <tr><th>報價金額</th><td>@Display(_task.Quoted)</td><th>請款金額</th><td>@Display(_task.Reimburse)</td></tr>
-                    <tr><th>備註</th><td colspan="3">@Display(_task.Note)</td></tr>
-                </tbody>
-            </table>
-        </div>
+        <div class="case-card-head"><div><div class="case-kicker">FILE UPLOAD</div><h2>檔案上傳</h2></div></div>
+        <div class="form-grid"><label>檔案種類<select @bind="_uploadKind"><option value="TestReport">測試報告</option><option value="Attachment">一般附件</option></select></label></div>
+        <div class="hint-text">測試報告首次上傳會建立 v1；分類由此選擇保存，不再依檔名判斷。</div>
+        <div class="upload-box" @ref="_uploadContainer"><InputFile OnChange="OnFilesSelected" multiple /><button type="button" class="btn-primary task-upload-button" @onclick="UploadFilesAsync" disabled="@(_selectedCount == 0 || _uploading)">@(_uploading ? "上傳中..." : "上傳")</button></div>
+        @if (_selectedCount > 0) { <div class="hint-text">已選擇 @_selectedCount 個檔案</div> }
     </div>
 
-    <div class="form-card">
-        <div class="case-tabs">
-            <button type="button" class="case-tab @(GetTabClass("Upload"))" @onclick='() => ChangeTab("Upload")'>檔案上傳</button>
-            <button type="button" class="case-tab @(GetTabClass("Files"))" @onclick='() => ChangeTab("Files")'>檔案清單</button>
+    @if (_versionTarget is not null)
+    {
+        <div class="form-card"><h2>上傳新版：@_versionTarget.FileName（目前 v@(_versionTarget.VersionNo)）</h2><div class="hint-text">新版沿用同一個 Document ID，版本號由伺服器自動產生；檔名可以相同。</div>
+            <div class="upload-box" @ref="_versionUploadContainer"><InputFile OnChange="OnVersionSelected" /><button type="button" class="btn-primary" @onclick="UploadVersionAsync" disabled="@(!_versionSelected || _uploading)">上傳新版</button><button type="button" class="table-chip-btn" @onclick="CancelVersionUpload">取消</button></div>
         </div>
+    }
 
-        @if (_activeTab == "Upload")
+    <div class="form-card">
+        <div class="case-card-head"><div><div class="case-kicker">TEST REPORT VERSIONS</div><h2>測試報告版本</h2></div><button class="btn-primary" @onclick="ReloadFilesAsync">重新整理</button></div>
+        @if (!Reports.Any()) { <div class="record-empty-box">目前沒有測試報告。</div> }
+        @foreach (var document in Reports.GroupBy(x => x.DocumentId).OrderByDescending(x => x.Max(y => y.CreatedAt)))
         {
-            <div class="case-card-head">
-                <div>
-                    <div class="case-kicker">TEST REPORT UPLOAD</div>
-                    <h2>檔案上傳</h2>
-                </div>
-            </div>
-
-            <div class="hint-text">
-                子任務頁上傳測試報告，UploadKind 固定為 TestReport。
-            </div>
-
-            <div class="upload-box" @ref="_fileInputContainer">
-                <InputFile OnChange="OnFilesSelected" multiple />
-                <button type="button" class="btn-primary" @onclick="UploadFilesAsync" disabled="@(_selectedFiles.Count == 0 || _uploading)">
-                    @(_uploading ? "上傳中..." : "儲存")
-                </button>
-            </div>
-
-            @if (_selectedFiles.Count > 0)
+            var latest = document.OrderByDescending(x => x.VersionNo).First();
+            <div class="surface-card" style="margin-bottom:1rem"><div class="case-card-head"><button class="table-chip-btn" @onclick="() => BeginVersionUpload(latest)">上傳新版</button></div>
+            <div class="project-table-wrap"><table class="project-table"><thead><tr><th>版本</th><th>原始檔名</th><th>狀態</th><th>Final</th><th>上傳者</th><th>上傳時間</th><th>操作</th></tr></thead><tbody>
+            @foreach (var file in document.OrderByDescending(x => x.VersionNo))
             {
-                <div class="upload-list">
-                    @foreach (var file in _selectedFiles)
+                <tr><td>v@(file.VersionNo)</td><td>@file.FileName</td><td>@ReviewLabel(file.ReviewStatus)</td><td>@(file.IsFinal ? "Final" : "-")</td><td>@Display(file.UploadEmp)</td><td>@file.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                    <td class="action-cell"><a class="table-link-btn" href="@($"/api/files/{file.Id}/download")" target="_blank">下載</a>
+                    @if (_canReview && file.ReviewStatus == "Pending") { <button class="table-chip-btn" @onclick='() => ReviewAsync(file.Id, "Approved")'>核准</button><button class="table-chip-btn danger" @onclick='() => ReviewAsync(file.Id, "Rejected")'>退回</button> }
+                    @if (IsApprovedOrFinal(file))
                     {
-                        <div class="upload-file-item">
-                            <span>@file.FileName</span>
-                            <strong>@FormatSize(file.Size)</strong>
-                        </div>
+                        <span class="hint-text">已核准</span>
+                        @if (_canReview)
+                        {
+                            <button class="table-chip-btn danger" @onclick="() => RequestDeleteFileAsync(file)" disabled="@_deleting">刪除</button>
+                        }
                     }
-                </div>
+                    else
+                    {
+                        <button class="table-chip-btn danger" @onclick="() => RequestDeleteFileAsync(file)" disabled="@_deleting">刪除</button>
+                    }</td>
+                </tr>
             }
+            </tbody></table></div></div>
         }
-        else if (_activeTab == "Files")
-        {
-            <div class="case-card-head">
-                <div>
-                    <div class="case-kicker">TEST REPORT FILE LIST</div>
-                    <h2>檔案清單</h2>
-                </div>
-                <button type="button" class="btn-primary" @onclick="ReloadFilesAsync">重新整理</button>
-            </div>
+    </div>
 
-            @if (_files.Count == 0)
-            {
-                <div class="record-empty-box">
-                    <strong>目前沒有檔案</strong>
-                    <span>請到「檔案上傳」選擇檔案並儲存。</span>
-                </div>
-            }
-            else
-            {
-                <div class="project-table-wrap">
-                    <table class="project-table">
-                        <thead>
-                            <tr>
-                                <th>文件名稱</th>
-                                <th>大小</th>
-                                <th>上傳時間</th>
-                                <th>上傳者</th>
-                                <th>操作</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var file in _files)
-                            {
-                                <tr>
-                                    <td>@file.FileName</td>
-                                    <td>@FormatSize(file.FileSize)</td>
-                                    <td>@file.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
-                                    <td>@Display(file.UploadEmp)</td>
-                                    <td class="action-cell">
-                                        <a class="table-link-btn" href="@($"/api/files/{file.Id}/download")" target="_blank">下載</a>
-                                        <button type="button" class="table-chip-btn danger" @onclick="() => DeleteFileAsync(file.Id)">刪除</button>
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            }
-        }
+    <div class="form-card"><h2>一般附件</h2>
+        @if (!Attachments.Any()) { <div class="record-empty-box">目前沒有一般附件。</div> }
+        else { <div class="project-table-wrap"><table class="project-table"><thead><tr><th>檔名</th><th>大小</th><th>上傳者</th><th>時間</th><th>操作</th></tr></thead><tbody>
+            @foreach (var file in Attachments) { <tr><td>@file.FileName</td><td>@FormatSize(file.FileSize)</td><td>@Display(file.UploadEmp)</td><td>@file.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td><td><a class="table-link-btn" href="@($"/api/files/{file.Id}/download")" target="_blank">下載</a> <button class="table-chip-btn danger" @onclick="() => RequestDeleteFileAsync(file)" disabled="@_deleting">刪除</button></td></tr> }
+        </tbody></table></div> }
     </div>
 }
 
@@ -138,196 +93,88 @@ else
     [Parameter] public Guid RecordId { get; set; }
     [Parameter] public Guid CaseId { get; set; }
     [Parameter] public Guid TaskId { get; set; }
-
     private ModuleTaskDetailDto? _task;
-    private string _activeTab = "Upload";
-    private string? _message;
-    private bool _uploading;
-    private bool _deleting;
-    private List<SelectedUploadFile> _selectedFiles = new();
-    private ElementReference _fileInputContainer;
-    private List<ModuleCaseFileDto> _files = new();
-    private bool _reloadRequested;
+    private List<ModuleCaseFileDto> _files = [];
+    private IEnumerable<ModuleCaseFileDto> Reports => _files.Where(x => x.FileKind == "TestReport");
+    private IEnumerable<ModuleCaseFileDto> Attachments => _files.Where(x => x.FileKind == "Attachment");
+    private string _uploadKind = "TestReport";
+    private ElementReference _uploadContainer; private ElementReference _versionUploadContainer;
+    private int _selectedCount; private bool _versionSelected; private ModuleCaseFileDto? _versionTarget;
+    private bool _uploading; private bool _deleting; private bool _canReview; private string? _message; private bool _isError;
+    private bool _showMessageDialog; private string _dialogTitle = string.Empty; private string _dialogMessage = string.Empty;
+    private AppMessageDialogType _dialogType = AppMessageDialogType.Info; private bool _dialogShowCancel;
+    private string _dialogConfirmText = "確定"; private bool _dialogConfirmIsDanger; private ModuleCaseFileDto? _pendingApprovedDelete;
+    private bool _showToast; private string _toastMessage = string.Empty; private AppToastType _toastType = AppToastType.Info;
 
-    protected override void OnParametersSet()
+    protected override async Task OnParametersSetAsync()
     {
-        _reloadRequested = true;
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        _canReview = (await AuthorizationService.AuthorizeAsync(auth.User, SystemAuthorization.Policies.Administration)).Succeeded;
+        await LoadAsync();
     }
-
-    protected override async Task OnAfterRenderAsync(bool firstRender)
-    {
-        if (!_reloadRequested) return;
-        _reloadRequested = false;
-        try
-        {
-            await LoadAsync();
-        }
-        catch (Exception ex)
-        {
-            _message = $"載入 Task 失敗：{ex.Message}";
-        }
-        StateHasChanged();
-    }
-
-    private async Task LoadAsync()
-    {
-        _message = null;
-        _task = await Api.GetAsync<ModuleTaskDetailDto>($"/api/tasks/{TaskId}");
-        await ReloadFilesAsync();
-    }
-
-    private void ChangeTab(string tab)
-    {
-        _activeTab = tab;
-        _message = null;
-    }
-
-    private string GetTabClass(string tab)
-    {
-        return _activeTab == tab ? "is-active" : "";
-    }
-
-    private async Task DeleteTaskAsync()
-    {
-        if (_deleting)
-        {
-            return;
-        }
-
-        _deleting = true;
-        _message = null;
-
-        try
-        {
-            var response = await Api.DeleteAsync($"/api/tasks/{TaskId}");
-
-            if (response.IsSuccessStatusCode)
-            {
-                Nav.NavigateTo($"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}");
-                return;
-            }
-
-            _message = $"刪除子任務失敗：{response.StatusCode} {response.Body}";
-            Console.WriteLine($"[ModuleTaskView] Delete task failed: {response.StatusCode} {response.Body}");
-        }
-        finally
-        {
-            _deleting = false;
-        }
-    }
-
-    private async Task OnFilesSelected(InputFileChangeEventArgs e)
-    {
-        _selectedFiles.Clear();
-
-        foreach (var file in e.GetMultipleFiles(20))
-        {
-            await using var stream = file.OpenReadStream(200_000_000);
-            using var ms = new MemoryStream();
-            await stream.CopyToAsync(ms);
-
-            _selectedFiles.Add(new SelectedUploadFile
-            {
-                FileName = file.Name,
-                ContentType = file.ContentType,
-                Size = file.Size,
-                Content = ms.ToArray()
-            });
-        }
-
-        _message = _selectedFiles.Count == 0
-            ? "沒有選擇檔案。"
-            : $"已選擇 {_selectedFiles.Count} 個檔案。";
-    }
-
+    private async Task LoadAsync() { try { _task = await Api.GetAsync<ModuleTaskDetailDto>($"/api/tasks/{TaskId}"); await ReloadFilesAsync(); } catch (Exception ex) { Console.Error.WriteLine($"[ModuleTaskView] Load failed: {ex}"); ShowError("載入子任務失敗，請稍後重新整理。"); } }
+    private async Task ReloadFilesAsync() => _files = await Api.GetAsync<List<ModuleCaseFileDto>>($"/api/tasks/{TaskId}/files");
+    private void OnFilesSelected(InputFileChangeEventArgs e) { _selectedCount = e.FileCount; ShowInfo($"已選擇 {_selectedCount} 個檔案。"); }
+    private void OnVersionSelected(InputFileChangeEventArgs e) { _versionSelected = e.FileCount == 1; ShowInfo(_versionSelected ? "已選擇新版檔案。" : "請選擇一個檔案。"); }
     private async Task UploadFilesAsync()
     {
-        if (_selectedFiles.Count == 0)
-        {
-            _message = "請先選擇檔案。";
-            return;
-        }
-
         _uploading = true;
-        _message = null;
-
-        try
-        {
-            var response = await Api.UploadFilesAsync($"/api/tasks/{TaskId}/files", _fileInputContainer);
-            var responseText = response.Body;
-
-            if (response.IsSuccessStatusCode)
-            {
-                _selectedFiles.Clear();
-                await ReloadFilesAsync();
-                _activeTab = "Files";
-                _message = "上傳成功。";
-                return;
-            }
-
-            _message = $"上傳失敗：{response.StatusCode} {responseText}";
-        }
-        catch (Exception ex)
-        {
-            _message = $"上傳發生例外：{ex.Message}";
-        }
-        finally
-        {
-            _uploading = false;
-        }
+        try { var endpoint = _uploadKind == "TestReport" ? $"/api/tasks/{TaskId}/test-reports" : $"/api/tasks/{TaskId}/files"; var response = await Api.UploadFilesAsync(endpoint, _uploadContainer); if (!response.IsSuccessStatusCode) { ShowApiError("上傳失敗", response, "上傳失敗，請稍後再試。"); return; } _selectedCount = 0; _message = null; await ReloadFilesAsync(); ShowToast(_uploadKind == "TestReport" ? "測試報告 v1 上傳成功。" : "一般附件上傳成功。"); }
+        catch (Exception ex) { Console.Error.WriteLine($"[ModuleTaskView] Upload failed: {ex}"); ShowErrorDialog("無法上傳", "系統暫時無法完成上傳，請稍後再試。"); }
+        finally { _uploading = false; }
     }
-
-    private async Task ReloadFilesAsync()
+    private void BeginVersionUpload(ModuleCaseFileDto file) { _versionTarget = file; _versionSelected = false; _message = null; }
+    private void CancelVersionUpload() { _versionTarget = null; _versionSelected = false; }
+    private async Task UploadVersionAsync()
     {
-        try
-        {
-            _files = await Api.GetAsync<List<ModuleCaseFileDto>>($"/api/tasks/{TaskId}/files");
-        }
-        catch (Exception ex)
-        {
-            _message = $"載入檔案清單發生例外：{ex.Message}";
-            _files = new();
-            Console.WriteLine($"[ModuleTaskView] Load files exception: {ex}");
-        }
+        if (_versionTarget is null) return; _uploading = true;
+        try { var response = await Api.UploadFilesAsync($"/api/files/{_versionTarget.Id}/versions", _versionUploadContainer); if (!response.IsSuccessStatusCode) { ShowApiError("上傳失敗", response, "新版上傳失敗，請稍後再試。"); return; } _versionTarget = null; _versionSelected = false; _message = null; await ReloadFilesAsync(); ShowToast("新版上傳成功。"); }
+        catch (Exception ex) { Console.Error.WriteLine($"[ModuleTaskView] Version upload failed: {ex}"); ShowErrorDialog("無法上傳", "系統暫時無法完成上傳，請稍後再試。"); }
+        finally { _uploading = false; }
     }
+    private async Task ReviewAsync(Guid fileId, string decision) { try { var response = await Api.PostJsonAsync($"/api/test-reports/{fileId}/review", new TestReportReviewRequest { Decision = decision }); if (!response.IsSuccessStatusCode) { ShowApiError("審核失敗", response, "審核失敗，請稍後再試。"); return; } await ReloadFilesAsync(); ShowToast(decision == "Approved" ? "報告已核准並設為 Final。" : "報告已退回。"); } catch (Exception ex) { Console.Error.WriteLine($"[ModuleTaskView] Review failed: {ex}"); ShowErrorDialog("無法完成審核", "系統暫時無法完成審核，請稍後再試。"); } }
+    private Task RequestDeleteFileAsync(ModuleCaseFileDto file)
+    {
+        if (!IsApprovedOrFinal(file)) return DeleteFileAsync(file.Id);
+        if (!_canReview) return Task.CompletedTask;
 
+        _pendingApprovedDelete = file;
+        _dialogTitle = "確認刪除測試報告";
+        _dialogMessage = "此版本已核准或設為 Final。確定要刪除此版本嗎？";
+        _dialogType = AppMessageDialogType.Warning;
+        _dialogShowCancel = true;
+        _dialogConfirmText = "確定刪除";
+        _dialogConfirmIsDanger = true;
+        _showMessageDialog = true;
+        return Task.CompletedTask;
+    }
+    private async Task ConfirmMessageDialogAsync()
+    {
+        if (_pendingApprovedDelete is null) { CloseMessageDialog(); return; }
+        var fileId = _pendingApprovedDelete.Id;
+        CloseMessageDialog();
+        await DeleteFileAsync(fileId);
+    }
     private async Task DeleteFileAsync(Guid fileId)
     {
-        var response = await Api.DeleteAsync($"/api/files/{fileId}");
-        if (response.IsSuccessStatusCode)
-        {
-            await ReloadFilesAsync();
-            _message = "刪除成功。";
-        }
-        else
-        {
-            _message = $"刪除失敗：{response.StatusCode} {response.Body}";
-        }
+        _deleting = true;
+        try { var response = await Api.DeleteAsync($"/api/files/{fileId}"); if (!response.IsSuccessStatusCode) { ShowApiError("刪除失敗", response, "刪除失敗，請稍後再試。"); return; } await ReloadFilesAsync(); ShowToast("檔案已刪除。"); }
+        catch (Exception ex) { Console.Error.WriteLine($"[ModuleTaskView] Delete file failed: {ex}"); ShowErrorDialog("無法刪除", "系統暫時無法完成刪除，請稍後再試。"); }
+        finally { _deleting = false; }
     }
-
+    private async Task DeleteTaskAsync() { _deleting = true; try { var response = await Api.DeleteAsync($"/api/tasks/{TaskId}"); if (response.IsSuccessStatusCode) Nav.NavigateTo($"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}"); else ShowError(response.Body); } finally { _deleting = false; } }
+    private void ShowError(string value) { _message = string.IsNullOrWhiteSpace(value) ? "操作失敗。" : value; _isError = true; }
+    private void ShowInfo(string value) { _message = value; _isError = false; }
+    private void ShowApiError(string title, BrowserApiResponse response, string fallback) { Console.Error.WriteLine($"[ModuleTaskView] API failed. Status={response.StatusCode}, Body={response.Body}"); ShowErrorDialog(title, IsSafeUserMessage(response.Body) ? response.Body.Trim() : fallback); }
+    private void ShowErrorDialog(string title, string message) { _pendingApprovedDelete = null; _dialogTitle = title; _dialogMessage = message; _dialogType = AppMessageDialogType.Error; _dialogShowCancel = false; _dialogConfirmText = "確定"; _dialogConfirmIsDanger = false; _showMessageDialog = true; }
+    private void CloseMessageDialog() { _showMessageDialog = false; _pendingApprovedDelete = null; _dialogShowCancel = false; _dialogConfirmText = "確定"; _dialogConfirmIsDanger = false; }
+    private void ShowToast(string message) { _toastMessage = message; _toastType = AppToastType.Success; _showToast = true; }
+    private void CloseToast() => _showToast = false;
+    private static bool IsSafeUserMessage(string? message) { if (string.IsNullOrWhiteSpace(message) || message.Length > 500) return false; var lowered = message.ToLowerInvariant(); return !message.Contains('<') && !message.Contains('>') && !new[] { "exception", "stack trace", "system.", " at ", "npgsql", "password", "token", "connection string" }.Any(lowered.Contains); }
+    private static bool IsApprovedOrFinal(ModuleCaseFileDto file) => file.FileKind == "TestReport" && (file.IsFinal || file.ReviewStatus == "Approved");
+    private static string ReviewLabel(string? value) => value switch { "Pending" => "待確認", "Approved" => "已核准", "Rejected" => "已退回", _ => "-" };
     private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "-" : value;
     private static string DisplayDate(DateOnly? value) => value?.ToString("yyyy/MM/dd") ?? "-";
-
-    private static string FormatSize(long size)
-    {
-        if (size >= 1024 * 1024)
-        {
-            return $"{size / 1024d / 1024d:0.##} MB";
-        }
-
-        if (size >= 1024)
-        {
-            return $"{size / 1024d:0.##} KB";
-        }
-
-        return $"{size} B";
-    }
-
-    private class SelectedUploadFile
-    {
-        public string FileName { get; set; } = string.Empty;
-        public string? ContentType { get; set; }
-        public long Size { get; set; }
-        public byte[] Content { get; set; } = [];
-    }
+    private static string FormatSize(long size) => size >= 1024 * 1024 ? $"{size / 1024d / 1024d:0.##} MB" : size >= 1024 ? $"{size / 1024d:0.##} KB" : $"{size} B";
+    private sealed class ModuleTaskDetailDto { public string TaskNo { get; set; } = ""; public string Name { get; set; } = ""; public string? AssignEngineer { get; set; } public string Status { get; set; } = ""; public string? Result { get; set; } public int Progress { get; set; } public DateOnly? StartDate { get; set; } public DateOnly? ExpectedEndDate { get; set; } }
 }

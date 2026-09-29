@@ -57,6 +57,7 @@ public class ModuleRecordsController : ControllerBase
     }
 
     [HttpPost("modules/{moduleCode}/records")]
+    [BusinessWrite]
     public async Task<ActionResult> Create(string moduleCode, [FromBody] ModuleRecordUpsertRequest request)
     {
         try
@@ -71,6 +72,7 @@ public class ModuleRecordsController : ControllerBase
     }
 
     [HttpPut("records/{id:guid}")]
+    [BusinessWrite]
     public async Task<ActionResult> Update(Guid id, [FromBody] ModuleRecordUpsertRequest request)
     {
         try
@@ -86,6 +88,7 @@ public class ModuleRecordsController : ControllerBase
     }
 
     [HttpDelete("records/{id:guid}")]
+    [BusinessWrite]
     public async Task<ActionResult> Delete(Guid id)
     {
         var ok = await _service.DeleteAsync(id);

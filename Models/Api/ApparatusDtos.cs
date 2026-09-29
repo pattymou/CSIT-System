@@ -14,6 +14,8 @@ public class ApparatusListItemDto
     public string? Place { get; set; }
     public string? Custodian { get; set; }
     public string? CustodianAccount { get; set; }
+    public Guid? DepartmentOptionId { get; set; }
+    public string? DepartmentName { get; set; }
     public Guid? OwnerTeamOptionId { get; set; }
     public string? OwnerTeamName { get; set; }
     public string? Agent { get; set; }
@@ -53,6 +55,8 @@ public class ApparatusDetailDto
     public string? PriceUse { get; set; }
     public string? Custodian { get; set; }
     public string? CustodianAccount { get; set; }
+    public Guid? DepartmentOptionId { get; set; }
+    public string? DepartmentName { get; set; }
     public Guid? OwnerTeamOptionId { get; set; }
     public string? OwnerTeamName { get; set; }
     public string? Agent { get; set; }
@@ -95,6 +99,7 @@ public class ApparatusUpsertRequest
     public string? DaysUse { get; set; }
     public string? PriceUse { get; set; }
     public string? CustodianAccount { get; set; }
+    public Guid? DepartmentOptionId { get; set; }
     public Guid? OwnerTeamOptionId { get; set; }
     public string? Agent { get; set; }
     public string? ReservationStatus { get; set; }
@@ -121,6 +126,7 @@ public class NewApparatusIdResponse
 
 public sealed class ApparatusOwnershipOptionsDto
 {
+    public List<ApparatusOwnerTeamOptionDto> Departments { get; set; } = new();
     public List<ApparatusOwnerTeamOptionDto> Teams { get; set; } = new();
     public List<ApparatusCustodianOptionDto> Users { get; set; } = new();
 }

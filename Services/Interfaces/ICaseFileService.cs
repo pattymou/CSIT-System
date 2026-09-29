@@ -9,12 +9,16 @@ public interface ICaseFileService
     Task<List<ModuleCaseFileDto>> GetTaskFilesAsync(Guid taskId);
     Task UploadAsync(Guid caseId, IReadOnlyList<IFormFile> files, string? uploadEmp);
     Task UploadByCaseNoAsync(Guid recordId, string caseNo, IReadOnlyList<IFormFile> files, string? uploadEmp);
-    Task UploadTaskReportAsync(Guid taskId, IReadOnlyList<IFormFile> files, string? uploadEmp);
+    Task UploadTaskReportAsync(Guid taskId, IReadOnlyList<IFormFile> files, string? uploadEmp, bool autoApprove = false);
     Task BindFilesToCaseAsync(Guid recordId, string caseNo, Guid caseId, string caseName);
     Task MoveCaseFolderAsync(Guid recordId, string caseNo, string oldCaseName, string newCaseName);
     Task<(byte[] Content, string FileName, string ContentType)> DownloadAsync(Guid fileId);
-    Task<bool> DeleteAsync(Guid fileId);
-    Task UploadTaskReportByTaskNoAsync(Guid caseId, string taskNo, IReadOnlyList<IFormFile> files, string? uploadEmp);
+    Task<bool> DeleteAsync(Guid fileId, bool canDeleteApprovedFinal = false, string? deletedBy = null);
+    Task UploadTaskReportByTaskNoAsync(Guid caseId, string taskNo, IReadOnlyList<IFormFile> files, string? uploadEmp, bool autoApprove = false);
+
+    Task UploadNewTestReportVersionAsync(Guid previousFileId, IFormFile file, string? uploadEmp, bool autoApprove = false);
+    Task<List<PendingTestReportDto>> GetPendingTestReportsAsync();
+    Task ReviewTestReportAsync(Guid fileId, TestReportReviewRequest request, string reviewer);
 
     Task<List<ModuleCaseFileDto>> GetTaskFilesByTaskNoAsync(Guid caseId, string taskNo);
 

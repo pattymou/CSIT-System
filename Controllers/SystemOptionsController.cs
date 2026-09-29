@@ -57,6 +57,7 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpPost("team-routings")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<IActionResult> CreateTeamRouting(
         [FromBody] TeamRoutingUpsertRequest request,
@@ -74,6 +75,7 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpPut("team-routings/{id:guid}")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<IActionResult> UpdateTeamRouting(
         Guid id,
@@ -93,6 +95,7 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpPost]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<IActionResult> Create([FromBody] SystemOptionUpsertRequest request)
     {
@@ -109,6 +112,7 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpPut("{id:guid}")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<IActionResult> Update(Guid id, [FromBody] SystemOptionUpsertRequest request)
     {
@@ -125,6 +129,7 @@ public class SystemOptionsController : ControllerBase
     }
 
     [HttpDelete("{id:guid}")]
+    [BusinessWrite]
     [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     public async Task<IActionResult> Delete(Guid id)
     {

@@ -17,7 +17,11 @@
             </div>
             <p id="app-message-dialog-message" class="app-message-dialog-message">@Message</p>
             <div class="app-message-dialog-actions">
-                <button type="button" class="app-message-dialog-confirm" @ref="_confirmButton" @onclick="CloseAsync">確定</button>
+                @if (ShowCancel)
+                {
+                    <button type="button" class="app-message-dialog-cancel" @onclick="CloseAsync">@CancelText</button>
+                }
+                <button type="button" class="@ConfirmButtonClass" @ref="_confirmButton" @onclick="ConfirmAsync">@ConfirmText</button>
             </div>
         </section>
     </div>
@@ -28,6 +32,11 @@
     [Parameter] public string Title { get; set; } = string.Empty;
     [Parameter] public string Message { get; set; } = string.Empty;
     [Parameter] public AppMessageDialogType Type { get; set; } = AppMessageDialogType.Info;
+    [Parameter] public bool ShowCancel { get; set; }
+    [Parameter] public string ConfirmText { get; set; } = "確定";
+    [Parameter] public string CancelText { get; set; } = "取消";
+    [Parameter] public bool ConfirmIsDanger { get; set; }
+    [Parameter] public EventCallback OnConfirm { get; set; }
     [Parameter] public EventCallback OnClose { get; set; }
 
     private ElementReference _confirmButton;
@@ -35,6 +44,9 @@
     private bool _focusOnNextRender;
 
     private string DialogClass => $"app-message-dialog app-message-dialog--{Type.ToString().ToLowerInvariant()}";
+    private string ConfirmButtonClass => ConfirmIsDanger
+        ? "app-message-dialog-confirm app-message-dialog-confirm--danger"
+        : "app-message-dialog-confirm";
     private string Icon => Type switch
     {
         AppMessageDialogType.Error => "!",
@@ -62,5 +74,6 @@
             await CloseAsync();
     }
 
+    private Task ConfirmAsync() => OnConfirm.HasDelegate ? OnConfirm.InvokeAsync() : OnClose.InvokeAsync();
     private Task CloseAsync() => OnClose.InvokeAsync();
 }

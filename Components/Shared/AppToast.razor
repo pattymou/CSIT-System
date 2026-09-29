@@ -1,0 +1,79 @@
+@namespace SIT.DepartmentSystem.Web.Components.Shared
+@implements IDisposable
+
+@if (Visible)
+{
+    <aside class="@ToastClass" role="status" aria-live="polite">
+        <span class="app-toast-icon" aria-hidden="true">@Icon</span>
+        <span class="app-toast-message">@Message</span>
+        <button type="button" class="app-toast-close" aria-label="關閉通知" @onclick="CloseAsync">×</button>
+    </aside>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public string Message { get; set; } = string.Empty;
+    [Parameter] public AppToastType Type { get; set; } = AppToastType.Info;
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private CancellationTokenSource? _dismissCancellation;
+    private bool _wasVisible;
+    private bool _closing;
+    private string _lastMessage = string.Empty;
+    private AppToastType _lastType;
+
+    private string ToastClass => $"app-toast app-toast--{Type.ToString().ToLowerInvariant()}";
+    private string Icon => Type == AppToastType.Success ? "✓" : "i";
+
+    protected override void OnParametersSet()
+    {
+        var contentChanged = !string.Equals(Message, _lastMessage, StringComparison.Ordinal) || Type != _lastType;
+
+        if (Visible && (!_wasVisible || contentChanged))
+            StartAutoDismiss();
+        else if (!Visible && _wasVisible)
+            CancelAutoDismiss();
+
+        _wasVisible = Visible;
+        _lastMessage = Message;
+        _lastType = Type;
+    }
+
+    private void StartAutoDismiss()
+    {
+        CancelAutoDismiss();
+        _dismissCancellation = new CancellationTokenSource();
+        _ = DismissAfterDelayAsync(_dismissCancellation.Token);
+    }
+
+    private async Task DismissAfterDelayAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+            await InvokeAsync(CloseAsync);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+    }
+
+    private async Task CloseAsync()
+    {
+        if (_closing) return;
+
+        _closing = true;
+        CancelAutoDismiss();
+        await OnClose.InvokeAsync();
+        _closing = false;
+    }
+
+    private void CancelAutoDismiss()
+    {
+        _dismissCancellation?.Cancel();
+        _dismissCancellation?.Dispose();
+        _dismissCancellation = null;
+    }
+
+    public void Dispose() => CancelAutoDismiss();
+}

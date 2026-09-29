@@ -9,10 +9,14 @@ namespace SIT.DepartmentSystem.Web.Services.Implementations;
 public class MenuManagementService : IMenuManagementService
 {
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
+    private readonly IBusinessWriteAuthorizationGuard _businessWrite;
 
-    public MenuManagementService(IDbContextFactory<AppDbContext> dbFactory)
+    public MenuManagementService(
+        IDbContextFactory<AppDbContext> dbFactory,
+        IBusinessWriteAuthorizationGuard businessWrite)
     {
         _dbFactory = dbFactory;
+        _businessWrite = businessWrite;
     }
 
     public async Task<List<MenuSectionDto>> GetSectionsAsync()
@@ -85,6 +89,7 @@ public class MenuManagementService : IMenuManagementService
 
     public async Task<Guid> CreateItemAsync(Guid sectionId, MenuItemUpsertRequest request)
     {
+        await _businessWrite.DemandAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         var code = NormalizeRequired(request.Code, "Code");
@@ -131,6 +136,7 @@ public class MenuManagementService : IMenuManagementService
 
     public async Task<bool> UpdateItemAsync(Guid id, MenuItemUpsertRequest request)
     {
+        await _businessWrite.DemandAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         var entity = await db.MenuItems.FirstOrDefaultAsync(x => x.Id == id);
@@ -177,6 +183,7 @@ public class MenuManagementService : IMenuManagementService
 
     public async Task<bool> DeleteItemAsync(Guid id)
     {
+        await _businessWrite.DemandAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         var entity = await db.MenuItems.FirstOrDefaultAsync(x => x.Id == id);

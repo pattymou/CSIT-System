@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using System.Security.Claims;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
@@ -11,10 +12,12 @@ namespace SIT.DepartmentSystem.Web.Controllers;
 public class CaseFilesController : ControllerBase
 {
     private readonly ICaseFileService _service;
+    private readonly IAuthorizationService _authorizationService;
 
-    public CaseFilesController(ICaseFileService service)
+    public CaseFilesController(ICaseFileService service, IAuthorizationService authorizationService)
     {
         _service = service;
+        _authorizationService = authorizationService;
     }
 
     [HttpGet("api/cases/{caseId:guid}/files")]
@@ -39,6 +42,7 @@ public class CaseFilesController : ControllerBase
     //}
 
     [HttpPost("api/cases/{caseId:guid}/files")]
+    [BusinessWrite]
     [RequestSizeLimit(200_000_000)]
     [RequestFormLimits(MultipartBodyLengthLimit = 200_000_000)]
     public async Task<IActionResult> Upload(Guid caseId)
@@ -60,6 +64,7 @@ public class CaseFilesController : ControllerBase
     }
 
     [HttpPost("api/records/{recordId:guid}/cases/upload/{caseNo}/attachments")]
+    [BusinessWrite]
     [RequestSizeLimit(200_000_000)]
     [RequestFormLimits(MultipartBodyLengthLimit = 200_000_000)]
     public async Task<IActionResult> UploadByCaseNo(Guid recordId, string caseNo)
@@ -110,10 +115,24 @@ public class CaseFilesController : ControllerBase
     }
 
     [HttpDelete("api/files/{fileId:guid}")]
+    [BusinessWrite]
     public async Task<IActionResult> Delete(Guid fileId)
     {
-        var ok = await _service.DeleteAsync(fileId);
-        return ok ? Ok() : NotFound();
+        try
+        {
+            var canDeleteApprovedFinal = (await _authorizationService.AuthorizeAsync(
+                User,
+                SystemAuthorization.Policies.Administration)).Succeeded;
+            var deletedBy = User.FindFirstValue("account")
+                ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
+                ?? User.Identity?.Name;
+            var ok = await _service.DeleteAsync(fileId, canDeleteApprovedFinal, deletedBy);
+            return ok ? Ok() : NotFound();
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(ex.Message);
+        }
     }
 
     private string GetUploadEmp()

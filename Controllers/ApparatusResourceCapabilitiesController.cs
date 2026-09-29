@@ -30,6 +30,7 @@ public sealed class ApparatusResourceCapabilitiesController : ControllerBase
         Ok(await _service.GetCatalogValuesAsync(cancellationToken));
 
     [HttpPut]
+    [BusinessWrite]
     public async Task<IActionResult> Replace(
         string apparatusId,
         [FromBody] ReplaceApparatusResourceCapabilitiesRequest request,
