@@ -5,6 +5,7 @@
 @inject BrowserApiClient Api
 @inject ReservationApiClient ReservationApi
 @inject NavigationManager Nav
+@using SIT.DepartmentSystem.Web.Components.Shared
 
 <h3 class="page-title">@(_isEdit ? "修改主單" : "新增主單")</h3>
 
@@ -12,6 +13,12 @@
 {
     <div class="form-card error-text">@_message</div>
 }
+
+<AppMessageDialog Visible="@_showMessageDialog"
+                  Title="@_dialogTitle"
+                  Message="@_dialogMessage"
+                  Type="@_dialogType"
+                  OnClose="CloseMessageDialog" />
 
 <div class="surface-card record-edit-card">
     <div class="edit-grid">
@@ -297,6 +304,10 @@
     private ElementReference _expectedEndDateInput;
     private ElementReference _sampleReadyDateInput;
     private bool _reloadRequested;
+    private bool _showMessageDialog;
+    private string _dialogTitle = string.Empty;
+    private string _dialogMessage = string.Empty;
+    private AppMessageDialogType _dialogType = AppMessageDialogType.Info;
     private DateOnly? _earliestTaskStartDate;
     private DateOnly? _latestTaskExpectedEndDate;
     private bool _labOwnersLoading;
@@ -512,7 +523,7 @@
             _isEdit ? _latestTaskExpectedEndDate : null);
         if (dateError is not null)
         {
-            _message = dateError;
+            ShowError("無法儲存", dateError);
             return;
         }
 
@@ -554,30 +565,59 @@
             RelatedMembers = _form.RelatedMembers
         };
 
-        BrowserApiResponse response;
-
-        if (_isEdit)
+        try
         {
-            response = await Api.PutJsonAsync($"/api/records/{id}", request);
+            var response = _isEdit
+                ? await Api.PutJsonAsync($"/api/records/{id}", request)
+                : await Api.PostJsonAsync($"/api/modules/{moduleCode}/records", request);
+
             if (response.IsSuccessStatusCode)
             {
                 Nav.NavigateTo($"/modules/{moduleCode}");
                 return;
             }
-        }
-        else
-        {
-            response = await Api.PostJsonAsync($"/api/modules/{moduleCode}/records", request);
-            if (response.IsSuccessStatusCode)
-            {
-                Nav.NavigateTo($"/modules/{moduleCode}");
-                return;
-            }
-        }
 
-        _message = string.IsNullOrWhiteSpace(response.Body)
-            ? $"儲存失敗（{response.StatusCode}）。"
-            : response.Body;
+            Console.Error.WriteLine($"[ModuleRecordEdit] Save API failed. Status={response.StatusCode}, Body={response.Body}");
+            ShowError("儲存失敗", GetSafeSaveFailureMessage(response));
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ModuleRecordEdit] Save failed: {ex}");
+            ShowError("無法儲存", "系統暫時無法完成儲存，請稍後再試。");
+        }
+    }
+
+    private void ShowError(string title, string message)
+    {
+        _dialogTitle = title;
+        _dialogMessage = message;
+        _dialogType = AppMessageDialogType.Error;
+        _showMessageDialog = true;
+    }
+
+    private void CloseMessageDialog()
+    {
+        _showMessageDialog = false;
+    }
+
+    private static string GetSafeSaveFailureMessage(BrowserApiResponse response)
+    {
+        var message = response.Body?.Trim();
+        return IsSafeUserMessage(message)
+            ? message!
+            : "儲存失敗，請稍後再試。";
+    }
+
+    private static bool IsSafeUserMessage(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message) || message.Length > 500)
+            return false;
+
+        var lowered = message.ToLowerInvariant();
+        return !message.Contains('<') &&
+               !message.Contains('>') &&
+               !new[] { "exception", "stack trace", "system.", " at ", "npgsql", "password", "token", "connection string" }
+                   .Any(marker => lowered.Contains(marker));
     }
 
     private void BackToList()

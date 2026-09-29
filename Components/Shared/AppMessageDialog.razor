@@ -1,0 +1,66 @@
+@namespace SIT.DepartmentSystem.Web.Components.Shared
+
+@if (Visible)
+{
+    <div class="app-message-dialog-backdrop" @onclick="CloseAsync">
+        <section class="@DialogClass"
+                 role="dialog"
+                 aria-modal="true"
+                 aria-labelledby="app-message-dialog-title"
+                 aria-describedby="app-message-dialog-message"
+                 tabindex="-1"
+                 @onclick:stopPropagation="true"
+                 @onkeydown="HandleKeyDownAsync">
+            <div class="app-message-dialog-heading">
+                <span class="app-message-dialog-icon" aria-hidden="true">@Icon</span>
+                <h2 id="app-message-dialog-title">@Title</h2>
+            </div>
+            <p id="app-message-dialog-message" class="app-message-dialog-message">@Message</p>
+            <div class="app-message-dialog-actions">
+                <button type="button" class="app-message-dialog-confirm" @ref="_confirmButton" @onclick="CloseAsync">確定</button>
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public string Title { get; set; } = string.Empty;
+    [Parameter] public string Message { get; set; } = string.Empty;
+    [Parameter] public AppMessageDialogType Type { get; set; } = AppMessageDialogType.Info;
+    [Parameter] public EventCallback OnClose { get; set; }
+
+    private ElementReference _confirmButton;
+    private bool _wasVisible;
+    private bool _focusOnNextRender;
+
+    private string DialogClass => $"app-message-dialog app-message-dialog--{Type.ToString().ToLowerInvariant()}";
+    private string Icon => Type switch
+    {
+        AppMessageDialogType.Error => "!",
+        AppMessageDialogType.Warning => "!",
+        _ => "i"
+    };
+
+    protected override void OnParametersSet()
+    {
+        _focusOnNextRender = Visible && !_wasVisible;
+        _wasVisible = Visible;
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_focusOnNextRender) return;
+
+        _focusOnNextRender = false;
+        await _confirmButton.FocusAsync();
+    }
+
+    private async Task HandleKeyDownAsync(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape")
+            await CloseAsync();
+    }
+
+    private Task CloseAsync() => OnClose.InvokeAsync();
+}

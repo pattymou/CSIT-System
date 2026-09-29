@@ -1,0 +1,115 @@
+.app-message-dialog-backdrop {
+    align-items: center;
+    background: rgba(2, 6, 23, .72);
+    backdrop-filter: blur(4px);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    padding: 20px;
+    position: fixed;
+    z-index: 2000;
+}
+
+.app-message-dialog {
+    background: linear-gradient(180deg, rgba(24, 36, 51, .99), rgba(12, 18, 30, .99));
+    border: 1px solid rgba(148, 163, 184, .28);
+    border-radius: 18px;
+    box-shadow: 0 24px 64px rgba(2, 6, 23, .62);
+    max-width: 460px;
+    outline: 0;
+    padding: 24px;
+    width: min(100%, 460px);
+}
+
+.app-message-dialog-heading {
+    align-items: center;
+    display: flex;
+    gap: 11px;
+}
+
+.app-message-dialog-heading h2 {
+    color: #e8edf7;
+    font-size: 1.08rem;
+    margin: 0;
+}
+
+.app-message-dialog-icon {
+    align-items: center;
+    background: rgba(56, 189, 248, .15);
+    border: 1px solid rgba(56, 189, 248, .36);
+    border-radius: 50%;
+    color: #7dd3fc;
+    display: inline-flex;
+    font-size: .9rem;
+    font-weight: 800;
+    height: 25px;
+    justify-content: center;
+    width: 25px;
+}
+
+.app-message-dialog--error .app-message-dialog-icon {
+    background: rgba(248, 113, 113, .14);
+    border-color: rgba(248, 113, 113, .44);
+    color: #fca5a5;
+}
+
+.app-message-dialog--warning .app-message-dialog-icon {
+    background: rgba(251, 191, 36, .14);
+    border-color: rgba(251, 191, 36, .42);
+    color: #fcd34d;
+}
+
+.app-message-dialog-message {
+    color: #cbd5e1;
+    line-height: 1.65;
+    margin: 18px 0 24px;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+}
+
+.app-message-dialog-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.app-message-dialog-confirm {
+    background: linear-gradient(135deg, #0f766e, #0e7490);
+    border: 1px solid rgba(103, 232, 249, .28);
+    border-radius: 10px;
+    color: #ecfeff;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    min-width: 88px;
+    padding: 9px 18px;
+}
+
+.app-message-dialog-confirm:hover,
+.app-message-dialog-confirm:focus-visible {
+    background: linear-gradient(135deg, #0d9488, #0891b2);
+}
+
+.app-message-dialog-confirm:focus-visible {
+    outline: 3px solid rgba(125, 211, 252, .52);
+    outline-offset: 3px;
+}
+
+@media (max-width: 560px) {
+    .app-message-dialog-backdrop {
+        align-items: flex-end;
+        padding: 12px;
+    }
+
+    .app-message-dialog {
+        border-radius: 16px;
+        padding: 20px;
+    }
+
+    .app-message-dialog-actions {
+        justify-content: stretch;
+    }
+
+    .app-message-dialog-confirm {
+        width: 100%;
+    }
+}
