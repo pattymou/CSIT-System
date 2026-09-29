@@ -4,6 +4,7 @@
 @using Microsoft.AspNetCore.Components.Forms
 @inject BrowserApiClient Api
 @inject NavigationManager Nav
+@using SIT.DepartmentSystem.Web.Components.Shared
 
 <h3>@(_isEdit ? "編輯子任務" : "新增子任務")</h3>
 <p class="page-subtitle">Task File-First Upload / 測試報告先上傳模式</p>
@@ -289,6 +290,10 @@
     private bool _loadingFiles;
     private bool _taskNoReady;
     private string? _message;
+    private bool _showMessageDialog;
+    private string _dialogTitle = string.Empty;
+    private string _dialogMessage = string.Empty;
+    private AppMessageDialogType _dialogType = AppMessageDialogType.Info;
     private string? _uploadMessage;
     private string _taskNo = string.Empty;
     private bool _isEdit => TaskId.HasValue;
@@ -419,14 +424,14 @@
     {
         if (string.IsNullOrWhiteSpace(_form.Name))
         {
-            _message = "子任務名稱不可空白。";
+            ShowSaveError("子任務名稱不可空白。");
             return;
         }
 
         if (string.Equals(_form.Status, "Close", StringComparison.OrdinalIgnoreCase) &&
             string.IsNullOrWhiteSpace(_form.Result))
         {
-            _message = "狀態為 Close 時，結果判定不得為空白。";
+            ShowSaveError("狀態為 Close 時，結果判定不得為空白。");
             return;
         }
 
@@ -437,7 +442,7 @@
             _recordExpectedEndDate);
         if (dateError is not null)
         {
-            _message = dateError;
+            ShowSaveError(dateError);
             return;
         }
 
@@ -447,40 +452,71 @@
 
         try
         {
-            BrowserApiResponse response;
+            var response = _isEdit
+                ? await Api.PutJsonAsync($"/api/tasks/{TaskId}", _form)
+                : await Api.PostJsonAsync($"/api/cases/{CaseId}/tasks", _form);
 
-            if (_isEdit)
+            if (response.IsSuccessStatusCode)
             {
-                response = await Api.PutJsonAsync($"/api/tasks/{TaskId}", _form);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    Nav.NavigateTo($"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}/tasks/{TaskId}");
-                    return;
-                }
-            }
-            else
-            {
-                response = await Api.PostJsonAsync($"/api/cases/{CaseId}/tasks", _form);
-
-                if (response.IsSuccessStatusCode)
-                {
-                    Nav.NavigateTo($"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}");
-                    return;
-                }
+                Nav.NavigateTo(_isEdit
+                    ? $"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}/tasks/{TaskId}"
+                    : $"/modules/{ModuleCode}/{RecordId}/cases/{CaseId}");
+                return;
             }
 
-            _message = response.Body;
-
-            if (string.IsNullOrWhiteSpace(_message))
-            {
-                _message = "儲存失敗，請確認資料後重試。";
-            }
+            Console.Error.WriteLine($"[ModuleTaskEdit] Save API failed. Status={response.StatusCode}, Body={response.Body}");
+            ShowSaveApiError(response);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[ModuleTaskEdit] Save failed: {ex}");
+            ShowSaveError("系統暫時無法完成儲存，請稍後再試。");
         }
         finally
         {
             _saving = false;
         }
+    }
+
+    private void ShowSaveError(string message)
+    {
+        _dialogTitle = "無法儲存";
+        _dialogMessage = message;
+        _dialogType = AppMessageDialogType.Error;
+        _showMessageDialog = true;
+    }
+
+    private void ShowSaveApiError(BrowserApiResponse response)
+    {
+        _dialogTitle = "儲存失敗";
+        _dialogMessage = GetSafeSaveFailureMessage(response);
+        _dialogType = AppMessageDialogType.Error;
+        _showMessageDialog = true;
+    }
+
+    private void CloseMessageDialog()
+    {
+        _showMessageDialog = false;
+    }
+
+    private static string GetSafeSaveFailureMessage(BrowserApiResponse response)
+    {
+        var message = response.Body?.Trim();
+        return IsSafeUserMessage(message)
+            ? message!
+            : "儲存失敗，請稍後再試。";
+    }
+
+    private static bool IsSafeUserMessage(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message) || message.Length > 500)
+            return false;
+
+        var lowered = message.ToLowerInvariant();
+        return !message.Contains('<') &&
+               !message.Contains('>') &&
+               !new[] { "exception", "stack trace", "system.", " at ", "npgsql", "password", "token", "connection string" }
+                   .Any(marker => lowered.Contains(marker));
     }
 
     private void OnFilesSelected(InputFileChangeEventArgs e)
