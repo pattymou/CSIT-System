@@ -1,0 +1,210 @@
+@page "/supervisor-review"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.Administration)]
+@rendermode InteractiveServer
+@using SIT.DepartmentSystem.Web.Services.Approval
+@using SIT.DepartmentSystem.Web.Entities
+@inject ApprovalSubmissionService Submissions
+@inject AuthenticationStateProvider AuthProvider
+@inject IAuthorizationService AuthorizationService
+
+<PageTitle>主管審核中心</PageTitle>
+<h1>主管審核中心</h1>
+<p class="page-subtitle">選擇來源功能，查看可由您審核的提交項目。</p>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="form-card error-text">@_message</div>
+}
+@if (!string.IsNullOrWhiteSpace(_successMessage))
+{
+    <div class="success-alert" role="status">@_successMessage</div>
+}
+
+@if (_sources.Count == 0)
+{
+    <div class="record-empty-box">目前沒有可使用的主管審核來源。</div>
+}
+else
+{
+    <div class="approval-review-layout">
+        <nav class="approval-source-tabs" role="tablist" aria-label="來源分類">
+            @foreach (var source in _sources)
+            {
+                <button type="button" role="tab" class="approval-source-tab @(source.Code == _selectedCode ? "active" : "")"
+                        aria-selected="@(source.Code == _selectedCode)" aria-controls="approval-review-panel"
+                        @onclick="() => SelectSourceAsync(source.Code)">
+                    <span>@source.Title</span><span class="approval-source-count">@_sourceCounts.GetValueOrDefault(source.Code)</span>
+                </button>
+            }
+        </nav>
+        <section id="approval-review-panel" role="tabpanel" class="surface-card approval-review-results">
+            <div class="case-card-head"><h2>@_sources.First(x => x.Code == _selectedCode).Title</h2>
+                <button type="button" class="table-chip-btn" @onclick="RefreshAsync">重新整理狀態</button></div>
+            <p>待審 @(_items.Count(x => x.Status == ApprovalStatus.Pending)) 筆；正式寫入中 @(_items.Count(x => x.Status == ApprovalStatus.ApprovedPendingCommit)) 筆；寫入失敗 @(_items.Count(x => x.Status == ApprovalStatus.CommitFailed)) 筆</p>
+            @if (_items.Count == 0)
+            {
+                <div class="record-empty-box">目前沒有待審項目。</div>
+            }
+            else
+            {
+                <div class="project-table-wrap approval-review-table-wrap"><table class="project-table approval-review-table">
+                    <colgroup><col class="approval-col-actions" /><col class="approval-col-context" />
+                        <col class="approval-col-file" /><col class="approval-col-submitter" />
+                        <col class="approval-col-time" /><col class="approval-col-status" /></colgroup>
+                    <thead><tr><th>操作</th><th>項目</th><th>檔案</th><th>提交者</th><th>提交時間</th><th>狀態</th></tr></thead>
+                    <tbody>
+                    @foreach (var item in _items)
+                    {
+                        <tr>
+                            <td class="approval-actions-cell"><div class="approval-actions">
+                                @if (_canWrite && item.Status == ApprovalStatus.Pending)
+                                {
+                                    <button class="table-chip-btn" @onclick="() => ApproveAsync(item.Id)">核准</button>
+                                    <button class="table-chip-btn danger" @onclick="() => BeginReject(item.Id)">退回</button>
+                                }
+                                else if (_canWrite && item.Status == ApprovalStatus.CommitFailed)
+                                {
+                                    <button class="table-chip-btn" @onclick="() => RetryAsync(item.Id)">重試提交</button>
+                                }
+                                else if (item.Status == ApprovalStatus.ApprovedPendingCommit)
+                                {
+                                    <span class="hint-text">正式寫入中</span>
+                                }
+                            </div></td>
+                            <td title="@Display(item.ContextDisplay ?? item.ContextId)">
+                                @if (item.ContextRoute is not null)
+                                {
+                                    <a class="table-link-btn approval-ellipsis-link" href="@item.ContextRoute">@Display(item.ContextDisplay ?? item.ContextId)</a>
+                                }
+                                else
+                                {
+                                    <span>@Display(item.ContextDisplay ?? item.ContextId)</span>
+                                }
+                            </td>
+                            <td title="@Display(item.OriginalFileName)">
+                                @if (item.HasStagingFile)
+                                {
+                                    <a class="table-link-btn approval-ellipsis-link" target="_blank" rel="noopener" href="@($"/api/supervisor-submissions/{item.Id}/file")">@Display(item.OriginalFileName)</a>
+                                }
+                                else
+                                {
+                                    <span>@Display(item.OriginalFileName)</span>
+                                }
+                            </td>
+                            <td title="@item.SubmittedByAccount">@item.SubmittedByAccount</td>
+                            <td>@item.SubmittedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                            <td title="@StatusLabel(item.Status)">@StatusLabel(item.Status)</td>
+                        </tr>
+                        @if (_rejectingId == item.Id)
+                        {
+                            <tr><td class="approval-reject-editor" colspan="6">
+                                <label for="reject-reason">退回原因（必填）</label>
+                                <textarea id="reject-reason" @bind="_rejectReason" @bind:event="oninput" maxlength="2000" required></textarea>
+                                <button class="table-chip-btn danger" disabled="@(string.IsNullOrWhiteSpace(_rejectReason))"
+                                        @onclick="() => RejectAsync(item.Id)">確認退回</button>
+                                <button class="table-chip-btn" @onclick="CancelReject">取消</button>
+                            </td></tr>
+                        }
+                    }
+                    </tbody>
+                </table></div>
+            }
+        </section>
+    </div>
+}
+
+@code {
+    private List<ApprovalSourceDto> _sources = [];
+    private List<ApprovalSubmissionDto> _items = [];
+    private IReadOnlyDictionary<string, int> _sourceCounts = new Dictionary<string, int>();
+    private string? _selectedCode;
+    private string? _message;
+    private string? _successMessage;
+    private string? _rejectReason;
+    private Guid? _rejectingId;
+    private bool _canWrite;
+    private Guid? _lastApprovedId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+        _canWrite = (await AuthorizationService.AuthorizeAsync(user, SystemAuthorization.Policies.BusinessWrite)).Succeeded;
+        try
+        {
+            _sources = (await Submissions.ListActiveSourcesAsync()).ToList();
+            if (_sources.Count > 0) await SelectSourceAsync(_sources[0].Code);
+        }
+        catch { _message = "無法載入主管審核項目，請稍後再試。"; }
+    }
+
+    private async Task SelectSourceAsync(string code)
+    {
+        _selectedCode = code;
+        _rejectingId = null;
+        _successMessage = null;
+        try
+        {
+            var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+            _sourceCounts = await Submissions.CountForReviewBySourceAsync(user);
+            _items = (await Submissions.ListForReviewAsync(user, code)).ToList();
+            _message = null;
+        }
+        catch { _message = "無法載入此來源的待審項目。"; }
+    }
+
+    private async Task ApproveAsync(Guid id) => await ExecuteAsync(user => Submissions.ApproveAsync(id, user), "已核准，資料正在正式寫入中。", id);
+    private async Task RetryAsync(Guid id) => await ExecuteAsync(user => Submissions.RetryAsync(id, user), "已重新排入正式提交。");
+    private void BeginReject(Guid id) { _rejectingId = id; _rejectReason = null; _message = null; _successMessage = null; }
+    private void CancelReject() { _rejectingId = null; _rejectReason = null; }
+    private async Task RejectAsync(Guid id)
+    {
+        if (string.IsNullOrWhiteSpace(_rejectReason)) { _message = "Reject Reason 不可空白。"; return; }
+        var reason = _rejectReason;
+        await ExecuteAsync(user => Submissions.RejectAsync(id, user, reason), "已退回，提交者可在「我的退回項目」查看原因。");
+    }
+    private async Task ExecuteAsync(Func<global::System.Security.Claims.ClaimsPrincipal, Task> action, string successMessage, Guid? approvedId = null)
+    {
+        _successMessage = null;
+        try
+        {
+            var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+            await action(user);
+            if (approvedId.HasValue) _lastApprovedId = approvedId;
+            CancelReject();
+            if (_selectedCode is not null) await SelectSourceAsync(_selectedCode);
+            if (_message is null)
+                _successMessage = approvedId.HasValue
+                    ? StatusMessage(await Submissions.GetStatusForReviewAsync(approvedId.Value, user))
+                    : successMessage;
+        }
+        catch (ArgumentException) { _message = "Reject Reason 不可空白且不得超過 2000 字。"; }
+        catch (UnauthorizedAccessException) { _message = "您沒有審核此項目的權限。"; }
+        catch { _message = "操作未完成，請重新整理後再試。"; }
+    }
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private async Task RefreshAsync()
+    {
+        if (_selectedCode is null) return;
+        await SelectSourceAsync(_selectedCode);
+        if (_lastApprovedId.HasValue && _message is null)
+        {
+            var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+            _successMessage = StatusMessage(await Submissions.GetStatusForReviewAsync(_lastApprovedId.Value, user));
+        }
+    }
+    private static string StatusLabel(ApprovalStatus status) => status switch
+    {
+        ApprovalStatus.Pending => "待主管審核",
+        ApprovalStatus.ApprovedPendingCommit => "已核准，正式寫入中",
+        ApprovalStatus.CommitFailed => "已核准，正式寫入失敗，待處理",
+        ApprovalStatus.Committed => "已正式寫入",
+        ApprovalStatus.Rejected => "已退回",
+        _ => status.ToString()
+    };
+    private static string StatusMessage(ApprovalStatus status) => status switch
+    {
+        ApprovalStatus.Committed => "核准完成，資料已正式寫入。",
+        ApprovalStatus.CommitFailed => "已核准，但正式寫入失敗，系統將保留待處理狀態。",
+        _ => "已核准，資料正在正式寫入中。"
+    };
+}

@@ -1,0 +1,132 @@
+.approval-review-layout {
+    min-width: 0;
+}
+
+.approval-source-tabs {
+    display: flex;
+    gap: 16px;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    margin-bottom: 20px;
+    padding: 0 2px;
+    border-bottom: 2px solid #d6e2e0;
+}
+
+.approval-source-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    padding: 10px 16px;
+    border: 1px solid #d6e2e0;
+    border-bottom: 0;
+    border-radius: 10px 10px 0 0;
+    background: #f5f8f8;
+    color: #334155;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 600;
+}
+
+.approval-source-tab.active {
+    background: #fff;
+    color: #0f766e;
+    box-shadow: inset 0 3px #0f766e;
+}
+
+.approval-source-tab:focus-visible {
+    outline: 2px solid #0f766e;
+    outline-offset: -3px;
+}
+
+.approval-source-count {
+    min-width: 24px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: #e0eeeb;
+    text-align: center;
+    font-size: 12px;
+}
+
+.approval-review-results,
+.approval-review-table-wrap {
+    min-width: 0;
+}
+
+.approval-review-results .case-card-head {
+    margin-bottom: -2px;
+}
+
+.approval-review-results > p {
+    margin-top: 0;
+}
+
+.approval-review-table {
+    min-width: 0;
+    width: 100%;
+    table-layout: fixed;
+}
+
+.approval-col-actions { width: 16%; }
+.approval-col-context { width: 28%; }
+.approval-col-file { width: 20%; }
+.approval-col-submitter { width: 12%; }
+.approval-col-time { width: 12%; }
+.approval-col-status { width: 12%; }
+
+.approval-review-table :is(th, td) {
+    padding: 12px 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.approval-review-table .approval-actions-cell {
+    overflow: visible;
+}
+
+.approval-review-table .approval-reject-editor {
+    white-space: normal;
+    overflow: visible;
+}
+
+.approval-reject-editor label,
+.approval-reject-editor textarea {
+    display: block;
+}
+
+.approval-reject-editor textarea {
+    width: min(100%, 540px);
+    max-width: 100%;
+    margin: 8px 0;
+}
+
+.approval-reject-editor .table-chip-btn {
+    margin-right: 8px;
+}
+
+.approval-actions {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    white-space: nowrap;
+}
+
+.approval-actions .table-chip-btn {
+    padding: 8px 9px;
+    border-radius: 10px;
+    font-size: 13px;
+}
+
+.approval-ellipsis-link {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+    .approval-review-table { min-width: 760px; }
+}
