@@ -1,0 +1,10 @@
+{
+  "jobId": "contract-job-001",
+  "sourceSystem": "CSIT",
+  "documentId": "11111111-2222-4333-8444-555555555555",
+  "version": 3,
+  "status": "Processing",
+  "timestamps": {
+    "startedAt": "2026-10-14T02:48:00Z"
+  }
+}

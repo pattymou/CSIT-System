@@ -1,0 +1,34 @@
+name: CSIT KM canonical contract
+
+on:
+  push:
+    branches:
+      - feature/km-stage-integration
+    paths:
+      - 'contracts/csit-km-integration-v1/**'
+      - 'Services/KmIntegration/**'
+      - 'Controllers/KmIntegrationController.cs'
+      - 'Entities/KmIntegrationOutbox.cs'
+      - 'tests/ApprovalFramework.Tests/**'
+      - '.github/workflows/csit-km-contract.yml'
+  pull_request:
+    paths:
+      - 'contracts/csit-km-integration-v1/**'
+      - 'Services/KmIntegration/**'
+      - 'Controllers/KmIntegrationController.cs'
+      - 'Entities/KmIntegrationOutbox.cs'
+      - 'tests/ApprovalFramework.Tests/**'
+      - '.github/workflows/csit-km-contract.yml'
+
+jobs:
+  canonical-contract:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - name: Restore contract tests
+        run: dotnet restore tests/ApprovalFramework.Tests/ApprovalFramework.Tests.csproj
+      - name: Validate canonical producer and consumer contracts
+        run: dotnet test tests/ApprovalFramework.Tests/ApprovalFramework.Tests.csproj --no-restore -c Release --filter FullyQualifiedName~CanonicalKmContractTests
