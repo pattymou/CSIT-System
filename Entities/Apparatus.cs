@@ -37,6 +37,8 @@ public class Apparatus
     public string? PriceUse { get; set; }
 
     public string? CustodianAccount { get; set; }
+    public Guid? DepartmentOptionId { get; set; }
+    public SystemOption? DepartmentOption { get; set; }
     public Guid? OwnerTeamOptionId { get; set; }
     public SystemOption? OwnerTeamOption { get; set; }
     public string? Agent { get; set; }

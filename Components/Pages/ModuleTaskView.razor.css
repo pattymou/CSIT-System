@@ -1,0 +1,38 @@
+.task-upload-button {
+    flex: 0 0 auto;
+    min-width: 72px;
+    white-space: nowrap;
+}
+
+.task-report-table {
+    min-width: 0;
+    table-layout: fixed;
+}
+
+.task-report-table :is(th, td) {
+    padding: 14px 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.task-report-table .action-cell {
+    display: table-cell;
+    white-space: normal;
+    overflow: visible;
+}
+
+.task-report-table .action-cell > * {
+    margin-right: 5px;
+}
+
+@media (max-width: 900px) {
+    .task-report-table { min-width: 760px; }
+}
+
+.km-retry-overlay { position: fixed; inset: 0; z-index: 1000; background: rgba(0,0,0,.5); display: grid; place-items: center; padding: 1rem; }
+.km-retry-dialog { width: min(100%, 520px); max-height: 90vh; overflow: auto; background: white; color: #1f2937; border-radius: 12px; padding: 1.5rem; box-shadow: 0 20px 50px rgba(0,0,0,.25); }
+.km-retry-dialog dl { display: grid; grid-template-columns: 6rem minmax(0,1fr); gap: .5rem 1rem; overflow-wrap: anywhere; }
+.km-retry-dialog dt { font-weight: 600; }
+.km-retry-dialog dd { margin: 0; }
+.km-retry-dialog textarea { width: 100%; box-sizing: border-box; margin-top: .5rem; }
+.km-retry-actions { display: flex; justify-content: flex-end; gap: .5rem; margin-top: 1rem; }

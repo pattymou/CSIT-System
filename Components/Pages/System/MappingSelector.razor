@@ -1,0 +1,22 @@
+@using SIT.DepartmentSystem.Web.Models.Api
+<h2>@(Sections is not null ? "Product Type → Section Mapping" : "Product Type → Test Category Mapping")</h2>
+<select @bind="_productId" @bind:after="Load"><option value="">選擇 Product Type</option>@foreach (var p in Products) { <option value="@p.Id">@p.DisplayLabel</option> }</select>
+@if (_productId != Guid.Empty)
+{
+    <div class="mapping-list">
+        @if (Sections is not null) { @foreach (var x in Sections.Where(x => !x.AlwaysVisible)) { <label><input type="checkbox" checked="@_selected.Contains(x.Id)" @onchange="e => Toggle(x.Id, e)" /> @x.Code — @x.DisplayLabel</label> } }
+        @if (Categories is not null) { @foreach (var x in Categories.Where(x => !x.AlwaysVisible)) { <label><input type="checkbox" checked="@_selected.Contains(x.Id)" @onchange="e => Toggle(x.Id, e)" /> @x.Code — @x.DisplayLabel</label> } }
+    </div><button class="primary-btn" disabled="@(!CanWrite)" @onclick="Save">Save Mapping</button>
+}
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<ValidationProductTypeDto> Products { get; set; } = [];
+    [Parameter] public IReadOnlyList<ValidationSectionDto>? Sections { get; set; }
+    [Parameter] public IReadOnlyList<ValidationTestCategoryDto>? Categories { get; set; }
+    [Parameter] public bool CanWrite { get; set; }
+    [Parameter] public Func<Guid, IReadOnlyList<Guid>, Task>? SaveSections { get; set; }
+    [Parameter] public Func<Guid, IReadOnlyList<Guid>, Task>? SaveCategories { get; set; }
+    private Guid _productId; private readonly HashSet<Guid> _selected = [];
+    private void Load() { _selected.Clear(); var p = Products.FirstOrDefault(x => x.Id == _productId); if (p is null) return; _selected.UnionWith(Sections is not null ? p.SectionIds : p.TestCategoryIds); }
+    private void Toggle(Guid id, ChangeEventArgs e) { if (e.Value is true || e.Value?.ToString() == "true") _selected.Add(id); else _selected.Remove(id); }
+    private async Task Save() { if (Sections is not null && SaveSections is not null) await SaveSections(_productId, _selected.ToList()); if (Categories is not null && SaveCategories is not null) await SaveCategories(_productId, _selected.ToList()); }
+}

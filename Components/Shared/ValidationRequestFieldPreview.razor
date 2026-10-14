@@ -1,0 +1,85 @@
+@using SIT.DepartmentSystem.Web.Models.Api
+
+@if (Field.IsEnabled && IsVisible)
+{
+    <div class="validation-field @WidthClass @(Field.FieldType is "Group" or "RepeatableGroup" ? "validation-group" : "")" data-field-code="@Field.Code">
+        <label class="validation-field-label">@Field.DisplayLabel @if (IsRequired) { <span class="required-mark">*</span> }</label>
+        @if (!string.IsNullOrWhiteSpace(Field.HelpText)) { <div class="validation-help">@Field.HelpText</div> }
+        @switch (Field.FieldType)
+        {
+            case "TextArea":
+                <textarea value="@TextValue" @oninput="SetText"></textarea>
+                break;
+            case "SensitiveText":
+                <input type="password" value="@TextValue" @oninput="SetText" autocomplete="new-password" placeholder="••••••••" />
+                break;
+            case "Number":
+                <input type="number" value="@TextValue" @oninput="SetText" />
+                break;
+            case "Dropdown":
+            case "SingleSelect":
+                @if (Field.DataSource == "ValidationProductType")
+                {
+                    <select value="@TextValue" @onchange="SetProductType"><option value="">請選擇</option>@foreach (var option in ProductTypes.Where(x => x.IsEnabled).OrderBy(x => x.DisplayOrder)) { <option value="@option.Code">@option.DisplayLabel</option> }</select>
+                }
+                else
+                {
+                    <select value="@TextValue" @onchange="SetText"><option value="">請選擇</option>@foreach (var option in Field.Options.Where(x => x.IsEnabled)) { <option value="@option.ValueCode">@option.DisplayLabel</option> }</select>
+                }
+                break;
+            case "MultiSelect":
+                <div class="validation-choice-list">@foreach (var option in Field.Options.Where(x => x.IsEnabled)) { <label><input type="checkbox" checked="@Contains(option.ValueCode)" @onchange="e => SetMulti(option.ValueCode, e)" /> @option.DisplayLabel</label> }</div>
+                break;
+            case "Checkbox":
+                <label class="validation-checkbox"><input type="checkbox" checked="@BoolValue" @onchange="SetBool" /> 是</label>
+                break;
+            case "Attachment":
+                <div class="validation-upload-placeholder" aria-disabled="true"><span>附件</span><small>附件上傳功能將於下一階段啟用</small></div>
+                break;
+            case "Lookup":
+                <select disabled><option>請選擇系統資料</option></select>
+                break;
+            case "RepeatableText":
+                <div class="validation-repeatable"><input value="@TextValue" @oninput="SetText" /><button type="button" disabled>＋ 新增</button></div>
+                break;
+            case "Group":
+            case "RepeatableGroup":
+                <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" /> }</div>
+                @if (Field.FieldType == "RepeatableGroup") { <button type="button" class="validation-add-row" disabled>＋ 新增一組</button> }
+                break;
+            default:
+                <input value="@TextValue" @oninput="SetText" />
+                break;
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public ValidationFieldDto Field { get; set; } = null!;
+    [Parameter, EditorRequired] public Dictionary<string, object?> Values { get; set; } = null!;
+    [Parameter] public EventCallback ValuesChanged { get; set; }
+    [Parameter] public IReadOnlyList<ValidationProductTypeDto> ProductTypes { get; set; } = [];
+    [Parameter] public EventCallback<string> ProductTypeChanged { get; set; }
+    private string TextValue => Values.TryGetValue(Field.Code, out var v) ? v?.ToString() ?? "" : "";
+    private bool BoolValue => Values.TryGetValue(Field.Code, out var v) && v is true;
+    private bool Contains(string value) => Values.TryGetValue(Field.Code, out var v) && v is HashSet<string> set && set.Contains(value);
+    private bool IsVisible => Field.Conditions.Where(x => x.Action == "Visible").All(Evaluate);
+    private bool IsRequired => Field.IsRequired || Field.Conditions.Where(x => x.Action == "Required").Any(Evaluate);
+    private string WidthClass => Field.FieldType is "TextArea" or "Attachment" or "Group" or "RepeatableGroup" or "RepeatableText" || Field.DisplayLabel.Length > 42 ? "validation-field-wide" : "";
+    private bool Evaluate(ValidationConditionDto c)
+    {
+        Values.TryGetValue(c.SourceFieldCode, out var value); var expected = c.ExpectedValue ?? "";
+        return c.Operator switch
+        {
+            "Equals" => string.Equals(value?.ToString(), expected, StringComparison.OrdinalIgnoreCase),
+            "NotEquals" => !string.Equals(value?.ToString(), expected, StringComparison.OrdinalIgnoreCase),
+            "Contains" => value is HashSet<string> set && set.Contains(expected),
+            "NotContains" => value is not HashSet<string> set || !set.Contains(expected),
+            "IsTrue" => value is true, "IsFalse" => value is false, _ => false
+        };
+    }
+    private async Task SetText(ChangeEventArgs e) { Values[Field.Code] = e.Value?.ToString(); await ValuesChanged.InvokeAsync(); }
+    private async Task SetProductType(ChangeEventArgs e) { var code = e.Value?.ToString() ?? ""; Values[Field.Code] = code; await ValuesChanged.InvokeAsync(); await ProductTypeChanged.InvokeAsync(code); }
+    private async Task SetBool(ChangeEventArgs e) { Values[Field.Code] = e.Value is true || string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase); await ValuesChanged.InvokeAsync(); }
+    private async Task SetMulti(string value, ChangeEventArgs e) { if (!Values.TryGetValue(Field.Code, out var current) || current is not HashSet<string> set) Values[Field.Code] = set = []; if (e.Value is true || e.Value?.ToString() == "true") set.Add(value); else set.Remove(value); await ValuesChanged.InvokeAsync(); }
+}

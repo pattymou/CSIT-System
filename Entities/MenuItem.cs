@@ -11,6 +11,7 @@ public class MenuItem
     public int SortOrder { get; set; }
     public bool IsEnabled { get; set; }
     public bool AdminOnly { get; set; }
+    public bool RequiresSupervisorApproval { get; set; }
     public string? ModuleCode { get; set; }
     public string? TemplateType { get; set; }
 

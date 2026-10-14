@@ -1,20 +1,25 @@
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Services.Approval;
 
 namespace SIT.DepartmentSystem.Web.Services.Interfaces;
 
-public interface ICaseFileService
+public interface ICaseFileService : IThreeLevelFormalUploadService
 {
     Task<List<ModuleCaseFileDto>> GetFilesAsync(Guid caseId);
     Task<List<ModuleCaseFileDto>> GetFilesByCaseNoAsync(Guid recordId, string caseNo);
     Task<List<ModuleCaseFileDto>> GetTaskFilesAsync(Guid taskId);
-    Task UploadAsync(Guid caseId, IReadOnlyList<IFormFile> files, string? uploadEmp);
-    Task UploadByCaseNoAsync(Guid recordId, string caseNo, IReadOnlyList<IFormFile> files, string? uploadEmp);
-    Task UploadTaskReportAsync(Guid taskId, IReadOnlyList<IFormFile> files, string? uploadEmp);
+    Task UploadAsync(Guid caseId, IReadOnlyList<IFormFile> files, string? uploadEmp, Guid? approvalFileId = null);
+    Task UploadByCaseNoAsync(Guid recordId, string caseNo, IReadOnlyList<IFormFile> files, string? uploadEmp, Guid? approvalFileId = null);
+    Task UploadTaskReportAsync(Guid taskId, IReadOnlyList<IFormFile> files, string? uploadEmp, bool autoApprove = false, Guid? approvalFileId = null, string? approvedBy = null);
     Task BindFilesToCaseAsync(Guid recordId, string caseNo, Guid caseId, string caseName);
     Task MoveCaseFolderAsync(Guid recordId, string caseNo, string oldCaseName, string newCaseName);
     Task<(byte[] Content, string FileName, string ContentType)> DownloadAsync(Guid fileId);
-    Task<bool> DeleteAsync(Guid fileId);
-    Task UploadTaskReportByTaskNoAsync(Guid caseId, string taskNo, IReadOnlyList<IFormFile> files, string? uploadEmp);
+    Task<bool> DeleteAsync(Guid fileId, bool canDeleteApprovedFinal = false, string? deletedBy = null);
+    Task UploadTaskReportByTaskNoAsync(Guid caseId, string taskNo, IReadOnlyList<IFormFile> files, string? uploadEmp, bool autoApprove = false, Guid? approvalFileId = null, string? approvedBy = null);
+
+    Task UploadNewTestReportVersionAsync(Guid previousFileId, IFormFile file, string? uploadEmp, bool autoApprove = false, Guid? approvalFileId = null, string? approvedBy = null);
+    Task<List<PendingTestReportDto>> GetPendingTestReportsAsync();
+    Task ReviewTestReportAsync(Guid fileId, TestReportReviewRequest request, string reviewer);
 
     Task<List<ModuleCaseFileDto>> GetTaskFilesByTaskNoAsync(Guid caseId, string taskNo);
 
@@ -27,7 +32,7 @@ public interface ICaseFileService
 
     Task RebuildProjectRawDataAsync(Guid recordId);
 
-    Task UploadTaskFilesAsync(Guid taskId, IReadOnlyList<IFormFile> files, string? uploadEmp);
+    Task UploadTaskFilesAsync(Guid taskId, IReadOnlyList<IFormFile> files, string? uploadEmp, Guid? approvalFileId = null);
 
-    Task UploadTaskFilesByTaskNoAsync(Guid caseId, string taskNo, IReadOnlyList<IFormFile> files, string? uploadEmp);
+    Task UploadTaskFilesByTaskNoAsync(Guid caseId, string taskNo, IReadOnlyList<IFormFile> files, string? uploadEmp, Guid? approvalFileId = null);
 }

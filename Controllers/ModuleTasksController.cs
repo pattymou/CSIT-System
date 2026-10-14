@@ -38,6 +38,7 @@ public class ModuleTasksController : ControllerBase
     }
 
     [HttpPost("cases/{caseId:guid}/tasks")]
+    [BusinessWrite]
     public async Task<ActionResult> Create(Guid caseId, [FromBody] ModuleTaskUpsertRequest request)
     {
         try
@@ -52,6 +53,7 @@ public class ModuleTasksController : ControllerBase
     }
 
     [HttpPut("tasks/{id:guid}")]
+    [BusinessWrite]
     public async Task<ActionResult> Update(Guid id, [FromBody] ModuleTaskUpsertRequest request)
     {
         try
@@ -67,6 +69,7 @@ public class ModuleTasksController : ControllerBase
     }
 
     [HttpDelete("tasks/{id:guid}")]
+    [BusinessWrite]
     public async Task<ActionResult> Delete(Guid id)
     {
         var ok = await _service.DeleteAsync(id);

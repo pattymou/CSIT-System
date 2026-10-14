@@ -39,25 +39,34 @@ public class MenuManagementController : ControllerBase
     }
 
     [HttpPost("sections/{sectionId:guid}/items")]
+    [BusinessWrite]
     public async Task<ActionResult> CreateItem(Guid sectionId, [FromBody] MenuItemUpsertRequest request)
     {
-        var id = await _service.CreateItemAsync(sectionId, request);
-        return Ok(new { id });
+        try { return Ok(new { id = await _service.CreateItemAsync(sectionId, request) }); }
+        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
     }
 
     [HttpPut("items/{id:guid}")]
+    [BusinessWrite]
     public async Task<ActionResult> UpdateItem(Guid id, [FromBody] MenuItemUpsertRequest request)
     {
-        var ok = await _service.UpdateItemAsync(id, request);
-        if (!ok) return NotFound();
-        return NoContent();
+        try
+        {
+            var ok = await _service.UpdateItemAsync(id, request);
+            return ok ? NoContent() : NotFound();
+        }
+        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
     }
 
     [HttpDelete("items/{id:guid}")]
+    [BusinessWrite]
     public async Task<ActionResult> DeleteItem(Guid id)
     {
-        var ok = await _service.DeleteItemAsync(id);
-        if (!ok) return NotFound();
-        return NoContent();
+        try
+        {
+            var ok = await _service.DeleteItemAsync(id);
+            return ok ? NoContent() : NotFound();
+        }
+        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
     }
 }

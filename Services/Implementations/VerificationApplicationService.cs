@@ -13,15 +13,18 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     private readonly AppDbContext _db;
     private readonly IModuleRecordCreationService _moduleRecordCreation;
     private readonly ISystemOptionService _systemOptions;
+    private readonly IBusinessWriteAuthorizationGuard _businessWrite;
 
     public VerificationApplicationService(
         AppDbContext db,
         IModuleRecordCreationService moduleRecordCreation,
-        ISystemOptionService systemOptions)
+        ISystemOptionService systemOptions,
+        IBusinessWriteAuthorizationGuard businessWrite)
     {
         _db = db;
         _moduleRecordCreation = moduleRecordCreation;
         _systemOptions = systemOptions;
+        _businessWrite = businessWrite;
     }
 
     public async Task<VerificationApplicationDto> CreateDraftAsync(
@@ -29,11 +32,12 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         CreateVerificationApplicationRequest request,
         CancellationToken cancellationToken = default)
     {
+        await _businessWrite.DemandAsync(cancellationToken);
         ArgumentNullException.ThrowIfNull(request);
         if (request.TeamOptionId == Guid.Empty)
             throw new ArgumentException("TeamOptionId is required.", nameof(request));
         var applicant = await ResolveApplicantAsync(user, cancellationToken);
-        await EnsureTeamExistsAsync(request.TeamOptionId, cancellationToken);
+        await EnsureTeamAllowedAsync(request.TeamOptionId, request.RoutingDepartmentOptionId, cancellationToken);
 
         var now = DateTime.UtcNow;
         var sequence = await _db.Database
@@ -43,6 +47,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         var entity = VerificationApplication.CreateDraft(
             Guid.NewGuid(),
             $"VA-{now:yyyyMMdd}-{sequence:D6}",
+            request.RoutingDepartmentOptionId,
             request.TeamOptionId,
             NormalizeAccount(applicant.ApplicantAccount),
             Normalize(applicant.ApplicantName),
@@ -54,7 +59,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
 
         _db.VerificationApplications.Add(entity);
         await _db.SaveChangesAsync(cancellationToken);
-        return Map(entity);
+        return await MapWithDraftOptionsAsync(entity, cancellationToken);
     }
 
     public async Task<VerificationApplicationDto> UpdateDraftAsync(
@@ -63,25 +68,27 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         UpdateVerificationApplicationRequest request,
         CancellationToken cancellationToken = default)
     {
+        await _businessWrite.DemandAsync(cancellationToken);
         ArgumentNullException.ThrowIfNull(request);
         if (request.TeamOptionId == Guid.Empty)
             throw new ArgumentException("TeamOptionId is required.", nameof(request));
         var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await FindApplicantApplicationRequiredAsync(id, account, cancellationToken);
-        await EnsureTeamExistsAsync(request.TeamOptionId, cancellationToken);
-        entity.UpdateContent(request.TeamOptionId, MapContent(request), DateTime.UtcNow);
+        await EnsureTeamAllowedAsync(request.TeamOptionId, request.RoutingDepartmentOptionId, cancellationToken);
+        entity.UpdateContent(request.RoutingDepartmentOptionId, request.TeamOptionId, MapContent(request), DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
-        return Map(entity);
+        return await MapWithDraftOptionsAsync(entity, cancellationToken);
     }
 
     public async Task<VerificationApplicationDto> SubmitAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
     {
+        await _businessWrite.DemandAsync(cancellationToken);
         var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await FindApplicantApplicationRequiredAsync(id, account, cancellationToken);
-        var routing = await ResolveRoutingAsync(entity.TeamOptionId, cancellationToken);
+        var routing = await ResolveRoutingAsync(entity.RoutingDepartmentOptionId, entity.TeamOptionId, cancellationToken);
         entity.Submit(routing, DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
-        return Map(entity);
+        return await MapWithDraftOptionsAsync(entity, cancellationToken);
     }
 
     public async Task<VerificationApplicationDto> ReturnAsync(
@@ -90,11 +97,12 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         string? note,
         CancellationToken cancellationToken = default)
     {
+        await _businessWrite.DemandAsync(cancellationToken);
         var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await FindLeaderApplicationRequiredAsync(id, account, cancellationToken);
         entity.Return(account, note, DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
-        return Map(entity);
+        return await MapWithDraftOptionsAsync(entity, cancellationToken);
     }
 
     public async Task<VerificationApplicationDto> RejectAsync(
@@ -103,11 +111,12 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         string? note,
         CancellationToken cancellationToken = default)
     {
+        await _businessWrite.DemandAsync(cancellationToken);
         var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await FindLeaderApplicationRequiredAsync(id, account, cancellationToken);
         entity.Reject(account, note, DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
-        return Map(entity);
+        return await MapWithDraftOptionsAsync(entity, cancellationToken);
     }
 
     public async Task<VerificationApplicationDto> AcceptAsync(
@@ -115,6 +124,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
     {
+        await _businessWrite.DemandAsync(cancellationToken);
         var account = VerificationApplicationSecurity.GetAccount(user);
         await using var transaction = await _db.Database.BeginTransactionAsync(
             IsolationLevel.ReadCommitted,
@@ -157,6 +167,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                 HardwareVersion = entity.HardwareVersion,
                 SoftwareVersion = entity.SoftwareVersion,
                 Location = entity.Location,
+                Department = entity.RoutingDepartmentCode,
+                Team = entity.TeamCode,
                 RequestDepartment = entity.Department,
                 RequestApplicant = entity.ApplicantName,
                 SubPu = entity.SubPu,
@@ -173,7 +185,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             entity.Accept(moduleRecord.Id, account, DateTime.UtcNow);
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return Map(entity);
+            return await MapWithDraftOptionsAsync(entity, cancellationToken);
         }
         catch
         {
@@ -191,7 +203,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             .Include(x => x.Files)
             .Include(x => x.ModuleRecord)
             .SingleOrDefaultAsync(x => x.Id == id && x.ApplicantAccount == account, cancellationToken);
-        return entity is null ? null : Map(entity);
+        return entity is null ? null : await MapWithDraftOptionsAsync(entity, cancellationToken);
     }
 
     public async Task<VerificationApplicationDto?> GetForLeaderReviewAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
@@ -199,7 +211,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await _db.VerificationApplications.AsNoTracking().Include(x => x.Files)
             .SingleOrDefaultAsync(x => x.Id == id && x.Status == VerificationApplicationStatus.Submitted && x.AssignedLeaderAccount == account, cancellationToken);
-        return entity is null ? null : Map(entity);
+        return entity is null ? null : await MapWithDraftOptionsAsync(entity, cancellationToken);
     }
 
     public Task<ListResponseDto<VerificationApplicationDto>> ListForApplicantAsync(
@@ -257,15 +269,27 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         return new ApplicantSnapshot(appUser.Account, appUser.DisplayName, appUser.Email, appUser.Department, null);
     }
 
-    private async Task EnsureTeamExistsAsync(Guid id, CancellationToken cancellationToken)
+    private async Task<SystemOption> EnsureTeamAllowedAsync(
+        Guid id,
+        Guid? departmentOptionId,
+        CancellationToken cancellationToken)
     {
-        if (!await _systemOptions.TeamExistsAsync(id, cancellationToken))
-            throw new InvalidOperationException("Team does not exist.");
+        var department = await RoutingDepartmentOptions.RequireAsync(_db, departmentOptionId, cancellationToken);
+        var enabledTeams = await _systemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Team);
+        var allowedTeams = DepartmentTeamRules.GetAllowedTeamsForDepartment(
+            department.Value,
+            enabledTeams,
+            team => team.Name,
+            team => team.Value);
+        if (allowedTeams.All(team => team.Id != id))
+            throw new InvalidOperationException("The selected Team is not enabled for the selected Department.");
+        return department;
     }
 
-    private async Task<VerificationApplicationRouting> ResolveRoutingAsync(Guid? teamOptionId, CancellationToken cancellationToken)
+    private async Task<VerificationApplicationRouting> ResolveRoutingAsync(Guid? departmentOptionId, Guid? teamOptionId, CancellationToken cancellationToken)
     {
         if (!teamOptionId.HasValue) throw new InvalidOperationException("Team is required before submit.");
+        var department = await EnsureTeamAllowedAsync(teamOptionId.Value, departmentOptionId, cancellationToken);
         var teamLeader = await _systemOptions.GetActiveTeamLeaderAsync(teamOptionId.Value, cancellationToken);
         var moduleCode = await _db.Modules.AsNoTracking()
             .Where(x => x.Code == VerificationApplicationWorkflow.ModuleCode && x.IsEnabled)
@@ -274,6 +298,9 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             ?? throw new InvalidOperationException("The Verification Application module is missing or disabled.");
 
         return new VerificationApplicationRouting(
+            department.Id,
+            department.Value,
+            DepartmentTeamRules.DisplayName(department.Name, department.Value),
             teamLeader.TeamOptionId,
             teamLeader.TeamCode,
             teamLeader.TeamName,
@@ -325,10 +352,31 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     private static string Normalize(string? value) => value?.Trim() ?? string.Empty;
     private static string NormalizeAccount(string value) => value.Trim().ToLowerInvariant();
 
+    private async Task<VerificationApplicationDto> MapWithDraftOptionsAsync(VerificationApplication entity, CancellationToken cancellationToken)
+    {
+        var dto = Map(entity);
+        if (entity.Status is VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned)
+        {
+            var options = await _db.SystemOptions.AsNoTracking()
+                .Where(x => x.Id == entity.RoutingDepartmentOptionId || x.Id == entity.TeamOptionId)
+                .ToListAsync(cancellationToken);
+            var department = options.FirstOrDefault(x => x.Id == entity.RoutingDepartmentOptionId);
+            var team = options.FirstOrDefault(x => x.Id == entity.TeamOptionId);
+            dto.RoutingDepartmentCode = department?.Value;
+            dto.RoutingDepartmentName = department is null ? null : DepartmentTeamRules.DisplayName(department.Name, department.Value);
+            dto.TeamCode = team?.Value;
+            dto.TeamName = team is null ? null : DepartmentTeamRules.DisplayName(team.Name, team.Value);
+        }
+        return dto;
+    }
+
     private static VerificationApplicationDto Map(VerificationApplication entity) => new()
     {
         Id = entity.Id,
         ApplicationNo = entity.ApplicationNo,
+        RoutingDepartmentOptionId = entity.RoutingDepartmentOptionId,
+        RoutingDepartmentCode = entity.RoutingDepartmentCode,
+        RoutingDepartmentName = entity.RoutingDepartmentName,
         TeamOptionId = entity.TeamOptionId,
         TeamCode = entity.TeamCode ?? entity.CategoryCode,
         TeamName = entity.TeamName ?? entity.CategoryName,

@@ -41,3 +41,10 @@ secrets.*.json
 
 # Publish output
 publish/
+
+# Local Playwright authentication state (never commit)
+.manual-auth/
+
+# Local manual capture dependencies and validation artifacts
+tools/manual-screenshots/
+wwwroot/manual/images/

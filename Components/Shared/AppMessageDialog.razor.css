@@ -69,7 +69,26 @@
 
 .app-message-dialog-actions {
     display: flex;
+    gap: 10px;
     justify-content: flex-end;
+}
+
+.app-message-dialog-cancel {
+    background: rgba(148, 163, 184, .12);
+    border: 1px solid rgba(148, 163, 184, .28);
+    border-radius: 10px;
+    color: #cbd5e1;
+    cursor: pointer;
+    font: inherit;
+    font-weight: 700;
+    min-width: 88px;
+    padding: 9px 18px;
+}
+
+.app-message-dialog-cancel:hover,
+.app-message-dialog-cancel:focus-visible {
+    background: rgba(148, 163, 184, .22);
+    color: #f8fafc;
 }
 
 .app-message-dialog-confirm {
@@ -87,6 +106,16 @@
 .app-message-dialog-confirm:hover,
 .app-message-dialog-confirm:focus-visible {
     background: linear-gradient(135deg, #0d9488, #0891b2);
+}
+
+.app-message-dialog-confirm--danger {
+    background: linear-gradient(135deg, #dc2626, #b91c1c);
+    border-color: rgba(252, 165, 165, .36);
+}
+
+.app-message-dialog-confirm--danger:hover,
+.app-message-dialog-confirm--danger:focus-visible {
+    background: linear-gradient(135deg, #ef4444, #dc2626);
 }
 
 .app-message-dialog-confirm:focus-visible {
@@ -109,7 +138,8 @@
         justify-content: stretch;
     }
 
-    .app-message-dialog-confirm {
+    .app-message-dialog-confirm,
+    .app-message-dialog-cancel {
         width: 100%;
     }
 }

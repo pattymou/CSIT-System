@@ -1,9 +1,11 @@
-﻿@page "/modules/{moduleCode}/{recordId:guid}/cases/{caseId:guid}"
+@page "/modules/{moduleCode}/{recordId:guid}/cases/{caseId:guid}"
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode InteractiveServer
 @using Microsoft.AspNetCore.Components.Forms
 @inject BrowserApiClient Api
 @inject NavigationManager Nav
+@inject SIT.DepartmentSystem.Web.Services.Approval.ApprovalContextUploads ContextUploads
+@inject AuthenticationStateProvider AuthProvider
 
 <div class="case-page">
     <div class="case-title-row">
@@ -46,7 +48,6 @@
                 <div class="case-detail-item"><span>Case No</span><strong>@_case.CaseNo</strong></div>
                 <div class="case-detail-item"><span>任務名稱</span><strong>@Display(_case.Name)</strong></div>
                 <div class="case-detail-item"><span>Status</span><strong>@Display(_case.Status)</strong></div>
-                <div class="case-detail-item"><span>Sort</span><strong>@_case.SortOrder</strong></div>
                 <div class="case-detail-item case-detail-full"><span>備註</span><strong>@Display(_case.Note)</strong></div>
             </div>
         </section>
@@ -160,6 +161,8 @@
                     <button type="button" class="btn-primary" @onclick="ReloadFilesAsync">重新整理</button>
                 </div>
 
+                <SIT.DepartmentSystem.Web.Components.Shared.OwnApprovalUploadList Items="_ownUploads" />
+
                 @if (_files.Count == 0)
                 {
                     <div class="record-empty-box">
@@ -215,6 +218,7 @@
     private ModuleCaseDetailDto? _case;
     private List<ModuleTaskListItemDto> _tasks = new();
     private List<ModuleCaseFileDto> _files = new();
+    private IReadOnlyList<SIT.DepartmentSystem.Web.Services.Approval.OwnApprovalUploadDto> _ownUploads = [];
     private List<IBrowserFile> _selectedFiles = new();
     private ElementReference _fileInputContainer;
     private bool _reloadRequested;
@@ -349,6 +353,8 @@
             _selectedFiles.Clear();
             await ReloadFilesAsync();
             _activeTab = "Files";
+            _message = response.StatusCode == 202
+                ? "已送主管審核；核准後才會顯示正式附件。" : null;
         }
         else
         {
@@ -359,6 +365,8 @@
     private async Task ReloadFilesAsync()
     {
         _files = await Api.GetAsync<List<ModuleCaseFileDto>>($"/api/cases/{caseId}/files");
+        var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+        _ownUploads = await ContextUploads.ForCaseAsync(user, moduleCode, recordId, caseId);
     }
 
     private async Task DeleteFileAsync(Guid fileId)

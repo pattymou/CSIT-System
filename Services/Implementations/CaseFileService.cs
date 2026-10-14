@@ -1,32 +1,39 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Data;
+using System.Security.Cryptography;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.Approval;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
 public class CaseFileService : ICaseFileService
 {
-    private const string TaskReportUploadKind = "TestReport";
+    private const string TaskReportUploadKind = ModuleCaseFileKinds.TestReport;
+    private const string DefaultContentType = "application/octet-stream";
 
     private readonly AppDbContext _db;
     private readonly UploadSettings _settings;
     private readonly RawDataSettings _rawDataSettings;
     private readonly IRawDataExportService _rawDataExportService;
+    private readonly ILogger<CaseFileService> _logger;
 
     public CaseFileService(
         AppDbContext db,
         IOptions<UploadSettings> options,
         IOptions<RawDataSettings> rawDataOptions,
-        IRawDataExportService rawDataExportService)
+        IRawDataExportService rawDataExportService,
+        ILogger<CaseFileService> logger)
     {
         _db = db;
         _settings = options.Value;
         _rawDataSettings = rawDataOptions.Value;
         _rawDataExportService = rawDataExportService;
+        _logger = logger;
     }
 
     public async Task<List<ModuleCaseFileDto>> GetFilesAsync(Guid caseId)
@@ -49,23 +56,90 @@ public class CaseFileService : ICaseFileService
 
     public async Task<List<ModuleCaseFileDto>> GetTaskFilesAsync(Guid taskId)
     {
-        return await _db.ModuleCaseFiles
-            .Where(x => x.TaskId == taskId)
-            .OrderByDescending(x => x.CreatedAt)
-            .Select(x => ToDto(x))
-            .ToListAsync();
+        return await GetTaskFileDtosAsync(_db.ModuleCaseFiles.Where(x => x.TaskId == taskId));
     }
 
     public async Task<List<ModuleCaseFileDto>> GetTaskFilesByTaskNoAsync(Guid caseId, string taskNo)
     {
-        return await _db.ModuleCaseFiles
-            .Where(x => x.CaseId == caseId && x.TaskNo == taskNo)
-            .OrderByDescending(x => x.CreatedAt)
-            .Select(x => ToDto(x))
-            .ToListAsync();
+        return await GetTaskFileDtosAsync(_db.ModuleCaseFiles.Where(x => x.CaseId == caseId && x.TaskNo == taskNo));
     }
 
-    public async Task UploadAsync(Guid caseId, IReadOnlyList<IFormFile> files, string? uploadEmp)
+    private async Task<List<ModuleCaseFileDto>> GetTaskFileDtosAsync(IQueryable<ModuleCaseFile> query)
+    {
+        var files = await query.AsNoTracking().OrderByDescending(x => x.CreatedAt).ToListAsync();
+        var reportIds = files.Where(x => x.FileKind == ModuleCaseFileKinds.TestReport)
+            .Select(x => x.Id).ToArray();
+        var incompleteIds = await _db.PendingSubmissions.AsNoTracking()
+            .Where(x => reportIds.Contains(x.Id) && x.Status != ApprovalStatus.Committed)
+            .Select(x => x.Id).ToListAsync();
+        var incomplete = incompleteIds.ToHashSet();
+        var syncRows = await _db.KmIntegrationOutbox.AsNoTracking()
+            .Where(x => reportIds.Contains(x.SourceEntityId) && x.EventType == "TestReportCommitted")
+            .Select(x => new { x.SourceEntityId, x.Status, x.KmJobId, x.LastErrorCode, x.LastErrorMessage,
+                x.LeaseToken, x.LeaseExpiresAt, x.SourceSystem, x.EventType, x.SourceEntityType })
+            .ToListAsync();
+        var syncStatus = syncRows.ToDictionary(x => x.SourceEntityId);
+        return files.Select(file =>
+        {
+            var dto = ToDto(file);
+            dto.IsCommittedFormalVersion = file.FileKind == ModuleCaseFileKinds.TestReport
+                && file.ReviewStatus == TestReportReviewStatuses.Approved
+                && file.IsRawDataExported && !incomplete.Contains(file.Id);
+            if (dto.IsCommittedFormalVersion && syncStatus.TryGetValue(file.Id, out var sync))
+            {
+                dto.KmSyncStatusText = sync.Status switch
+                {
+                    KmIntegrationStatus.Pending => "待同步",
+                    KmIntegrationStatus.Dispatching => "同步中",
+                    KmIntegrationStatus.Sent or KmIntegrationStatus.Processing => "處理中",
+                    KmIntegrationStatus.Completed => "完成",
+                    KmIntegrationStatus.Failed => "失敗",
+                    _ => null
+                };
+                dto.KmManualRetryEligible = sync.Status == KmIntegrationStatus.Failed && sync.KmJobId is null &&
+                    (sync.LeaseToken is null || (sync.LeaseExpiresAt.HasValue && sync.LeaseExpiresAt <= DateTime.UtcNow)) &&
+                    sync.SourceSystem == "CSIT" && sync.EventType == "TestReportCommitted" &&
+                    sync.SourceEntityType == "TestReport";
+                dto.KmFailedAfterJobAccepted = sync.Status == KmIntegrationStatus.Failed && sync.KmJobId is not null;
+                if (sync.Status == KmIntegrationStatus.Failed)
+                    dto.KmSyncLastError = string.Join("：", new[] { sync.LastErrorCode,
+                            KmIntegrationManualRetryAudit.SafeErrorMessage(sync.LastErrorMessage) }
+                        .Where(x => !string.IsNullOrWhiteSpace(x)));
+            }
+            return dto;
+        }).ToList();
+    }
+
+    // Both direct uploads and the approval worker enter the same formal business methods.
+    public async Task ExecuteFormalAsync(ThreeLevelUploadTarget target, IReadOnlyList<IFormFile> files,
+        string? uploadEmp, bool autoApprove, Guid? approvalFileId = null, string? approvedBy = null)
+    {
+        if (approvalFileId.HasValue && (approvalFileId == Guid.Empty || files.Count != 1))
+            throw new InvalidOperationException("An approval commit must contain exactly one file.");
+        switch (target.Kind)
+        {
+            case ThreeLevelUploadKind.CaseAttachment:
+                await UploadAsync(target.Id, files, uploadEmp, approvalFileId); break;
+            case ThreeLevelUploadKind.CaseAttachmentByNo:
+                await UploadByCaseNoAsync(target.Id, target.Number!, files, uploadEmp, approvalFileId); break;
+            case ThreeLevelUploadKind.TaskAttachment:
+                await UploadTaskFilesAsync(target.Id, files, uploadEmp, approvalFileId); break;
+            case ThreeLevelUploadKind.TaskAttachmentByNo:
+                await UploadTaskFilesByTaskNoAsync(target.Id, target.Number!, files, uploadEmp, approvalFileId); break;
+            case ThreeLevelUploadKind.TestReport:
+                await UploadTaskReportAsync(target.Id, files, uploadEmp, autoApprove, approvalFileId, approvedBy); break;
+            case ThreeLevelUploadKind.TestReportByTaskNo:
+                await UploadTaskReportByTaskNoAsync(target.Id, target.Number!, files, uploadEmp,
+                    autoApprove, approvalFileId, approvedBy); break;
+            case ThreeLevelUploadKind.TestReportVersion:
+                if (files.Count != 1) throw new InvalidOperationException("上傳新版時一次只能選擇一個檔案。");
+                await UploadNewTestReportVersionAsync(target.Id, files[0], uploadEmp,
+                    autoApprove, approvalFileId, approvedBy); break;
+            default: throw new InvalidOperationException("Unsupported ThreeLevel upload kind.");
+        }
+    }
+
+    public async Task UploadAsync(Guid caseId, IReadOnlyList<IFormFile> files, string? uploadEmp, Guid? approvalFileId = null)
     {
         var caseEntity = await _db.ModuleRecordCases
             .Include(x => x.Record)
@@ -85,10 +159,11 @@ public class CaseFileService : ICaseFileService
             folderCaseName: caseEntity.Name,
             uploadKind: _settings.UploadKind,
             files: files,
-            uploadEmp: uploadEmp);
+            uploadEmp: uploadEmp,
+            approvalFileId: approvalFileId);
     }
 
-    public async Task UploadByCaseNoAsync(Guid recordId, string caseNo, IReadOnlyList<IFormFile> files, string? uploadEmp)
+    public async Task UploadByCaseNoAsync(Guid recordId, string caseNo, IReadOnlyList<IFormFile> files, string? uploadEmp, Guid? approvalFileId = null)
     {
         if (string.IsNullOrWhiteSpace(caseNo))
             throw new InvalidOperationException("CaseNo 不可為空");
@@ -115,10 +190,11 @@ public class CaseFileService : ICaseFileService
             folderCaseName: folderCaseName,
             uploadKind: _settings.UploadKind,
             files: files,
-            uploadEmp: uploadEmp);
+            uploadEmp: uploadEmp,
+            approvalFileId: approvalFileId);
     }
 
-    public async Task UploadTaskFilesAsync(Guid taskId, IReadOnlyList<IFormFile> files, string? uploadEmp)
+    public async Task UploadTaskFilesAsync(Guid taskId, IReadOnlyList<IFormFile> files, string? uploadEmp, Guid? approvalFileId = null)
     {
         var task = await _db.ModuleRecordTasks
             .Include(x => x.Case)
@@ -139,10 +215,11 @@ public class CaseFileService : ICaseFileService
             folderCaseName: task.Case.Name,
             uploadKind: _settings.UploadKind,
             files: files,
-            uploadEmp: uploadEmp);
+            uploadEmp: uploadEmp,
+            approvalFileId: approvalFileId);
     }
 
-    public async Task UploadTaskFilesByTaskNoAsync(Guid caseId, string taskNo, IReadOnlyList<IFormFile> files, string? uploadEmp)
+    public async Task UploadTaskFilesByTaskNoAsync(Guid caseId, string taskNo, IReadOnlyList<IFormFile> files, string? uploadEmp, Guid? approvalFileId = null)
     {
         if (string.IsNullOrWhiteSpace(taskNo))
             throw new InvalidOperationException("TaskNo 不可為空");
@@ -165,10 +242,11 @@ public class CaseFileService : ICaseFileService
             folderCaseName: caseEntity.Name,
             uploadKind: _settings.UploadKind,
             files: files,
-            uploadEmp: uploadEmp);
+            uploadEmp: uploadEmp,
+            approvalFileId: approvalFileId);
     }
 
-    public async Task UploadTaskReportAsync(Guid taskId, IReadOnlyList<IFormFile> files, string? uploadEmp)
+    public async Task UploadTaskReportAsync(Guid taskId, IReadOnlyList<IFormFile> files, string? uploadEmp, bool autoApprove = false, Guid? approvalFileId = null, string? approvedBy = null)
     {
         var task = await _db.ModuleRecordTasks
             .Include(x => x.Case)
@@ -189,10 +267,13 @@ public class CaseFileService : ICaseFileService
             folderCaseName: task.Case.Name,
             uploadKind: TaskReportUploadKind,
             files: files,
-            uploadEmp: uploadEmp);
+            uploadEmp: uploadEmp,
+            autoApprove: autoApprove,
+            approvalFileId: approvalFileId,
+            approvedBy: approvedBy);
     }
 
-    public async Task UploadTaskReportByTaskNoAsync(Guid caseId, string taskNo, IReadOnlyList<IFormFile> files, string? uploadEmp)
+    public async Task UploadTaskReportByTaskNoAsync(Guid caseId, string taskNo, IReadOnlyList<IFormFile> files, string? uploadEmp, bool autoApprove = false, Guid? approvalFileId = null, string? approvedBy = null)
     {
         if (string.IsNullOrWhiteSpace(taskNo))
             throw new InvalidOperationException("TaskNo 不可為空");
@@ -215,7 +296,239 @@ public class CaseFileService : ICaseFileService
             folderCaseName: caseEntity.Name,
             uploadKind: TaskReportUploadKind,
             files: files,
-            uploadEmp: uploadEmp);
+            uploadEmp: uploadEmp,
+            autoApprove: autoApprove,
+            approvalFileId: approvalFileId,
+            approvedBy: approvedBy);
+    }
+
+    public async Task UploadNewTestReportVersionAsync(
+        Guid previousFileId,
+        IFormFile file,
+        string? uploadEmp,
+        bool autoApprove = false,
+        Guid? approvalFileId = null,
+        string? approvedBy = null)
+    {
+        if (file.Length <= 0)
+            throw new InvalidOperationException("上傳檔案不可為空白。");
+
+        if (approvalFileId.HasValue)
+        {
+            var committed = await _db.ModuleCaseFiles.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.Id == approvalFileId.Value);
+            if (committed is not null)
+            {
+                if (committed.FileKind != ModuleCaseFileKinds.TestReport)
+                    throw new InvalidOperationException("Approved file kind does not match.");
+                var existingPath = Path.Combine(committed.FilePath, committed.FileName);
+                if (!File.Exists(existingPath))
+                {
+                    Directory.CreateDirectory(committed.FilePath);
+                    await using var replacement = new FileStream(existingPath, FileMode.CreateNew, FileAccess.Write);
+                    await file.CopyToAsync(replacement);
+                }
+                if (!string.Equals(await ComputeSha256Async(existingPath), committed.Sha256,
+                    StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Existing approved report checksum does not match.");
+                await RebuildProjectRawDataAsync(committed.RecordId);
+                return;
+            }
+        }
+
+        await using var transaction = _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable) : null;
+        var previous = await _db.ModuleCaseFiles.FirstOrDefaultAsync(x => x.Id == previousFileId);
+        if (previous is null || previous.FileKind != ModuleCaseFileKinds.TestReport)
+            throw new InvalidOperationException("找不到指定的測試報告。");
+
+        await TestReportBusinessRules.LockAsync(_db,
+            TestReportBusinessRules.DocumentKey(previous.DocumentId));
+        await TestReportBusinessRules.EnsureNoPendingVersionAsync(_db,
+            previous.DocumentId, approvalFileId);
+
+        var latestVersion = await _db.ModuleCaseFiles
+            .Where(x => x.DocumentId == previous.DocumentId)
+            .MaxAsync(x => x.VersionNo);
+        var nextVersion = latestVersion + 1;
+        var safeFileName = CleanFileName(file.FileName);
+        var documentRoot = GetDocumentRoot(previous);
+        var folderPath = Path.Combine(documentRoot, $"v{nextVersion:0000}");
+        var fullPath = Path.Combine(folderPath, safeFileName);
+        Directory.CreateDirectory(folderPath);
+        var fileExists = File.Exists(fullPath);
+        if (fileExists && (!approvalFileId.HasValue ||
+            await ComputeSha256Async(fullPath) != await ComputeFormFileSha256Async(file) ||
+            await _db.ModuleCaseFiles.AsNoTracking().AnyAsync(x => x.FilePath == folderPath && x.FileName == safeFileName)))
+            throw new InvalidOperationException("此版本的檔案已存在。");
+
+        try
+        {
+            if (!fileExists)
+            {
+                await using var stream = new FileStream(fullPath, FileMode.CreateNew, FileAccess.Write);
+                await file.CopyToAsync(stream);
+            }
+
+            var now = DateTime.UtcNow;
+            var actor = string.IsNullOrWhiteSpace(uploadEmp) ? "System" : uploadEmp;
+            if (autoApprove)
+            {
+                var priorFinals = await _db.ModuleCaseFiles
+                    .Where(x => x.DocumentId == previous.DocumentId && x.IsFinal)
+                    .ToListAsync();
+                foreach (var priorFinal in priorFinals)
+                {
+                    priorFinal.IsFinal = false;
+                    priorFinal.FinalizedAt = null;
+                    priorFinal.FinalizedBy = null;
+                    priorFinal.UpdatedAt = now;
+                }
+
+                // Flush the demotion first inside the same transaction so the filtered
+                // unique index never observes two current finals for one document.
+                await _db.SaveChangesAsync();
+            }
+
+            var entity = new ModuleCaseFile
+            {
+                Id = approvalFileId ?? Guid.NewGuid(),
+                DocumentId = previous.DocumentId,
+                VersionNo = nextVersion,
+                FileKind = ModuleCaseFileKinds.TestReport,
+                RecordId = previous.RecordId,
+                CaseId = previous.CaseId,
+                CaseNo = previous.CaseNo,
+                TaskId = previous.TaskId,
+                TaskNo = previous.TaskNo,
+                FileName = safeFileName,
+                FilePath = folderPath,
+                ContentType = NormalizeContentType(file.ContentType),
+                FileSize = file.Length,
+                UploadEmp = actor,
+                CreatedAt = now,
+                UpdatedAt = now,
+                ReviewStatus = autoApprove ? TestReportReviewStatuses.Approved : TestReportReviewStatuses.Pending,
+                ReviewedAt = autoApprove ? now : null,
+                ReviewedBy = autoApprove ? approvedBy ?? actor : null,
+                IsFinal = autoApprove,
+                FinalizedAt = autoApprove ? now : null,
+                FinalizedBy = autoApprove ? approvedBy ?? actor : null,
+                Sha256 = await ComputeSha256Async(fullPath)
+            };
+
+            _db.ModuleCaseFiles.Add(entity);
+            await _db.SaveChangesAsync();
+            await RebuildProjectRawDataAsync(entity.RecordId);
+            if (autoApprove && !approvalFileId.HasValue)
+            {
+                _db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForCommittedTestReport(entity, DateTime.UtcNow));
+                await _db.SaveChangesAsync();
+            }
+            if (transaction is not null) await transaction.CommitAsync();
+        }
+        catch
+        {
+            if (transaction is not null) await transaction.RollbackAsync();
+            if (!fileExists && File.Exists(fullPath)) File.Delete(fullPath);
+            throw;
+        }
+    }
+
+    public async Task<List<PendingTestReportDto>> GetPendingTestReportsAsync()
+    {
+        return await (
+            from file in _db.ModuleCaseFiles.AsNoTracking()
+            join record in _db.ModuleRecords.AsNoTracking() on file.RecordId equals record.Id
+            join caseEntity in _db.ModuleRecordCases.AsNoTracking() on file.CaseId equals caseEntity.Id
+            join task in _db.ModuleRecordTasks.AsNoTracking() on file.TaskId equals task.Id
+            where file.FileKind == ModuleCaseFileKinds.TestReport
+                && file.ReviewStatus == TestReportReviewStatuses.Pending
+            orderby file.CreatedAt
+            select new PendingTestReportDto
+            {
+                Id = file.Id,
+                DocumentId = file.DocumentId,
+                VersionNo = file.VersionNo,
+                FileKind = file.FileKind,
+                ReviewStatus = file.ReviewStatus,
+                IsFinal = file.IsFinal,
+                RecordId = file.RecordId,
+                CaseId = file.CaseId,
+                CaseNo = file.CaseNo,
+                TaskId = file.TaskId,
+                TaskNo = file.TaskNo,
+                FileName = file.FileName,
+                FilePath = file.FilePath,
+                ContentType = file.ContentType,
+                FileSize = file.FileSize,
+                UploadEmp = file.UploadEmp,
+                CreatedAt = file.CreatedAt,
+                UpdatedAt = file.UpdatedAt,
+                Sha256 = file.Sha256,
+                ProjectNo = record.RecordNo,
+                ProjectName = record.Name,
+                CaseName = caseEntity.Name,
+                TaskName = task.Name
+            }).ToListAsync();
+    }
+
+    public async Task ReviewTestReportAsync(Guid fileId, TestReportReviewRequest request, string reviewer)
+    {
+        var decision = request.Decision?.Trim();
+        if (decision != TestReportReviewStatuses.Approved && decision != TestReportReviewStatuses.Rejected)
+            throw new InvalidOperationException("審核結果只允許 Approved 或 Rejected。");
+
+        await using var transaction = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
+        var file = await _db.ModuleCaseFiles.FirstOrDefaultAsync(x => x.Id == fileId);
+        if (file is null || file.FileKind != ModuleCaseFileKinds.TestReport)
+            throw new InvalidOperationException("找不到指定的測試報告。");
+        if (file.ReviewStatus != TestReportReviewStatuses.Pending)
+            throw new InvalidOperationException("此測試報告已完成審核。");
+
+        var now = DateTime.UtcNow;
+        file.ReviewStatus = decision;
+        file.ReviewedAt = now;
+        file.ReviewedBy = reviewer;
+        file.ReviewComment = string.IsNullOrWhiteSpace(request.Comment) ? null : request.Comment.Trim();
+        file.UpdatedAt = now;
+
+        if (decision == TestReportReviewStatuses.Approved)
+        {
+            var priorFinals = await _db.ModuleCaseFiles
+                .Where(x => x.DocumentId == file.DocumentId && x.IsFinal && x.Id != file.Id)
+                .ToListAsync();
+            foreach (var priorFinal in priorFinals)
+            {
+                priorFinal.IsFinal = false;
+                priorFinal.FinalizedAt = null;
+                priorFinal.FinalizedBy = null;
+                priorFinal.UpdatedAt = now;
+            }
+
+
+            // Keep the whole operation atomic while satisfying the one-final filtered index.
+            await _db.SaveChangesAsync();
+
+            file.IsFinal = true;
+            file.FinalizedAt = now;
+            file.FinalizedBy = reviewer;
+        }
+        else
+        {
+            file.IsFinal = false;
+            file.FinalizedAt = null;
+            file.FinalizedBy = null;
+        }
+
+        await _db.SaveChangesAsync();
+        await RebuildProjectRawDataAsync(file.RecordId);
+        if (decision == TestReportReviewStatuses.Approved)
+        {
+            _db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForCommittedTestReport(file, DateTime.UtcNow));
+            await _db.SaveChangesAsync();
+        }
+        await transaction.CommitAsync();
     }
 
     public async Task BindFilesToCaseAsync(Guid recordId, string caseNo, Guid caseId, string caseName)
@@ -284,24 +597,69 @@ public class CaseFileService : ICaseFileService
             throw new FileNotFoundException("找不到實體檔案");
 
         var bytes = await File.ReadAllBytesAsync(fullPath);
-        return (bytes, file.FileName, file.ContentType ?? "application/octet-stream");
+        return (bytes, file.FileName, NormalizeContentType(file.ContentType));
     }
 
-    public async Task<bool> DeleteAsync(Guid fileId)
+    public async Task<bool> DeleteAsync(Guid fileId, bool canDeleteApprovedFinal = false, string? deletedBy = null)
     {
+        await using var transaction = await _db.Database.BeginTransactionAsync(IsolationLevel.Serializable);
         var file = await _db.ModuleCaseFiles.FirstOrDefaultAsync(x => x.Id == fileId);
         if (file == null)
             return false;
 
+        var wasApprovedOrFinal = file.FileKind == ModuleCaseFileKinds.TestReport &&
+            (file.ReviewStatus == TestReportReviewStatuses.Approved || file.IsFinal);
+        var wasFinal = file.IsFinal;
+        if (wasApprovedOrFinal && !canDeleteApprovedFinal)
+            throw new InvalidOperationException("已核准的測試報告不可刪除。");
+
         var recordId = file.RecordId;
         var fullPath = Path.Combine(file.FilePath, file.FileName);
+        var deletedAt = DateTime.UtcNow;
+        var actor = string.IsNullOrWhiteSpace(deletedBy) ? "System" : deletedBy.Trim();
+        ModuleCaseFile? restoredFinal = null;
 
-        DeleteNasMirrorFileByLocalPath(fullPath);
-        DeletePhysicalFile(file);
+        if (wasFinal)
+        {
+            file.IsFinal = false;
+            file.FinalizedAt = null;
+            file.FinalizedBy = null;
+            file.UpdatedAt = deletedAt;
+            await _db.SaveChangesAsync();
+
+            restoredFinal = await _db.ModuleCaseFiles
+                .Where(x => x.DocumentId == file.DocumentId &&
+                            x.Id != file.Id &&
+                            x.ReviewStatus == TestReportReviewStatuses.Approved)
+                .OrderByDescending(x => x.VersionNo)
+                .FirstOrDefaultAsync();
+            if (restoredFinal is not null)
+            {
+                restoredFinal.IsFinal = true;
+                restoredFinal.FinalizedAt = deletedAt;
+                restoredFinal.FinalizedBy = actor;
+                restoredFinal.UpdatedAt = deletedAt;
+            }
+        }
 
         _db.ModuleCaseFiles.Remove(file);
         await _db.SaveChangesAsync();
+        await transaction.CommitAsync();
 
+        _logger.LogInformation(
+            "Module case file deleted. FileId={FileId} DocumentId={DocumentId} VersionNo={VersionNo} FileName={FileName} DeletedBy={DeletedBy} DeletedAt={DeletedAt} ReviewStatus={ReviewStatus} WasFinal={WasFinal} RestoredFinalFileId={RestoredFinalFileId}",
+            file.Id,
+            file.DocumentId,
+            file.VersionNo,
+            file.FileName,
+            actor,
+            deletedAt,
+            file.ReviewStatus,
+            wasFinal,
+            restoredFinal?.Id);
+
+        DeleteNasMirrorFileByLocalPath(fullPath);
+        DeletePhysicalFile(file);
         await RebuildProjectRawDataAsync(recordId);
 
         return true;
@@ -376,16 +734,59 @@ public class CaseFileService : ICaseFileService
         string folderCaseName,
         string uploadKind,
         IReadOnlyList<IFormFile> files,
-        string? uploadEmp)
+        string? uploadEmp,
+        bool autoApprove = false,
+        Guid? approvalFileId = null,
+        string? approvedBy = null)
     {
         ValidateSettings();
 
         if (files.Count == 0)
             throw new InvalidOperationException("沒有收到任何檔案，已中止上傳。");
 
+        if (approvalFileId.HasValue && (approvalFileId == Guid.Empty || files.Count != 1))
+            throw new InvalidOperationException("An approval commit must contain exactly one file.");
+        var isInitialReport = IsTestReportUploadKind(uploadKind);
+        if (isInitialReport && files.Count != 1)
+            throw new InvalidOperationException("第一次上傳測試報告時一次只能選擇一個檔案。");
+        if (approvalFileId.HasValue)
+        {
+            var committed = await _db.ModuleCaseFiles.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.Id == approvalFileId.Value);
+            if (committed is not null)
+            {
+                var full = Path.Combine(committed.FilePath, committed.FileName);
+                if (!File.Exists(full))
+                {
+                    Directory.CreateDirectory(committed.FilePath);
+                    await using var replacement = new FileStream(full, FileMode.CreateNew, FileAccess.Write);
+                    await files[0].CopyToAsync(replacement);
+                }
+                if (!string.Equals(await ComputeSha256Async(full), committed.Sha256,
+                    StringComparison.OrdinalIgnoreCase))
+                    throw new InvalidOperationException("Existing approved file checksum does not match.");
+                await RebuildProjectRawDataAsync(committed.RecordId);
+                return;
+            }
+        }
+
+        await using var reportTransaction = isInitialReport && _db.Database.IsRelational()
+            && _db.Database.CurrentTransaction is null
+            ? await _db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted) : null;
+        if (isInitialReport)
+        {
+            if (caseId is null || string.IsNullOrWhiteSpace(taskNo))
+                throw new InvalidOperationException("測試報告必須隸屬於 Task。");
+            await TestReportBusinessRules.LockAsync(_db,
+                TestReportBusinessRules.TaskKey(caseId.Value, taskNo));
+            await TestReportBusinessRules.EnsureInitialAvailableAsync(_db,
+                caseId.Value, taskNo, taskId, approvalFileId);
+        }
+
         var moduleCode = await GetModuleCodeByRecordIdAsync(recordId);
         var rootPath = await GetThreeLevelRootPathAsync(moduleCode);
 
+        ModuleCaseFile? committedReport = null;
         Console.WriteLine($"[CaseFileService] Start saving files. recordId={recordId}, caseNo={caseNo}, taskId={taskId}, taskNo={taskNo}, uploadKind={uploadKind}, files={files.Count}");
 
         foreach (var file in files)
@@ -395,6 +796,9 @@ public class CaseFileService : ICaseFileService
 
             var safeFileName = CleanFileName(file.FileName);
 
+            var documentId = approvalFileId ?? Guid.NewGuid();
+            var fileId = approvalFileId ?? Guid.NewGuid();
+            var isTestReport = IsTestReportUploadKind(uploadKind);
             var folderPath = await BuildUploadFolderAsync(
                 rootPath,
                 projectName,
@@ -403,21 +807,34 @@ public class CaseFileService : ICaseFileService
                 uploadKind,
                 safeFileName);
 
+            if (isTestReport)
+            {
+                folderPath = Path.Combine(folderPath, documentId.ToString("N"), "v0001");
+            }
+
             Directory.CreateDirectory(folderPath);
 
             var fullPath = Path.Combine(folderPath, safeFileName);
 
             if (File.Exists(fullPath))
-                throw new InvalidOperationException($"檔案已存在：{safeFileName}，請刪除舊檔或更名後再上傳。");
-
-            await using (var stream = File.Create(fullPath))
             {
+                if (!approvalFileId.HasValue ||
+                    await ComputeSha256Async(fullPath) != await ComputeFormFileSha256Async(file) ||
+                    await _db.ModuleCaseFiles.AsNoTracking().AnyAsync(x => x.FilePath == folderPath && x.FileName == safeFileName))
+                    throw new InvalidOperationException($"檔案已存在：{safeFileName}，請刪除舊檔或更名後再上傳。");
+            }
+            else
+            {
+                await using var stream = new FileStream(fullPath, FileMode.CreateNew, FileAccess.Write);
                 await file.CopyToAsync(stream);
             }
 
+            var now = DateTime.UtcNow;
+            var actor = string.IsNullOrWhiteSpace(uploadEmp) ? "System" : uploadEmp;
+
             var entity = new ModuleCaseFile
             {
-                Id = Guid.NewGuid(),
+                Id = fileId,
                 RecordId = recordId,
                 CaseId = caseId,
                 CaseNo = caseNo,
@@ -425,19 +842,41 @@ public class CaseFileService : ICaseFileService
                 TaskNo = taskNo,
                 FileName = safeFileName,
                 FilePath = folderPath,
-                ContentType = file.ContentType,
+                ContentType = NormalizeContentType(file.ContentType),
                 FileSize = file.Length,
-                UploadEmp = string.IsNullOrWhiteSpace(uploadEmp) ? "System" : uploadEmp,
-                CreatedAt = DateTime.UtcNow
+                UploadEmp = actor,
+                CreatedAt = now,
+                DocumentId = documentId,
+                VersionNo = 1,
+                FileKind = isTestReport ? ModuleCaseFileKinds.TestReport : ModuleCaseFileKinds.Attachment,
+                ReviewStatus = isTestReport
+                    ? autoApprove ? TestReportReviewStatuses.Approved : TestReportReviewStatuses.Pending
+                    : null,
+                ReviewedAt = isTestReport && autoApprove ? now : null,
+                ReviewedBy = isTestReport && autoApprove ? approvedBy ?? actor : null,
+                IsFinal = isTestReport && autoApprove,
+                FinalizedAt = isTestReport && autoApprove ? now : null,
+                FinalizedBy = isTestReport && autoApprove ? approvedBy ?? actor : null,
+                Sha256 = await ComputeSha256Async(fullPath),
+                UpdatedAt = now
             };
 
             _db.ModuleCaseFiles.Add(entity);
+            if (isTestReport && autoApprove) committedReport = entity;
             await _db.SaveChangesAsync();
 
             Console.WriteLine($"[CaseFileService] File uploaded. recordId={recordId}, fileId={entity.Id}, path={fullPath}");
         }
 
         await RebuildProjectRawDataAsync(recordId);
+        if (isInitialReport && autoApprove && !approvalFileId.HasValue)
+        {
+            if (committedReport is null)
+                throw new InvalidOperationException("Committed test report was not tracked.");
+            _db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForCommittedTestReport(committedReport, DateTime.UtcNow));
+            await _db.SaveChangesAsync();
+        }
+        if (reportTransaction is not null) await reportTransaction.CommitAsync();
     }
 
     public async Task RebuildProjectRawDataAsync(Guid recordId)
@@ -472,8 +911,18 @@ public class CaseFileService : ICaseFileService
             .OrderBy(x => x.CreatedAt)
             .ToListAsync();
 
+        foreach (var file in allFiles.Where(x => string.IsNullOrWhiteSpace(x.Sha256)))
+        {
+            var fullPath = Path.Combine(file.FilePath, file.FileName);
+            if (File.Exists(fullPath))
+            {
+                file.Sha256 = await ComputeSha256Async(fullPath);
+                file.UpdatedAt = file.UpdatedAt == default ? file.CreatedAt : file.UpdatedAt;
+            }
+        }
+
         var projectFilesForMirror = allFiles
-            .Where(x => IsUnderFolder(Path.Combine(x.FilePath, x.FileName), projectFolder))
+            .Where(x => x.FileKind == ModuleCaseFileKinds.Attachment)
             .Select(x => new RawDataLatestPackageFile
             {
                 FileId = x.Id.ToString(),
@@ -569,7 +1018,7 @@ public class CaseFileService : ICaseFileService
                         f.CaseId == c.Id &&
                         f.TaskId == null &&
                         string.IsNullOrWhiteSpace(f.TaskNo) &&
-                        IsUnderFolder(Path.Combine(f.FilePath, f.FileName), projectFolder))
+                        f.FileKind == ModuleCaseFileKinds.Attachment)
                     .Select(ToRawFileObject)
                     .ToList(),
                 tasks = tasks
@@ -599,13 +1048,13 @@ public class CaseFileService : ICaseFileService
                         files = allFiles
                             .Where(f =>
                                 f.TaskId == t.Id &&
-                                IsUnderFolder(Path.Combine(f.FilePath, f.FileName), projectFolder))
+                                f.FileKind == ModuleCaseFileKinds.Attachment)
                             .Select(ToRawFileObject)
                             .ToList(),
                         testReports = allFiles
                             .Where(f =>
                                 f.TaskId == t.Id &&
-                                !IsUnderFolder(Path.Combine(f.FilePath, f.FileName), projectFolder))
+                                f.FileKind == ModuleCaseFileKinds.TestReport)
                             .Select(ToRawFileObject)
                             .ToList()
                     })
@@ -620,11 +1069,11 @@ public class CaseFileService : ICaseFileService
                     {
                         taskNo = g.Key,
                         files = g
-                            .Where(f => IsUnderFolder(Path.Combine(f.FilePath, f.FileName), projectFolder))
+                            .Where(f => f.FileKind == ModuleCaseFileKinds.Attachment)
                             .Select(ToRawFileObject)
                             .ToList(),
                         testReports = g
-                            .Where(f => !IsUnderFolder(Path.Combine(f.FilePath, f.FileName), projectFolder))
+                            .Where(f => f.FileKind == ModuleCaseFileKinds.TestReport)
                             .Select(ToRawFileObject)
                             .ToList()
                     })
@@ -670,8 +1119,8 @@ public class CaseFileService : ICaseFileService
                             f.CaseId == c.Id &&
                             f.TaskId == null &&
                             string.IsNullOrWhiteSpace(f.TaskNo) &&
-                            IsUnderFolder(Path.Combine(f.FilePath, f.FileName), projectFolder))
-                        .Select(f => ToKmFileObject(f, rawDataNasRoot, "Attachment"))
+                            f.FileKind == ModuleCaseFileKinds.Attachment)
+                        .Select(f => ToKmFileObject(f, rawDataNasRoot))
                         .ToList(),
                     tasks = tasks
                         .Where(t => t.CaseId == c.Id)
@@ -692,14 +1141,16 @@ public class CaseFileService : ICaseFileService
                             files = allFiles
                                 .Where(f =>
                                     f.TaskId == t.Id &&
-                                    IsUnderFolder(Path.Combine(f.FilePath, f.FileName), projectFolder))
-                                .Select(f => ToKmFileObject(f, rawDataNasRoot, "Attachment"))
+                                    f.FileKind == ModuleCaseFileKinds.Attachment)
+                                .Select(f => ToKmFileObject(f, rawDataNasRoot))
                                 .ToList(),
                             testReports = allFiles
                                 .Where(f =>
                                     f.TaskId == t.Id &&
-                                    !IsUnderFolder(Path.Combine(f.FilePath, f.FileName), projectFolder))
-                                .Select(f => ToKmFileObject(f, rawDataNasRoot, "TestReport"))
+                                    f.FileKind == ModuleCaseFileKinds.TestReport &&
+                                    f.ReviewStatus == TestReportReviewStatuses.Approved &&
+                                    f.IsFinal)
+                                .Select(f => ToKmFileObject(f, rawDataNasRoot))
                                 .ToList()
                         })
                         .ToList()
@@ -720,7 +1171,7 @@ public class CaseFileService : ICaseFileService
         });
 
         var testReportFiles = allFiles
-            .Where(x => !IsUnderFolder(Path.Combine(x.FilePath, x.FileName), projectFolder))
+            .Where(x => x.FileKind == ModuleCaseFileKinds.TestReport)
             .ToList();
 
         MirrorExternalFilesToNas(testReportFiles);
@@ -769,6 +1220,14 @@ public class CaseFileService : ICaseFileService
             fileSize = file.FileSize,
             uploadEmp = file.UploadEmp,
             createdAt = file.CreatedAt,
+            documentId = file.DocumentId,
+            version = file.VersionNo,
+            fileKind = file.FileKind,
+            reviewStatus = file.ReviewStatus,
+            isFinal = file.IsFinal,
+            sha256 = file.Sha256,
+            updatedAt = file.UpdatedAt,
+            finalizedAt = file.FinalizedAt,
             localFolder = file.FilePath,
             localFilePath = localFullPath,
             nasFolder = Path.GetDirectoryName(nasFilePath),
@@ -776,7 +1235,7 @@ public class CaseFileService : ICaseFileService
         };
     }
 
-    private object ToKmFileObject(ModuleCaseFile file, string rawDataNasRoot, string fileKind)
+    private object ToKmFileObject(ModuleCaseFile file, string rawDataNasRoot)
     {
         var localFullPath = Path.Combine(file.FilePath, file.FileName);
         var nasFilePath = BuildNasFilePathByLocalPath(localFullPath);
@@ -796,16 +1255,23 @@ public class CaseFileService : ICaseFileService
 
         return new
         {
-            id = file.Id,
+            fileId = file.Id,
+            documentId = file.DocumentId,
             recordId = file.RecordId,
             caseId = file.CaseId,
             taskId = file.TaskId,
             fileName = file.FileName,
-            fileKind,
+            fileKind = file.FileKind,
+            version = file.VersionNo,
+            reviewStatus = file.ReviewStatus,
+            isFinal = file.IsFinal,
+            sha256 = file.Sha256,
             contentType = file.ContentType,
             fileSize = file.FileSize,
             uploadedBy = file.UploadEmp,
-            createdAt = file.CreatedAt,
+            uploadedAt = file.CreatedAt,
+            updatedAt = file.UpdatedAt,
+            finalizedAt = file.FinalizedAt,
             relativePath
         };
     }
@@ -1216,6 +1682,11 @@ public class CaseFileService : ICaseFileService
         return string.Equals(uploadKind, TaskReportUploadKind, StringComparison.OrdinalIgnoreCase);
     }
 
+    private static string NormalizeContentType(string? contentType)
+    {
+        return string.IsNullOrWhiteSpace(contentType) ? DefaultContentType : contentType;
+    }
+
     private static ModuleCaseFileDto ToDto(ModuleCaseFile x)
     {
         return new ModuleCaseFileDto
@@ -1231,8 +1702,43 @@ public class CaseFileService : ICaseFileService
             ContentType = x.ContentType,
             FileSize = x.FileSize,
             UploadEmp = x.UploadEmp,
-            CreatedAt = x.CreatedAt
+            CreatedAt = x.CreatedAt,
+            DocumentId = x.DocumentId,
+            VersionNo = x.VersionNo,
+            FileKind = x.FileKind,
+            ReviewStatus = x.ReviewStatus,
+            ReviewedAt = x.ReviewedAt,
+            ReviewedBy = x.ReviewedBy,
+            ReviewComment = x.ReviewComment,
+            IsFinal = x.IsFinal,
+            FinalizedAt = x.FinalizedAt,
+            FinalizedBy = x.FinalizedBy,
+            Sha256 = x.Sha256,
+            UpdatedAt = x.UpdatedAt
         };
+    }
+
+    private static string GetDocumentRoot(ModuleCaseFile file)
+    {
+        var versionFolder = new DirectoryInfo(file.FilePath);
+        if (versionFolder.Name.StartsWith("v", StringComparison.OrdinalIgnoreCase)
+            && versionFolder.Parent?.Name.Equals(file.DocumentId.ToString("N"), StringComparison.OrdinalIgnoreCase) == true)
+            return versionFolder.Parent.FullName;
+
+        return Path.Combine(file.FilePath, file.DocumentId.ToString("N"));
+    }
+
+    private static async Task<string> ComputeSha256Async(string fullPath)
+    {
+        await using var stream = File.OpenRead(fullPath);
+        var hash = await SHA256.HashDataAsync(stream);
+        return Convert.ToHexString(hash).ToLowerInvariant();
+    }
+
+    private static async Task<string> ComputeFormFileSha256Async(IFormFile file)
+    {
+        await using var stream = file.OpenReadStream();
+        return Convert.ToHexString(await SHA256.HashDataAsync(stream)).ToLowerInvariant();
     }
 
     private static string CleanFolderName(string value)

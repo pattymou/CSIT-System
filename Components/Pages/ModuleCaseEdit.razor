@@ -334,7 +334,8 @@
 
             if (res.IsSuccessStatusCode)
             {
-                _uploadMessage = "上傳成功";
+                _uploadMessage = res.StatusCode == 202
+                    ? "已送主管審核；核准後才會顯示正式附件。" : "上傳成功";
                 _selectedFiles.Clear();
                 await LoadFilesAsync();
             }

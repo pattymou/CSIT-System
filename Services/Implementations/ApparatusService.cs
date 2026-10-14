@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Models;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 
@@ -15,17 +16,20 @@ public class ApparatusService : IApparatusService
     private readonly ApparatusSettings _settings;
     private readonly RawDataSettings _rawDataSettings;
     private readonly IRawDataExportService _rawDataExportService;
+    private readonly SharedIdentityProvisioningClient _provisioningClient;
 
     public ApparatusService(
         AppDbContext db,
         IOptions<ApparatusSettings> options,
         IOptions<RawDataSettings> rawDataOptions,
-        IRawDataExportService rawDataExportService)
+        IRawDataExportService rawDataExportService,
+        SharedIdentityProvisioningClient provisioningClient)
     {
         _db = db;
         _settings = options.Value;
         _rawDataSettings = rawDataOptions.Value;
         _rawDataExportService = rawDataExportService;
+        _provisioningClient = provisioningClient;
     }
 
     public async Task<string> GenerateNewIdAsync()
@@ -62,18 +66,42 @@ public class ApparatusService : IApparatusService
             })
             .ToListAsync(cancellationToken);
 
-        var users = await _db.Users.AsNoTracking()
-            .OrderBy(x => x.DisplayName)
-            .ThenBy(x => x.Account)
+        IReadOnlyList<SharedIdentityAccountListItem> accounts;
+        try
+        {
+            accounts = await _provisioningClient.ListAccountsAsync(cancellationToken);
+        }
+        catch (SharedIdentityProvisioningException exception)
+        {
+            throw new InvalidOperationException("目前無法取得可用的保管人名單，請稍後再試。", exception);
+        }
+
+        var users = accounts
+            .Where(x =>
+                !string.IsNullOrWhiteSpace(x.Account) &&
+                string.Equals(x.AccountStatus?.Trim(), "Active", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(x.SystemAccessStatus?.Trim(), "Active", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(x => string.IsNullOrWhiteSpace(x.DisplayName) ? x.Account : x.DisplayName,
+                StringComparer.OrdinalIgnoreCase)
+            .ThenBy(x => x.Account, StringComparer.OrdinalIgnoreCase)
             .Select(x => new ApparatusCustodianOptionDto
             {
-                Account = x.Account,
-                DisplayName = x.DisplayName,
-                Department = x.Department
+                Account = x.Account.Trim(),
+                DisplayName = x.DisplayName?.Trim() ?? string.Empty,
+                Department = x.Department?.Trim() ?? string.Empty,
+                TeamCode = x.TeamCode?.Trim() ?? string.Empty
             })
-            .ToListAsync(cancellationToken);
+            .ToList();
 
-        return new ApparatusOwnershipOptionsDto { Teams = teams, Users = users };
+        var departments = await _db.SystemOptions.AsNoTracking()
+            .Where(x => x.Category == SystemOptionCategories.Department && x.IsEnabled)
+            .OrderBy(x => x.Sort).ThenBy(x => x.Name).ToListAsync(cancellationToken);
+        return new ApparatusOwnershipOptionsDto
+        {
+            Departments = departments
+                .Select(x => new ApparatusOwnerTeamOptionDto { Id = x.Id, Name = x.Name, Value = x.Value }).ToList(),
+            Teams = teams, Users = users
+        };
     }
 
     public async Task<List<ApparatusListItemDto>> GetListAsync(string moduleCode, string? keyword, string? kind)
@@ -120,8 +148,12 @@ public class ApparatusService : IApparatusService
                     .Select(user => user.DisplayName)
                     .FirstOrDefault(),
                 CustodianAccount = x.CustodianAccount,
+                DepartmentOptionId = x.DepartmentOptionId,
+                DepartmentName = x.DepartmentOption == null
+                    ? null
+                    : DepartmentTeamRules.DisplayName(x.DepartmentOption.Name, x.DepartmentOption.Value),
                 OwnerTeamOptionId = x.OwnerTeamOptionId,
-                OwnerTeamName = x.OwnerTeamOption == null ? null : x.OwnerTeamOption.Name,
+                OwnerTeamName = x.OwnerTeamOption == null ? null : (string.IsNullOrWhiteSpace(x.OwnerTeamOption.Name) ? x.OwnerTeamOption.Value : x.OwnerTeamOption.Name),
                 Agent = x.Agent,
                 Note = x.Note,
                 EnvironmentGroupDeviceId = x.EnvironmentGroupDevices
@@ -154,6 +186,7 @@ public class ApparatusService : IApparatusService
 
         var entity = await _db.Apparatuses
             .Include(x => x.Files)
+            .Include(x => x.DepartmentOption)
             .Include(x => x.OwnerTeamOption)
             .Include(x => x.EnvironmentGroupDevices).ThenInclude(x => x.EquipmentGroup)
             .FirstOrDefaultAsync(x => x.ModuleCode == moduleCode && x.Id == id);
@@ -177,7 +210,6 @@ public class ApparatusService : IApparatusService
         ValidateUpsert(request);
         var ownership = await ValidateOwnershipAsync(
             request,
-            string.Equals(moduleCode, ApparatusReservationRules.EquipmentModuleCode, StringComparison.OrdinalIgnoreCase),
             CancellationToken.None);
 
         var id = string.IsNullOrWhiteSpace(request.Id)
@@ -216,6 +248,7 @@ public class ApparatusService : IApparatusService
             DaysUse = request.DaysUse,
             PriceUse = request.PriceUse,
             CustodianAccount = ownership.CustodianAccount,
+            DepartmentOptionId = request.DepartmentOptionId,
             OwnerTeamOptionId = ownership.OwnerTeamOptionId,
             Agent = request.Agent,
             ReservationStatus = string.IsNullOrWhiteSpace(request.ReservationStatus) ? "可借用" : request.ReservationStatus,
@@ -251,7 +284,6 @@ public class ApparatusService : IApparatusService
         ValidateUpsert(request);
         var ownership = await ValidateOwnershipAsync(
             request,
-            string.Equals(moduleCode, ApparatusReservationRules.EquipmentModuleCode, StringComparison.OrdinalIgnoreCase),
             CancellationToken.None);
         ApplyConcurrencyToken(entity, request.RowVersion);
 
@@ -278,6 +310,7 @@ public class ApparatusService : IApparatusService
         entity.DaysUse = request.DaysUse;
         entity.PriceUse = request.PriceUse;
         entity.CustodianAccount = ownership.CustodianAccount;
+        entity.DepartmentOptionId = request.DepartmentOptionId;
         entity.OwnerTeamOptionId = ownership.OwnerTeamOptionId;
         entity.Agent = request.Agent;
         entity.ReservationStatus = request.ReservationStatus;
@@ -374,7 +407,8 @@ public class ApparatusService : IApparatusService
             .ToListAsync();
     }
 
-    public async Task UploadFilesAsync(string moduleCode, string apparatusId, IReadOnlyList<IFormFile> files, string? uploadEmp)
+    public async Task UploadFilesAsync(string moduleCode, string apparatusId, IReadOnlyList<IFormFile> files,
+        string? uploadEmp, Guid? approvalFileId = null)
     {
         moduleCode = NormalizeModuleCode(moduleCode);
 
@@ -382,6 +416,8 @@ public class ApparatusService : IApparatusService
         {
             throw new InvalidOperationException("沒有收到檔案");
         }
+        if (approvalFileId.HasValue && (approvalFileId.Value == Guid.Empty || files.Count != 1))
+            throw new InvalidOperationException("Approved Asset submission must contain exactly one file.");
 
         var exists = await _db.Apparatuses.AnyAsync(x => x.ModuleCode == moduleCode && x.Id == apparatusId);
         if (!exists)
@@ -399,17 +435,47 @@ public class ApparatusService : IApparatusService
                 throw new InvalidOperationException($"檔案是空的：{file.FileName}");
             }
 
-            var fileId = Guid.NewGuid();
+            var fileId = approvalFileId ?? Guid.NewGuid();
             var safeFileName = CleanFileName(file.FileName);
             var fileFolder = Path.Combine(folder, fileId.ToString("N"));
             Directory.CreateDirectory(fileFolder);
 
             var fullPath = Path.Combine(fileFolder, safeFileName);
+            var existing = approvalFileId.HasValue
+                ? await _db.ApparatusFiles.AsNoTracking().SingleOrDefaultAsync(x => x.Id == fileId)
+                : null;
+            if (existing is not null && (existing.ApparatusId != apparatusId ||
+                existing.FileName != safeFileName || existing.FilePath != fileFolder ||
+                existing.FileSize != file.Length))
+                throw new InvalidOperationException("Approved Asset file identity changed during retry.");
 
-            await using (var stream = File.Create(fullPath))
+            if (File.Exists(fullPath))
             {
+                if (approvalFileId.HasValue)
+                {
+                    if (!await HasSameContentAsync(file, fullPath))
+                    {
+                        if (existing is not null)
+                            throw new InvalidOperationException("Approved Asset file checksum changed during retry.");
+                        // A crash can leave a partial file before the DB row exists. This
+                        // directory belongs to the submission ID, so staging can repair it.
+                        await using var replacement = File.Create(fullPath);
+                        await file.CopyToAsync(replacement);
+                    }
+                }
+                else
+                {
+                    await using var stream = File.Create(fullPath);
+                    await file.CopyToAsync(stream);
+                }
+            }
+            else
+            {
+                await using var stream = new FileStream(fullPath, FileMode.CreateNew, FileAccess.Write);
                 await file.CopyToAsync(stream);
             }
+
+            if (existing is not null) continue;
 
             var now = DateTime.UtcNow;
 
@@ -435,6 +501,16 @@ public class ApparatusService : IApparatusService
         await RebuildLatestRawDataAsync(moduleCode, apparatusId);
 
         Console.WriteLine($"[ApparatusService] UploadFiles done. moduleCode={moduleCode}, apparatusId={apparatusId}, count={files.Count}");
+    }
+
+    private static async Task<bool> HasSameContentAsync(IFormFile candidate, string storedPath)
+    {
+        if (new FileInfo(storedPath).Length != candidate.Length) return false;
+        await using var incoming = candidate.OpenReadStream();
+        await using var stored = File.OpenRead(storedPath);
+        var expected = await SHA256.HashDataAsync(incoming);
+        var actual = await SHA256.HashDataAsync(stored);
+        return expected.AsSpan().SequenceEqual(actual);
     }
 
     public async Task<(byte[] Content, string FileName, string ContentType)> GetFileContentAsync(Guid fileId)
@@ -751,8 +827,12 @@ public class ApparatusService : IApparatusService
             PriceUse = x.PriceUse,
             Custodian = custodianDisplayName,
             CustodianAccount = x.CustodianAccount,
+            DepartmentOptionId = x.DepartmentOptionId,
+            DepartmentName = x.DepartmentOption == null
+                ? null
+                : DepartmentTeamRules.DisplayName(x.DepartmentOption.Name, x.DepartmentOption.Value),
             OwnerTeamOptionId = x.OwnerTeamOptionId,
-            OwnerTeamName = x.OwnerTeamOption?.Name,
+            OwnerTeamName = x.OwnerTeamOption == null ? null : DepartmentTeamRules.DisplayName(x.OwnerTeamOption.Name, x.OwnerTeamOption.Value),
             Agent = x.Agent,
             ReservationStatus = x.ReservationStatus,
             Feature = x.Feature,
@@ -799,42 +879,84 @@ public class ApparatusService : IApparatusService
 
     private async Task<(string? CustodianAccount, Guid? OwnerTeamOptionId)> ValidateOwnershipAsync(
         ApparatusUpsertRequest request,
-        bool requireEquipmentOwnership,
         CancellationToken cancellationToken)
     {
         string? custodianAccount = null;
+        SystemOption? department = null;
+        department = await RequireOwnershipDepartmentAsync(request.DepartmentOptionId, cancellationToken);
         if (!string.IsNullOrWhiteSpace(request.CustodianAccount))
         {
             custodianAccount = request.CustodianAccount.Trim().ToLowerInvariant();
-            var selectedUser = await _db.Users.AsNoTracking()
-                .Where(x => x.Account.ToLower() == custodianAccount)
-                .Select(x => x.Account)
-                .SingleOrDefaultAsync(cancellationToken);
+            var selectedUser = request.CustodianAccount.Trim();
             if (selectedUser is null)
                 throw new InvalidOperationException($"保管人帳號不存在：{request.CustodianAccount.Trim()}。");
             custodianAccount = selectedUser.Trim().ToLowerInvariant();
         }
-        else if (requireEquipmentOwnership)
+        else
         {
             throw new InvalidOperationException("請選擇保管人。");
         }
 
+        SystemOption? selectedTeam = null;
         if (request.OwnerTeamOptionId.HasValue)
         {
-            var teamExists = await _db.SystemOptions.AsNoTracking().AnyAsync(
-                x => x.Id == request.OwnerTeamOptionId.Value
-                    && x.Category == SystemOptionCategories.Team
-                    && x.IsEnabled,
-                cancellationToken);
-            if (!teamExists)
-                throw new InvalidOperationException("設備所屬 Team 必須是啟用中的 Team 選項。");
+            var enabledTeams = await _db.SystemOptions.AsNoTracking()
+                .Where(x => x.Category == SystemOptionCategories.Team && x.IsEnabled)
+                .ToListAsync(cancellationToken);
+            var allowedTeams = DepartmentTeamRules.GetAllowedTeamsForDepartment(
+                department.Value,
+                enabledTeams,
+                team => team.Name,
+                team => team.Value);
+            selectedTeam = allowedTeams.SingleOrDefault(team => team.Id == request.OwnerTeamOptionId.Value);
+            if (allowedTeams.All(team => team.Id != request.OwnerTeamOptionId.Value))
+                throw new InvalidOperationException("設備所屬 Team 必須是所選部門可使用的啟用 Team 選項。");
         }
-        else if (requireEquipmentOwnership)
+        else
         {
             throw new InvalidOperationException("請選擇設備所屬 Team。");
         }
 
+        if (!string.IsNullOrWhiteSpace(custodianAccount) && department is not null && selectedTeam is not null)
+        {
+            IReadOnlyList<SharedIdentityAccountListItem> accounts;
+            try
+            {
+                accounts = await _provisioningClient.ListAccountsAsync(cancellationToken);
+            }
+            catch (SharedIdentityProvisioningException exception)
+            {
+                throw new InvalidOperationException("目前無法驗證保管人，請稍後再試。", exception);
+            }
+
+            var custodian = accounts.SingleOrDefault(x =>
+                string.Equals(x.Account.Trim(), custodianAccount, StringComparison.OrdinalIgnoreCase));
+            if (custodian is null ||
+                !string.Equals(custodian.AccountStatus.Trim(), "Active", StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(custodian.SystemAccessStatus.Trim(), "Active", StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(custodian.Department.Trim(), department.Value.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(custodian.TeamCode?.Trim(), selectedTeam.Value.Trim(), StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("保管人必須屬於所選部門與 Team。");
+            }
+        }
+
         return (custodianAccount, request.OwnerTeamOptionId);
+    }
+
+    private async Task<SystemOption> RequireOwnershipDepartmentAsync(
+        Guid? optionId,
+        CancellationToken cancellationToken)
+    {
+        var department = await _db.SystemOptions.AsNoTracking().SingleOrDefaultAsync(
+            x => x.Id == optionId &&
+                 x.Category == SystemOptionCategories.Department &&
+                 x.IsEnabled,
+            cancellationToken);
+        if (department is null || string.IsNullOrWhiteSpace(department.Value))
+            throw new InvalidOperationException("請選擇有效且啟用中的部門。");
+
+        return department;
     }
 
     private static string NormalizeModuleCode(string? moduleCode)

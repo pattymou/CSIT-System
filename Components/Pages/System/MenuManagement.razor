@@ -3,7 +3,9 @@
 @rendermode InteractiveServer
 @using SIT.DepartmentSystem.Web.Models.Api
 @using SIT.DepartmentSystem.Web.Services.Interfaces
+@using SIT.DepartmentSystem.Web.Services.Approval
 @inject IMenuManagementService MenuService
+@inject IApprovalCommitHandlerRegistry ApprovalHandlers
 
 <PageTitle>子選單管理</PageTitle>
 
@@ -110,8 +112,17 @@
 
                         <label class="check-row inline-check compact-check">
                             <input type="checkbox" @bind="_itemForm.AdminOnly" />
-                            <span>管理者限定</span>
+                            <span>僅管理者可使用</span>
                         </label>
+                        <label class="check-row inline-check compact-check">
+                            <input type="checkbox" @bind="_itemForm.RequiresSupervisorApproval"
+                                   disabled="@(!_itemForm.RequiresSupervisorApproval && !ApprovalHandlers.HasHandler(_itemForm.ModuleCode))" />
+                            <span>上傳需主管審核</span>
+                        </label>
+                        @if (!ApprovalHandlers.HasHandler(_itemForm.ModuleCode))
+                        {
+                            <div class="page-subtitle">此 Module Code 尚無主管審核處理器，無法啟用上傳審核。</div>
+                        }
                     </div>
 
                     <div class="dialog-actions">
@@ -144,7 +155,7 @@
 
     @if (!string.IsNullOrWhiteSpace(_message))
     {
-        <div class="success-alert">@_message</div>
+        <div class="success-alert @(_messageIsError ? "error-text" : "")">@_message</div>
     }
 </section>
 
@@ -153,6 +164,7 @@
     private List<MenuItemDto> _departmentItems = [];
     private Guid _selectedItemId = Guid.Empty;
     private string? _message;
+    private bool _messageIsError;
     private bool IsCreatingItem;
 
     private IEnumerable<MenuItemDto> SelectedItems =>
@@ -210,6 +222,7 @@
             SortOrder = (_departmentItems.Max(x => (int?)x.SortOrder) ?? 0) + 1,
             IsEnabled = true,
             AdminOnly = false,
+            RequiresSupervisorApproval = false,
             ModuleCode = null,
             TemplateType = null
         };
@@ -238,6 +251,7 @@
             SortOrder = item.SortOrder,
             IsEnabled = item.IsEnabled,
             AdminOnly = item.AdminOnly,
+            RequiresSupervisorApproval = item.RequiresSupervisorApproval,
             ModuleCode = item.ModuleCode,
             TemplateType = NormalizeTemplateType(item.TemplateType, item.UseStandardTemplate, item.RoutePath)
         };
@@ -266,6 +280,7 @@
             SortOrder = item.SortOrder,
             IsEnabled = item.IsEnabled,
             AdminOnly = item.AdminOnly,
+            RequiresSupervisorApproval = item.RequiresSupervisorApproval,
             ModuleCode = item.ModuleCode,
             TemplateType = NormalizeTemplateType(item.TemplateType, item.UseStandardTemplate, item.RoutePath)
         };
@@ -275,6 +290,7 @@
 
     private async Task SaveItemAsync()
     {
+        _messageIsError = false;
         if (_departmentSection is null)
         {
             return;
@@ -309,6 +325,7 @@
             SortOrder = _itemForm.SortOrder,
             IsEnabled = _itemForm.IsEnabled,
             AdminOnly = _itemForm.AdminOnly,
+            RequiresSupervisorApproval = _itemForm.RequiresSupervisorApproval,
             ModuleCode = string.IsNullOrWhiteSpace(_itemForm.ModuleCode) ? null : _itemForm.ModuleCode.Trim(),
             TemplateType = string.IsNullOrWhiteSpace(_itemForm.TemplateType) ? null : _itemForm.TemplateType.Trim()
         };
@@ -317,7 +334,9 @@
         {
             Console.WriteLine($"[MenuManagement] Create item start. title={request.Title}, route={request.RoutePath}, moduleCode={request.ModuleCode}, templateType={request.TemplateType}");
 
-            var newId = await MenuService.CreateItemAsync(_departmentSection.Id, request);
+            Guid newId;
+            try { newId = await MenuService.CreateItemAsync(_departmentSection.Id, request); }
+            catch (InvalidOperationException ex) { _message = ex.Message; _messageIsError = true; return; }
 
             _message = "已新增子選單";
             await LoadAsync();
@@ -337,7 +356,8 @@
 
         Console.WriteLine($"[MenuManagement] Update item start. id={item.Id}, title={request.Title}, route={request.RoutePath}, moduleCode={request.ModuleCode}, templateType={request.TemplateType}");
 
-        await MenuService.UpdateItemAsync(item.Id, request);
+        try { await MenuService.UpdateItemAsync(item.Id, request); }
+        catch (InvalidOperationException ex) { _message = ex.Message; _messageIsError = true; return; }
 
         _message = "已儲存子選單";
         await LoadAsync();
@@ -356,7 +376,8 @@
 
         Console.WriteLine($"[MenuManagement] Delete item start. id={item.Id}");
 
-        await MenuService.DeleteItemAsync(item.Id);
+        try { await MenuService.DeleteItemAsync(item.Id); }
+        catch (InvalidOperationException ex) { _message = ex.Message; _messageIsError = true; return; }
 
         _message = "已刪除子選單";
         _selectedItemId = Guid.Empty;
@@ -434,6 +455,7 @@
         public int SortOrder { get; set; } = 1;
         public bool IsEnabled { get; set; } = true;
         public bool AdminOnly { get; set; }
+        public bool RequiresSupervisorApproval { get; set; }
         public string? ModuleCode { get; set; }
         public string? TemplateType { get; set; }
     }

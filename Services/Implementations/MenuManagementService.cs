@@ -3,16 +3,24 @@ using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.Approval;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
 public class MenuManagementService : IMenuManagementService
 {
     private readonly IDbContextFactory<AppDbContext> _dbFactory;
+    private readonly IBusinessWriteAuthorizationGuard _businessWrite;
+    private readonly ApprovalEnableGuard _approvalEnableGuard;
 
-    public MenuManagementService(IDbContextFactory<AppDbContext> dbFactory)
+    public MenuManagementService(
+        IDbContextFactory<AppDbContext> dbFactory,
+        IBusinessWriteAuthorizationGuard businessWrite,
+        ApprovalEnableGuard approvalEnableGuard)
     {
         _dbFactory = dbFactory;
+        _businessWrite = businessWrite;
+        _approvalEnableGuard = approvalEnableGuard;
     }
 
     public async Task<List<MenuSectionDto>> GetSectionsAsync()
@@ -52,6 +60,7 @@ public class MenuManagementService : IMenuManagementService
                 SortOrder = x.SortOrder,
                 IsEnabled = x.IsEnabled,
                 AdminOnly = x.AdminOnly,
+                RequiresSupervisorApproval = x.RequiresSupervisorApproval,
                 ModuleCode = x.ModuleCode,
                 UseStandardTemplate = x.UseStandardTemplate,
                 TemplateType = x.TemplateType
@@ -76,6 +85,7 @@ public class MenuManagementService : IMenuManagementService
                 SortOrder = x.SortOrder,
                 IsEnabled = x.IsEnabled,
                 AdminOnly = x.AdminOnly,
+                RequiresSupervisorApproval = x.RequiresSupervisorApproval,
                 ModuleCode = x.ModuleCode,
                 UseStandardTemplate = x.UseStandardTemplate,
                 TemplateType = x.TemplateType
@@ -85,6 +95,7 @@ public class MenuManagementService : IMenuManagementService
 
     public async Task<Guid> CreateItemAsync(Guid sectionId, MenuItemUpsertRequest request)
     {
+        await _businessWrite.DemandAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         var code = NormalizeRequired(request.Code, "Code");
@@ -94,7 +105,8 @@ public class MenuManagementService : IMenuManagementService
         var templateType = NormalizeTemplateType(request.TemplateType);
 
         ValidateTemplateRule(templateType, code, routePath, moduleCode);
-
+        if (request.RequiresSupervisorApproval)
+            await _approvalEnableGuard.DemandReadyAsync(moduleCode);
         await ValidateDuplicateAsync(
             db: db,
             currentId: null,
@@ -114,6 +126,7 @@ public class MenuManagementService : IMenuManagementService
             SortOrder = request.SortOrder,
             IsEnabled = request.IsEnabled,
             AdminOnly = request.AdminOnly,
+            RequiresSupervisorApproval = request.RequiresSupervisorApproval,
             ModuleCode = moduleCode,
             TemplateType = templateType,
             UseStandardTemplate = templateType == "ThreeLevel",
@@ -131,6 +144,7 @@ public class MenuManagementService : IMenuManagementService
 
     public async Task<bool> UpdateItemAsync(Guid id, MenuItemUpsertRequest request)
     {
+        await _businessWrite.DemandAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         var entity = await db.MenuItems.FirstOrDefaultAsync(x => x.Id == id);
@@ -147,6 +161,17 @@ public class MenuManagementService : IMenuManagementService
         var templateType = NormalizeTemplateType(request.TemplateType);
 
         ValidateTemplateRule(templateType, code, routePath, moduleCode);
+        if (request.RequiresSupervisorApproval)
+            await _approvalEnableGuard.DemandReadyAsync(moduleCode);
+        if (entity.RequiresSupervisorApproval && (!request.RequiresSupervisorApproval || !request.IsEnabled)
+            && await db.PendingSubmissions.AnyAsync(x => x.SourceMenuCode == entity.Code &&
+                (x.Status == ApprovalStatus.Pending || x.Status == ApprovalStatus.ApprovedPendingCommit ||
+                    x.Status == ApprovalStatus.CommitFailed)))
+            throw new InvalidOperationException("此 Menu 尚有未完成的主管審核項目，不可停用審核或 Menu。");
+        if ((!string.Equals(entity.Code, code, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(entity.ModuleCode, moduleCode, StringComparison.OrdinalIgnoreCase))
+            && await db.PendingSubmissions.AnyAsync(x => x.SourceMenuCode == entity.Code))
+            throw new InvalidOperationException("已有主管審核提交紀錄，不可變更此 Menu Code 或 Module Code。");
 
         await ValidateDuplicateAsync(
             db: db,
@@ -163,6 +188,7 @@ public class MenuManagementService : IMenuManagementService
         entity.SortOrder = request.SortOrder;
         entity.IsEnabled = request.IsEnabled;
         entity.AdminOnly = request.AdminOnly;
+        entity.RequiresSupervisorApproval = request.RequiresSupervisorApproval;
         entity.ModuleCode = moduleCode;
         entity.TemplateType = templateType;
         entity.UseStandardTemplate = templateType == "ThreeLevel";
@@ -177,6 +203,7 @@ public class MenuManagementService : IMenuManagementService
 
     public async Task<bool> DeleteItemAsync(Guid id)
     {
+        await _businessWrite.DemandAsync();
         await using var db = await _dbFactory.CreateDbContextAsync();
 
         var entity = await db.MenuItems.FirstOrDefaultAsync(x => x.Id == id);
@@ -185,6 +212,9 @@ public class MenuManagementService : IMenuManagementService
             Console.WriteLine($"[MenuManagementService] Delete skipped. item not found. id={id}");
             return false;
         }
+
+        if (await db.PendingSubmissions.AnyAsync(x => x.SourceMenuCode == entity.Code))
+            throw new InvalidOperationException("此 Menu 已有主管審核提交紀錄，不可刪除。");
 
         db.MenuItems.Remove(entity);
         await db.SaveChangesAsync();

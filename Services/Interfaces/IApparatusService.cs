@@ -1,8 +1,9 @@
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Services.Approval;
 
 namespace SIT.DepartmentSystem.Web.Services.Interfaces;
 
-public interface IApparatusService
+public interface IApparatusService : IAssetFormalUploadService
 {
     Task<string> GenerateNewIdAsync();
     Task<ApparatusOwnershipOptionsDto> GetOwnershipOptionsAsync(CancellationToken cancellationToken = default);
@@ -14,7 +15,6 @@ public interface IApparatusService
     Task<bool> DeleteAsync(string moduleCode, string id);
 
     Task<List<ApparatusFileDto>> GetFilesAsync(string moduleCode, string apparatusId);
-    Task UploadFilesAsync(string moduleCode, string apparatusId, IReadOnlyList<IFormFile> files, string? uploadEmp);
     Task<(byte[] Content, string FileName, string ContentType)> GetFileContentAsync(Guid fileId);
     Task<bool> DeleteFileAsync(Guid fileId);
 }

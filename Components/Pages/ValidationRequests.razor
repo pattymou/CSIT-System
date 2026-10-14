@@ -1,0 +1,49 @@
+@page "/validation-requests"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@rendermode InteractiveServer
+@using SIT.DepartmentSystem.Web.Services.ValidationRequests
+@inject IValidationRequestConfigurationService ValidationService
+
+<PageTitle>驗證測試申請單</PageTitle>
+
+<header class="validation-request-header">
+    <div><span class="eyebrow">DEPARTMENT</span><h1>驗證測試申請單</h1><p>請選擇產品類型，依序檢視申請所需的資料與測試內容。</p></div>
+</header>
+
+@if (_error is not null) { <div class="alert alert-danger">@_error</div> }
+else if (_configuration is null) { <div class="validation-loading">正在載入申請表…</div> }
+else
+{
+    <ValidationRequestPreview Preview="_preview" ProductTypes="_configuration.ProductTypes"
+                              SelectedProductCode="_selectedProduct" SelectedProductCodeChanged="ChangeProduct" />
+}
+
+@code {
+    private ValidationRequestConfigurationDto? _configuration;
+    private ValidationRequestPreviewDto? _preview;
+    private string _selectedProduct = "";
+    private string? _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        try
+        {
+            _configuration = await ValidationService.GetConfigurationAsync();
+            _selectedProduct = _configuration.ProductTypes.Where(x => x.IsEnabled).OrderBy(x => x.DisplayOrder).FirstOrDefault()?.Code ?? "";
+            await LoadPreview();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+    }
+
+    private async Task ChangeProduct(string code)
+    {
+        if (string.IsNullOrWhiteSpace(code) || code == _selectedProduct) return;
+        _selectedProduct = code;
+        await LoadPreview();
+    }
+
+    private async Task LoadPreview()
+    {
+        if (!string.IsNullOrWhiteSpace(_selectedProduct)) _preview = await ValidationService.GetPreviewAsync(_selectedProduct);
+    }
+}

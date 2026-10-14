@@ -27,12 +27,22 @@ else if (_canEdit)
     <div class="surface-card record-edit-card">
         <div class="edit-grid">
             <div class="form-row full-width">
+                <label>部門 *</label>
+                <select @bind="_form.RoutingDepartmentOptionId" @bind:after="OnDepartmentChanged">
+                    <option value="@Guid.Empty">請選擇</option>
+                    @foreach (var department in _departments)
+                    {
+                        <option value="@department.Id">@DepartmentTeamRules.DisplayName(department.Name, department.Value)</option>
+                    }
+                </select>
+            </div>
+            <div class="form-row full-width">
                 <label>Team *</label>
                 <select @bind="_form.TeamOptionId">
                     <option value="@Guid.Empty">請選擇</option>
-                    @foreach (var team in _teams)
+                    @foreach (var team in AllowedTeams)
                     {
-                        <option value="@team.Id">@team.Name</option>
+                        <option value="@team.Id">@DepartmentTeamRules.DisplayName(team.Name, team.Value)</option>
                     }
                 </select>
             </div>
@@ -66,6 +76,13 @@ else if (_canEdit)
     [Parameter] public Guid? Id { get; set; }
     private readonly UpdateVerificationApplicationRequest _form = new();
     private List<SystemOptionDto> _teams = [];
+    private List<SystemOptionDto> _departments = [];
+    private IReadOnlyList<SystemOptionDto> AllowedTeams => _form.RoutingDepartmentOptionId == Guid.Empty ? [] :
+        DepartmentTeamRules.GetAllowedTeamsForDepartment(
+            _departments.FirstOrDefault(x => x.Id == _form.RoutingDepartmentOptionId)?.Value,
+            _teams,
+            team => team.Name,
+            team => team.Value);
     private bool _loading = true;
     private bool _saving;
     private bool _canEdit = true;
@@ -76,19 +93,32 @@ else if (_canEdit)
     {
         try
         {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department))
+                .Where(x => DepartmentFamilyMatcher.IsDa40Family(x.Value)).ToList();
             _teams = await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Team);
             if (!_isEdit) return;
-            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
             var item = await Applications.GetForApplicantAsync(Id!.Value, user);
             if (item is null) { _canEdit = false; _message = "找不到申請，或您無權存取。"; return; }
             if (item.Status is not (VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned))
             { _canEdit = false; _message = "此申請目前不可修改。"; return; }
             Copy(item);
-            if (item.TeamOptionId.HasValue && _teams.All(x => x.Id != item.TeamOptionId.Value))
-                _message = "原 Team 目前已停用，請選擇新的有效 Team。";
+            if (_departments.All(x => x.Id != _form.RoutingDepartmentOptionId))
+                _form.RoutingDepartmentOptionId = Guid.Empty;
+            if (item.TeamOptionId.HasValue && AllowedTeams.All(x => x.Id != item.TeamOptionId.Value))
+            {
+                _form.TeamOptionId = Guid.Empty;
+                _message = "原 Team 不在目前 Department 可使用的啟用 Team 清單，請重新選擇。";
+            }
         }
         catch (Exception ex) { _canEdit = false; _message = ex.Message; }
         finally { _loading = false; }
+    }
+
+    private void OnDepartmentChanged()
+    {
+        if (AllowedTeams.All(x => x.Id != _form.TeamOptionId))
+            _form.TeamOptionId = Guid.Empty;
     }
 
     private async Task SaveAsync()
@@ -110,6 +140,7 @@ else if (_canEdit)
 
     private CreateVerificationApplicationRequest ToCreateRequest() => new()
     {
+        RoutingDepartmentOptionId = _form.RoutingDepartmentOptionId,
         TeamOptionId = _form.TeamOptionId, ProjectName = _form.ProjectName, SubPu = _form.SubPu,
         Customer = _form.Customer, ProductModel = _form.ProductModel, RequestedFinishDate = _form.RequestedFinishDate,
         ValidationRequirement = _form.ValidationRequirement, HardwareVersion = _form.HardwareVersion,
@@ -120,6 +151,7 @@ else if (_canEdit)
 
     private void Copy(VerificationApplicationDto x)
     {
+        _form.RoutingDepartmentOptionId = x.RoutingDepartmentOptionId ?? Guid.Empty;
         _form.TeamOptionId = x.TeamOptionId ?? Guid.Empty; _form.ProjectName = x.ProjectName; _form.SubPu = x.SubPu;
         _form.Customer = x.Customer; _form.ProductModel = x.ProductModel; _form.RequestedFinishDate = x.RequestedFinishDate;
         _form.ValidationRequirement = x.ValidationRequirement; _form.HardwareVersion = x.HardwareVersion; _form.FirmwareVersion = x.FirmwareVersion;

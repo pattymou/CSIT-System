@@ -1,0 +1,234 @@
+@page "/my-submissions"
+@page "/my-rejected-submissions"
+@attribute [Authorize]
+@rendermode InteractiveServer
+@using SIT.DepartmentSystem.Web.Services.Approval
+@using SIT.DepartmentSystem.Web.Entities
+@using Microsoft.AspNetCore.Http
+@inject ApprovalSubmissionService Submissions
+@inject MySubmissionWorkspaceService Workspace
+@inject AuthenticationStateProvider AuthProvider
+
+<PageTitle>我的提交項目</PageTitle>
+<h1>我的提交項目</h1>
+<p class="page-subtitle">查看尚待主管處理的提交，以及需要重新處理的退回項目。</p>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="form-card @(_isError ? "error-text" : "")" role="status">@_message</div>
+}
+
+<nav class="my-submission-tabs" role="tablist" aria-label="我的提交分類">
+    <button type="button" role="tab" class="my-submission-tab @(_selectedStatus == ApprovalStatus.Pending ? "active" : "")"
+            aria-selected="@(_selectedStatus == ApprovalStatus.Pending)" @onclick="() => SelectTabAsync(ApprovalStatus.Pending)">
+        待審核 <span class="my-submission-count">@_counts.Pending</span>
+    </button>
+    <button type="button" role="tab" class="my-submission-tab @(_selectedStatus == ApprovalStatus.Rejected ? "active" : "")"
+            aria-selected="@(_selectedStatus == ApprovalStatus.Rejected)" @onclick="() => SelectTabAsync(ApprovalStatus.Rejected)">
+        已退回 <span class="my-submission-count">@_counts.Rejected</span>
+    </button>
+</nav>
+
+<section class="my-submission-panel" role="tabpanel">
+    <div class="my-submission-panel-head">
+        <h2>@(_selectedStatus == ApprovalStatus.Pending ? "待審核" : "已退回")</h2>
+        <button type="button" class="table-chip-btn" @onclick="RefreshAsync" disabled="@_busy">重新整理</button>
+    </div>
+    @if (_items.Count == 0)
+    {
+        <div class="record-empty-box">@(_selectedStatus == ApprovalStatus.Pending ? "目前沒有待審核的提交。" : "目前沒有需要處理的退回項目。")</div>
+    }
+    else
+    {
+        <div class="project-table-wrap my-submission-table-wrap">
+            <table class="project-table my-submission-table @(_selectedStatus == ApprovalStatus.Pending ? "pending" : "rejected")">
+                @if (_selectedStatus == ApprovalStatus.Pending)
+                {
+                    <colgroup><col class="source" /><col class="context" /><col class="file" /><col class="date" /><col class="action" /></colgroup>
+                    <thead><tr><th>來源</th><th>項目</th><th>檔案</th><th>提交時間</th><th>操作</th></tr></thead>
+                }
+                else
+                {
+                    <colgroup><col class="source" /><col class="context" /><col class="file" /><col class="reason" /><col class="date" /><col class="action" /></colgroup>
+                    <thead><tr><th>來源</th><th>項目</th><th>檔案</th><th>退回原因</th><th>提交時間</th><th>操作</th></tr></thead>
+                }
+                <tbody>
+                    @foreach (var item in _items)
+                    {
+                        <tr>
+                            <td>@item.SourceTitle</td>
+                            <td title="@ContextLabel(item)">
+                                @if (item.ContextRoute is not null)
+                                {
+                                    <a class="my-submission-link" href="@item.ContextRoute">@ContextLabel(item)</a>
+                                }
+                                else { @ContextLabel(item) }
+                            </td>
+                            <td title="@item.OriginalFileName">
+                                @if (item.HasStagingFile)
+                                {
+                                    <a class="my-submission-link" href="@($"/api/supervisor-submissions/{item.Id}/file")">@item.OriginalFileName</a>
+                                }
+                                else { @Display(item.OriginalFileName) }
+                            </td>
+                            @if (_selectedStatus == ApprovalStatus.Rejected)
+                            {
+                                <td class="my-submission-reason" title="@item.RejectReason">@Display(item.RejectReason)</td>
+                            }
+                            <td>@item.SubmittedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                            <td class="my-submission-actions">
+                                @if (_selectedStatus == ApprovalStatus.Pending)
+                                {
+                                    <button type="button" class="table-chip-btn danger" disabled="@_busy" @onclick="() => WithdrawAsync(item.Id)">撤回</button>
+                                }
+                                else
+                                {
+                                    <button type="button" class="table-chip-btn" disabled="@_busy" @onclick="() => BeginResubmit(item)">重新上傳</button>
+                                    <button type="button" class="table-chip-btn danger" disabled="@_busy" @onclick="() => DismissAsync(item.Id)">移除</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</section>
+
+@if (_resubmitting is not null)
+{
+    <div class="my-submission-dialog-backdrop">
+        <section class="my-submission-dialog" role="dialog" aria-modal="true" aria-labelledby="my-submission-dialog-title">
+            <h2 id="my-submission-dialog-title">重新上傳</h2>
+            <p><strong>項目：</strong>@ContextLabel(_resubmitting)</p>
+            <p><strong>退回原因：</strong>@Display(_resubmitting.RejectReason)</p>
+            @if (_isError && !string.IsNullOrWhiteSpace(_message))
+            {
+                <p class="error-text" role="alert">@_message</p>
+            }
+            <label for="my-submission-new-file">新檔案</label>
+            <InputFile id="my-submission-new-file" OnChange="OnFileSelected" />
+            <div class="my-submission-dialog-actions">
+                <button type="button" class="table-chip-btn" disabled="@(_busy || _newFile is null)" @onclick="SubmitRevisionAsync">@(_busy ? "送審中…" : "重新送審")</button>
+                <button type="button" class="table-chip-btn" disabled="@_busy" @onclick="CancelResubmit">取消</button>
+            </div>
+        </section>
+    </div>
+}
+
+@code {
+    private ApprovalStatus _selectedStatus = ApprovalStatus.Pending;
+    private MySubmissionCounts _counts = new(0, 0);
+    private List<ApprovalSubmissionDto> _items = [];
+    private ApprovalSubmissionDto? _resubmitting;
+    private IBrowserFile? _newFile;
+    private string? _message;
+    private bool _isError;
+    private bool _busy;
+
+    protected override async Task OnInitializedAsync() => await ReloadAsync();
+
+    private async Task SelectTabAsync(ApprovalStatus status)
+    {
+        _selectedStatus = status;
+        _message = null;
+        await ReloadAsync();
+    }
+
+    private async Task RefreshAsync() => await ReloadAsync();
+
+    private async Task ReloadAsync()
+    {
+        try
+        {
+            var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+            _counts = await Submissions.CountMineAsync(user);
+            _items = (await Submissions.ListMineAsync(user, _selectedStatus)).ToList();
+        }
+        catch { ShowError("無法載入提交項目，請稍後再試。"); }
+    }
+
+    private async Task WithdrawAsync(Guid id)
+    {
+        _busy = true;
+        try
+        {
+            var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+            await Submissions.WithdrawMineAsync(id, user);
+            await ReloadAsync();
+            ShowSuccess("已撤回送審。");
+        }
+        catch (InvalidOperationException ex) { ShowError(ex.Message); await ReloadAsync(); }
+        catch (UnauthorizedAccessException) { ShowError("您無法撤回此提交。"); }
+        catch { ShowError("撤回未完成，請重新整理頁面後再試。"); }
+        finally { _busy = false; }
+    }
+
+    private async Task DismissAsync(Guid id)
+    {
+        _busy = true;
+        try
+        {
+            var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+            await Submissions.DismissMineAsync(id, user);
+            await ReloadAsync();
+            ShowSuccess("已從待處理清單移除。");
+        }
+        catch (InvalidOperationException ex) { ShowError(ex.Message); await ReloadAsync(); }
+        catch (UnauthorizedAccessException) { ShowError("您無法移除此項目。"); }
+        catch { ShowError("移除未完成，請重新整理頁面後再試。"); }
+        finally { _busy = false; }
+    }
+
+    private void BeginResubmit(ApprovalSubmissionDto item)
+    {
+        _resubmitting = item;
+        _newFile = null;
+        _message = null;
+    }
+
+    private void CancelResubmit() { _resubmitting = null; _newFile = null; }
+    private void OnFileSelected(InputFileChangeEventArgs e) => _newFile = e.File;
+
+    private async Task SubmitRevisionAsync()
+    {
+        if (_resubmitting is null || _newFile is null) return;
+        _busy = true;
+        try
+        {
+            var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+            await Workspace.ResubmitAsync(_resubmitting.Id, new BrowserSubmissionFile(_newFile), user);
+            CancelResubmit();
+            await ReloadAsync();
+            ShowSuccess("修正版已重新送審。");
+        }
+        catch (InvalidOperationException ex) { ShowError(ex.Message); }
+        catch (UnauthorizedAccessException) { ShowError("您無法重新送審此項目。"); }
+        catch { ShowError("重新送審未完成，請確認檔案與原項目後再試。"); }
+        finally { _busy = false; }
+    }
+
+    private void ShowError(string message) { _message = message; _isError = true; }
+    private void ShowSuccess(string message) { _message = message; _isError = false; }
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private static string ContextLabel(ApprovalSubmissionDto item) =>
+        string.IsNullOrWhiteSpace(item.ContextDisplay) || Guid.TryParse(item.ContextDisplay, out _)
+            ? "原項目（目前無法解析）" : item.ContextDisplay;
+
+    private sealed class BrowserSubmissionFile(IBrowserFile file) : IFormFile
+    {
+        public string ContentType { get; set; } = file.ContentType;
+        public string ContentDisposition { get; set; } = string.Empty;
+        public IHeaderDictionary Headers { get; set; } = new HeaderDictionary();
+        public long Length => file.Size;
+        public string Name => "file";
+        public string FileName => file.Name;
+        public Stream OpenReadStream() => file.OpenReadStream(200_000_000);
+        public void CopyTo(Stream target) { using var stream = OpenReadStream(); stream.CopyTo(target); }
+        public async Task CopyToAsync(Stream target, CancellationToken cancellationToken = default)
+        {
+            await using var stream = OpenReadStream();
+            await stream.CopyToAsync(target, cancellationToken);
+        }
+    }
+}

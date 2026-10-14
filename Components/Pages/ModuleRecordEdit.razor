@@ -31,6 +31,7 @@
         <div class="form-row">
             <label>地點</label>
             <select @bind="_form.Location" @bind:after="LocationChangedAsync">
+                <option value="">請選擇</option>
                 <option value="台北">台北</option>
                 <option value="吳江">吳江</option>
             </select>
@@ -39,7 +40,7 @@
         <div class="form-row">
             <label>機種所屬 Sub-PU</label>
             <select @bind="_form.RequestDepartment">
-                <option value=""></option>
+                <option value="">請選擇</option>
                 @foreach (var option in GetOptions("SubPu", _form.RequestDepartment))
                 {
                     <option value="@option.Value">@option.Name</option>
@@ -50,10 +51,10 @@
         <div class="form-row">
             <label>Team</label>
             <select @bind="_form.Team">
-                <option value=""></option>
-                @foreach (var option in GetOptions("Team", _form.Team))
+                <option value="">請選擇</option>
+                @foreach (var option in AllowedTeamOptions)
                 {
-                    <option value="@option.Value">@option.Name</option>
+                    <option value="@option.Value">@DepartmentTeamRules.DisplayName(option.Name, option.Value)</option>
                 }
             </select>
         </div>
@@ -61,7 +62,7 @@
         <div class="form-row">
             <label>實驗室負責人</label>
             <select @bind="_form.Owner" disabled="@LabOwnerSelectionDisabled">
-                <option value="">請選擇實驗室負責人</option>
+                <option value="">請選擇</option>
                 @foreach (var owner in _labOwners)
                 {
                     <option value="@owner.Account">@LabOwnerLabel(owner)</option>
@@ -81,7 +82,7 @@
         <div class="form-row">
             <label>客戶</label>
             <select @bind="_form.Customer">
-                <option value=""></option>
+                <option value="">請選擇</option>
                 @foreach (var option in GetOptions("Customer", _form.Customer))
                 {
                     <option value="@option.Value">@option.Name</option>
@@ -112,7 +113,7 @@
         <div class="form-row">
             <label>部門</label>
             <select @bind="_form.Department">
-                <option value=""></option>
+                <option value="">請選擇</option>
                 @foreach (var option in GetOptions("Department", _form.Department))
                 {
                     <option value="@option.Value">@option.Name</option>
@@ -138,7 +139,7 @@
         <div class="form-row">
             <label>NPI</label>
             <select @bind="_form.Npi">
-                <option value=""></option>
+                <option value="">請選擇</option>
                 @foreach (var option in GetOptions("NPI", _form.Npi))
                 {
                     <option value="@option.Value">@option.Name</option>
@@ -251,6 +252,7 @@
         <div class="form-row">
             <label>狀態</label>
             <select @bind="_form.Status">
+                <option value="">請選擇</option>
                 <option value="Open">Open</option>
                 <option value="Close">Close</option>
                 <option value="Hold">Hold</option>
@@ -260,6 +262,7 @@
         <div class="form-row">
             <label>進度</label>
             <select @bind="_form.Progress">
+                <option value="">請選擇</option>
                 @for (var i = 0; i <= 100; i += 5)
                 {
                     <option value="@i">@i</option>
@@ -314,20 +317,19 @@
     private int _labOwnerLoadVersion;
     private string? _legacyOwner;
     private List<LabOwnerOptionDto> _labOwners = new();
-    private bool HasRecognizedLocation =>
-        string.Equals(_form.Location?.Trim(), "台北", StringComparison.OrdinalIgnoreCase) ||
-        string.Equals(_form.Location?.Trim(), "吳江", StringComparison.OrdinalIgnoreCase);
+    private bool HasRecognizedLocation => DepartmentTeamRules.IsSupportedLocation(_form.Location);
     private bool LabOwnerSelectionDisabled =>
         _labOwnersLoading || !HasRecognizedLocation || _labOwners.Count == 0;
 
     private Dictionary<string, List<SystemOptionDto>> _options = new();
+    private IReadOnlyList<SystemOptionDto> AllowedTeamOptions =>
+        DepartmentTeamRules.GetAllowedTeamsForLocation(
+            _form.Location,
+            _options.TryGetValue("Team", out var teams) ? teams : [],
+            team => team.Name,
+            team => team.Value);
 
-    private RecordEditForm _form = new()
-    {
-        Status = "Open",
-        Progress = 0,
-        Location = "台北"
-    };
+    private RecordEditForm _form = new();
 
     protected override void OnParametersSet()
     {
@@ -371,7 +373,7 @@
             Customer = data.Customer,
             Owner = data.Owner,
             PmSales = data.PmSales,
-            Status = string.IsNullOrWhiteSpace(data.Status) ? "Open" : data.Status,
+            Status = string.IsNullOrWhiteSpace(data.Status) ? null : data.Status,
             Result = data.Result,
             Progress = data.Progress,
             Note = data.Note,
@@ -383,7 +385,7 @@
             HardwareEngineer = data.HardwareEngineer,
             SoftwareEngineer = data.SoftwareEngineer,
             Pjm = data.Pjm,
-            Location = string.IsNullOrWhiteSpace(data.Location) ? "台北" : data.Location,
+            Location = string.IsNullOrWhiteSpace(data.Location) ? null : data.Location,
             RequestDepartment = data.RequestDepartment,
             RequestApplicant = data.RequestApplicant,
             MechanicalEngineer = data.MechanicalEngineer,
@@ -404,12 +406,26 @@
         };
         _earliestTaskStartDate = data.EarliestTaskStartDate;
         _latestTaskExpectedEndDate = data.LatestTaskExpectedEndDate;
+        ClearInvalidTeam();
         await LoadLabOwnersAsync(preserveLegacy: true);
     }
 
     private async Task LocationChangedAsync()
     {
+        ClearInvalidTeam();
         await LoadLabOwnersAsync(preserveLegacy: false);
+    }
+
+    private void ClearInvalidTeam()
+    {
+        if (!string.IsNullOrWhiteSpace(_form.Team) &&
+            AllowedTeamOptions.All(team => !string.Equals(
+                team.Value,
+                _form.Team,
+                StringComparison.OrdinalIgnoreCase)))
+        {
+            _form.Team = null;
+        }
     }
 
     private async Task LoadLabOwnersAsync(bool preserveLegacy)
@@ -535,7 +551,7 @@
             PmSales = _form.PmSales,
             Status = string.IsNullOrWhiteSpace(_form.Status) ? "Open" : _form.Status,
             Result = _form.Result,
-            Progress = _form.Progress,
+            Progress = _form.Progress ?? 0,
             StartDate = startDate,
             ExpectedEndDate = expectedEndDate,
             SampleReadyDate = ParseDateOnly(_form.SampleReadyDateText),
@@ -746,9 +762,9 @@
         public string? Customer { get; set; }
         public string? Owner { get; set; }
         public string? PmSales { get; set; }
-        public string Status { get; set; } = "Open";
+        public string? Status { get; set; }
         public string? Result { get; set; }
-        public int Progress { get; set; }
+        public int? Progress { get; set; }
         public string StartDateText { get; set; } = string.Empty;
         public string ExpectedEndDateText { get; set; } = string.Empty;
         public string SampleReadyDateText { get; set; } = string.Empty;

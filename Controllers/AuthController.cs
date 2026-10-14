@@ -8,17 +8,24 @@ using SIT.DepartmentSystem.Web.Services;
 namespace SIT.DepartmentSystem.Web.Controllers;
 
 [ApiController]
-public class AuthController(AdAuthenticationService ad) : Controller
+public class AuthController(AdAuthenticationService ad, IConfiguration configuration) : Controller
 {
+    private bool UseOidc => configuration["AuthenticationMode"] == "Oidc";
     [HttpGet("/")]
     [AllowAnonymous]
     public IActionResult Root() => Redirect("/signin");
 
     [HttpGet("/signin")]
     [AllowAnonymous]
-    public ContentResult LoginPage([FromQuery] int? error = null, [FromQuery] string? returnUrl = null)
+    public IActionResult LoginPage([FromQuery] int? error = null, [FromQuery] string? returnUrl = null)
     {
         var safeReturnUrl = GetSafeReturnUrl(returnUrl);
+        if (UseOidc)
+        {
+            if (error == 1)
+                return Content("Shared Identity 登入失敗或未獲 CSIT 存取權限。", "text/plain; charset=utf-8");
+            return Challenge(new AuthenticationProperties { RedirectUri = safeReturnUrl ?? "/home" }, "oidc");
+        }
         var hasError = error == 1;
         var errorHtml = hasError
             ? "<div class='error-text'>登入失敗，請確認 AD 帳密。</div>"
@@ -115,6 +122,7 @@ public class AuthController(AdAuthenticationService ad) : Controller
     [AllowAnonymous]
     public async Task<IActionResult> Login([FromForm] string username, [FromForm] string password, [FromForm] string? returnUrl = null)
     {
+        if (UseOidc) return BadRequest("Password login is disabled in OIDC mode.");
         var safeReturnUrl = GetSafeReturnUrl(returnUrl);
         var principal = await ad.AuthenticateAsync(username, password);
         if (principal is null)
@@ -137,8 +145,12 @@ public class AuthController(AdAuthenticationService ad) : Controller
     public async Task<IActionResult> Logout()
     {
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        return Redirect("/signin");
+        return Redirect(UseOidc ? "/signed-out" : "/signin");
     }
+
+    [HttpGet("/signed-out")]
+    [AllowAnonymous]
+    public IActionResult SignedOut() => Content("已登出 CSIT。Shared Identity 登入狀態仍可能有效。", "text/plain; charset=utf-8");
 
     private string? GetSafeReturnUrl(string? returnUrl)
     {

@@ -1,0 +1,106 @@
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.ValidationRequests
+<style>
+    .validation-test-item > input,
+    .validation-choice-list input[type="checkbox"],
+    .validation-checkbox input[type="checkbox"] {
+        width:16px!important;
+        height:16px!important;
+        min-height:0!important;
+        flex:0 0 16px;
+        margin:2px 0 0;
+    }
+</style>
+
+@if (Preview is not null)
+{
+    <div class="validation-preview">
+        @if (ShowPreviewBadge) { <div class="validation-preview-intro"><strong>預覽模式</strong><span>目前僅供檢視欄位與區塊配置，送出功能將於後續階段開放。</span></div> }
+        <nav class="validation-form-tabs" role="tablist" aria-label="申請單區塊">
+            @foreach (var tabSection in Preview.Sections)
+            {
+                <button type="button" role="tab" class="@(_activeTab == tabSection.Code ? "active" : null)"
+                        aria-selected="@(_activeTab == tabSection.Code)" @onclick="() => _activeTab = tabSection.Code">@ValidationRequestPresentation.SectionLabel(tabSection)</button>
+            }
+            <button type="button" role="tab" class="@(_activeTab == TestItemsTab ? "active" : null)"
+                    aria-selected="@(_activeTab == TestItemsTab)" @onclick="() => _activeTab = TestItemsTab">測試項目</button>
+        </nav>
+
+        @if (ActiveSection is { } section)
+        {
+            <div class="validation-section-stack" data-section-code="@section.Code">
+                @foreach (var group in ValidationRequestPresentation.Groups(section).Where(x => x.Fields.Count > 0))
+                {
+                    <section class="dashboard-card validation-section-group">
+                        <div class="validation-section-heading">
+                            <div><span>申請內容</span><h2>@group.Label</h2></div>
+                            @if (!string.IsNullOrWhiteSpace(section.Description)) { <p>@section.Description</p> }
+                        </div>
+                        <div class="validation-fields">
+                            @foreach (var field in group.Fields)
+                            {
+                                <ValidationRequestFieldPreview Field="field" Values="_values" ValuesChanged="StateHasChanged"
+                                                               ProductTypes="ProductTypes" ProductTypeChanged="HandleProductTypeChanged" />
+                            }
+                        </div>
+                    </section>
+                }
+            </div>
+        }
+        else if (_activeTab == TestItemsTab)
+        {
+            <section class="dashboard-card validation-section-group validation-test-items">
+                <div class="validation-section-heading"><div><span>測試內容</span><h2>測試項目</h2></div></div>
+                @foreach (var category in Preview.TestCategories)
+                {
+                    <div class="validation-category" data-category-code="@category.Code">
+                        <h3>@ValidationRequestPresentation.CategoryLabel(category)</h3>
+                        @if (category.TestItems.Count == 0) { <div class="validation-empty">目前沒有設定測試項目</div> }
+                        <div class="validation-test-grid">
+                            @foreach (var item in category.TestItems.Where(x => x.IsEnabled))
+                            {
+                                <label class="validation-test-item @(item.IsMandatory ? "mandatory" : null)">
+                                    <input type="checkbox" checked="@item.IsMandatory" disabled="@item.IsMandatory" />
+                                    <span><strong>@item.DisplayLabel</strong><small>@(item.IsMandatory ? "必選" : "可選")</small>
+                                        @if (!string.IsNullOrWhiteSpace(item.Description)) { <small>@item.Description</small> }
+                                    </span>
+                                </label>
+                            }
+                        </div>
+                    </div>
+                }
+            </section>
+        }
+    </div>
+}
+
+@code {
+    private const string TestItemsTab = "__TEST_ITEMS";
+    [Parameter] public ValidationRequestPreviewDto? Preview { get; set; }
+    [Parameter] public IReadOnlyList<ValidationProductTypeDto> ProductTypes { get; set; } = [];
+    [Parameter] public string SelectedProductCode { get; set; } = "";
+    [Parameter] public EventCallback<string> SelectedProductCodeChanged { get; set; }
+    [Parameter] public bool ShowPreviewBadge { get; set; }
+    private readonly Dictionary<string, object?> _values = new(StringComparer.OrdinalIgnoreCase);
+    private string? _activeTab;
+    private string? _lastProductCode;
+    private ValidationSectionDto? ActiveSection => Preview?.Sections.FirstOrDefault(x => x.Code == _activeTab);
+
+    protected override void OnParametersSet()
+    {
+        if (Preview is null) return;
+        if (_lastProductCode != Preview.ProductTypeCode)
+        {
+            _lastProductCode = Preview.ProductTypeCode;
+            _values["PRODUCT_TYPE"] = Preview.ProductTypeCode;
+        }
+        if (_activeTab is null || (_activeTab != TestItemsTab && Preview.Sections.All(x => x.Code != _activeTab)))
+            _activeTab = Preview.Sections.FirstOrDefault()?.Code ?? TestItemsTab;
+    }
+
+    private async Task HandleProductTypeChanged(string code)
+    {
+        _values["PRODUCT_TYPE"] = code;
+        if (SelectedProductCodeChanged.HasDelegate) await SelectedProductCodeChanged.InvokeAsync(code);
+    }
+}

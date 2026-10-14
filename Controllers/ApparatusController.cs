@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.Approval;
 
 namespace SIT.DepartmentSystem.Web.Controllers;
 
@@ -12,11 +13,14 @@ public class ApparatusController : ControllerBase
 {
     private readonly IApparatusService _service;
     private readonly IEnvironmentGroupDeviceService _environmentGroupDevices;
+    private readonly AssetApprovalUploadService _approvalUpload;
 
-    public ApparatusController(IApparatusService service, IEnvironmentGroupDeviceService environmentGroupDevices)
+    public ApparatusController(IApparatusService service, IEnvironmentGroupDeviceService environmentGroupDevices,
+        AssetApprovalUploadService approvalUpload)
     {
         _service = service;
         _environmentGroupDevices = environmentGroupDevices;
+        _approvalUpload = approvalUpload;
     }
 
     [HttpGet("api/assets/ownership-options")]
@@ -89,12 +93,14 @@ public class ApparatusController : ControllerBase
     }
 
     [HttpPost("api/apparatus")]
+    [BusinessWrite]
     public Task<IActionResult> LegacyCreate([FromBody] ApparatusUpsertRequest request)
     {
         return Create("equipment", request);
     }
 
     [HttpPost("api/assets/{moduleCode}")]
+    [BusinessWrite]
     public async Task<IActionResult> Create(string moduleCode, [FromBody] ApparatusUpsertRequest request)
     {
         try
@@ -113,12 +119,14 @@ public class ApparatusController : ControllerBase
     }
 
     [HttpPut("api/apparatus/{id}")]
+    [BusinessWrite]
     public Task<IActionResult> LegacyUpdate(string id, [FromBody] ApparatusUpsertRequest request)
     {
         return Update("equipment", id, request);
     }
 
     [HttpPut("api/assets/{moduleCode}/{id}")]
+    [BusinessWrite]
     public async Task<IActionResult> Update(string moduleCode, string id, [FromBody] ApparatusUpsertRequest request)
     {
         try
@@ -137,12 +145,14 @@ public class ApparatusController : ControllerBase
     }
 
     [HttpDelete("api/apparatus/{id}")]
+    [BusinessWrite]
     public Task<IActionResult> LegacyDelete(string id)
     {
         return Delete("equipment", id);
     }
 
     [HttpDelete("api/assets/{moduleCode}/{id}")]
+    [BusinessWrite]
     public async Task<IActionResult> Delete(string moduleCode, string id)
     {
         moduleCode = NormalizeModuleCode(moduleCode);
@@ -174,12 +184,14 @@ public class ApparatusController : ControllerBase
     }
 
     [HttpPost("api/apparatus/{id}/files")]
+    [BusinessWrite]
     public Task<IActionResult> LegacyUploadFiles(string id)
     {
         return UploadFiles("equipment", id);
     }
 
     [HttpPost("api/assets/{moduleCode}/{id}/files")]
+    [BusinessWrite]
     public async Task<IActionResult> UploadFiles(string moduleCode, string id)
     {
         try
@@ -191,8 +203,10 @@ public class ApparatusController : ControllerBase
             if (files == null || files.Count == 0)
                 return BadRequest("沒有收到檔案");
 
-            await _service.UploadFilesAsync(moduleCode, id, files.ToList(), "SYSTEM");
-            return Ok("上傳成功");
+            var decision = await _approvalUpload.UploadAsync(moduleCode, id, files.ToList(), User);
+            return decision == ApprovalUploadDecisionKind.Pending
+                ? Accepted("已送主管審核，核准後才會建立正式資產檔案。")
+                : Ok("上傳成功");
         }
         catch (Exception ex)
         {
@@ -219,6 +233,7 @@ public class ApparatusController : ControllerBase
 
     [HttpDelete("api/apparatus/files/{fileId:guid}")]
     [HttpDelete("api/assets/files/{fileId:guid}")]
+    [BusinessWrite]
     public async Task<IActionResult> DeleteFile(Guid fileId)
     {
         var ok = await _service.DeleteFileAsync(fileId);

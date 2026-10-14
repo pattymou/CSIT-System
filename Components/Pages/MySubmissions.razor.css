@@ -1,0 +1,134 @@
+.my-submission-tabs {
+    display: flex;
+    gap: 16px;
+    max-width: 100%;
+    overflow-x: auto;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #345467;
+}
+
+.my-submission-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+    padding: 10px 16px;
+    border: 1px solid #345467;
+    border-bottom: 0;
+    border-radius: 10px 10px 0 0;
+    background: #182c3c;
+    color: #e8f3f5;
+    box-shadow: none;
+    font: inherit;
+    font-weight: 600;
+}
+
+.my-submission-tab.active {
+    border-color: #42adb2;
+    background: #176b75;
+    color: #fff;
+    box-shadow: inset 0 3px #70d5d0;
+}
+
+.my-submission-count {
+    min-width: 24px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: #2c4758;
+    color: #f3fbfc;
+    text-align: center;
+    font-size: 12px;
+}
+
+.my-submission-tab.active .my-submission-count { background: #0e525c; }
+
+.my-submission-panel,
+.my-submission-table-wrap { min-width: 0; }
+
+.my-submission-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.my-submission-panel-head h2 { margin: 0; }
+
+.my-submission-table {
+    width: 100%;
+    min-width: 0;
+    table-layout: fixed;
+}
+
+.my-submission-table.pending .source { width: 13%; }
+.my-submission-table.pending .context { width: 31%; }
+.my-submission-table.pending .file { width: 27%; }
+.my-submission-table.pending .date { width: 16%; }
+.my-submission-table.pending .action { width: 13%; }
+.my-submission-table.rejected .source { width: 11%; }
+.my-submission-table.rejected .context { width: 21%; }
+.my-submission-table.rejected .file { width: 20%; }
+.my-submission-table.rejected .reason { width: 20%; }
+.my-submission-table.rejected .date { width: 12%; }
+.my-submission-table.rejected .action { width: 16%; }
+
+.my-submission-table :is(th, td) {
+    padding: 12px 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.my-submission-table td.my-submission-actions {
+    overflow: visible;
+    white-space: nowrap;
+}
+
+.my-submission-actions .table-chip-btn {
+    padding: 9px 11px;
+    border-radius: 10px;
+    font-size: 13px;
+}
+
+.my-submission-actions .table-chip-btn + .table-chip-btn { margin-left: 6px; }
+
+.my-submission-link {
+    display: block;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: #7ed9ff;
+}
+
+.my-submission-link:hover { color: #a8ecff; }
+
+.my-submission-dialog-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1100;
+    display: grid;
+    place-items: center;
+    padding: 20px;
+    background: rgba(2, 8, 18, .72);
+}
+
+.my-submission-dialog {
+    width: min(100%, 560px);
+    padding: 24px;
+    border: 1px solid #345467;
+    border-radius: 18px;
+    background: #101f2d;
+    box-shadow: 0 24px 60px rgba(0, 0, 0, .4);
+    color: #e8f3f5;
+}
+
+.my-submission-dialog h2 { margin: 0 0 18px; }
+.my-submission-dialog p { overflow-wrap: anywhere; }
+.my-submission-dialog label { display: block; margin: 18px 0 8px; }
+.my-submission-dialog-actions { display: flex; gap: 10px; margin-top: 22px; }
+
+@media (max-width: 900px) {
+    .my-submission-table { min-width: 780px; }
+}

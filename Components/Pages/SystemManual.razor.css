@@ -1,0 +1,118 @@
+.manual-page {
+    max-width: 1440px;
+    margin: 0 auto;
+    padding: 28px 32px 72px;
+    color: #e8eef8;
+}
+
+.manual-hero {
+    position: relative;
+    display: flex;
+    justify-content: space-between;
+    gap: 32px;
+    overflow: hidden;
+    padding: 42px 48px;
+    border: 1px solid rgba(108, 153, 207, .32);
+    border-radius: 24px;
+    background: linear-gradient(130deg, rgba(21, 43, 72, .98), rgba(13, 27, 48, .98));
+    box-shadow: 0 22px 60px rgba(0, 0, 0, .24);
+}
+
+.manual-hero::after {
+    position: absolute;
+    right: -90px;
+    bottom: -160px;
+    width: 420px;
+    height: 420px;
+    border: 1px solid rgba(117, 188, 255, .18);
+    border-radius: 50%;
+    content: "";
+}
+
+.manual-hero-copy { position: relative; z-index: 1; }
+.manual-eyebrow { color: #79b9ed; font-size: .74rem; font-weight: 700; letter-spacing: .2em; }
+.manual-hero h1 { margin: 12px 0 8px; color: #fff; font-size: clamp(2rem, 4vw, 3.2rem); letter-spacing: -.03em; }
+.manual-subtitle { margin: 0; color: #b7d8f4; font-size: 1.18rem; }
+.manual-intro { max-width: 680px; margin: 22px 0 0; color: #d7e3f1; line-height: 1.8; }
+.manual-hero-mark { position: relative; z-index: 1; align-self: center; display: grid; width: 88px; height: 88px; place-items: center; border: 1px solid rgba(160, 216, 255, .45); border-radius: 22px; color: #a8dbff; font-size: 3.4rem; font-weight: 300; }
+
+.manual-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; margin: 28px 0 24px; }
+.manual-search { display: flex; align-items: center; width: min(680px, 100%); min-height: 48px; padding: 0 14px; border: 1px solid #314967; border-radius: 12px; background: #101f34; }
+.manual-search:focus-within { border-color: #73b9ed; box-shadow: 0 0 0 3px rgba(115, 185, 237, .14); }
+.manual-search-icon { margin-right: 10px; color: #83b9e5; font-size: 1.35rem; }
+.manual-search input { width: 100%; border: 0; outline: 0; background: transparent; color: #edf5ff; font: inherit; }
+.manual-search input::placeholder { color: #849bb5; }
+.manual-clear { border: 0; background: transparent; color: #9db2c9; cursor: pointer; font-size: 1.4rem; }
+.manual-result-count { color: #8fa6bf; font-size: .86rem; white-space: nowrap; }
+
+.manual-layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); align-items: start; gap: 28px; }
+.manual-toc { position: sticky; top: 20px; padding: 18px 12px; border: 1px solid #263d5a; border-radius: 16px; background: rgba(14, 29, 49, .82); }
+.manual-toc-title { margin: 0 10px 12px; color: #80c4f4; font-size: .78rem; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.manual-toc nav { display: grid; gap: 4px; }
+.manual-toc-link { display: grid; grid-template-columns: 28px 1fr; gap: 8px; align-items: center; padding: 10px; border-radius: 9px; color: #b7c9dd; text-decoration: none; line-height: 1.4; }
+.manual-toc-link:hover { background: #1c3552; color: #fff; }
+.manual-toc-number { color: #6faedd; font-size: .76rem; font-weight: 700; }
+.manual-content { min-width: 0; }
+.manual-section { scroll-margin-top: 24px; padding: 30px 0 36px; border-bottom: 1px solid #263d5a; }
+.manual-section:first-child { padding-top: 0; }
+.manual-section-heading { display: flex; gap: 16px; align-items: flex-start; margin-bottom: 24px; }
+.manual-section-number { display: grid; flex: 0 0 42px; height: 42px; place-items: center; border-radius: 12px; background: #1b5b83; color: #dff3ff; font-weight: 700; }
+.manual-section h2 { margin: 0; color: #f3f8ff; font-size: 1.5rem; }
+.manual-section-heading p { margin: 6px 0 0; color: #96acc4; line-height: 1.65; }
+.manual-section-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.manual-panel, .manual-notes { padding: 21px 23px; border: 1px solid #2a425e; border-radius: 14px; background: rgba(18, 35, 58, .72); }
+.manual-panel h3, .manual-notes h3 { margin: 0 0 15px; color: #a9d8f7; font-size: .96rem; }
+.manual-steps, .manual-rules ul, .manual-notes ul { margin: 0; padding-left: 21px; color: #d4e0ee; line-height: 1.8; }
+.manual-steps li::marker { color: #69b8ee; font-weight: 700; }
+.manual-rules li::marker, .manual-notes li::marker { color: #76c9a7; }
+.manual-notes { margin-top: 16px; border-color: rgba(117, 201, 167, .28); background: rgba(20, 53, 55, .38); }
+.manual-figures { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-top: 18px; }
+.manual-figure { min-width: 0; margin: 0; padding: 14px; border: 1px solid #2a425e; border-radius: 14px; background: rgba(18, 35, 58, .72); }
+.manual-figure-button { position: relative; display: block; width: 100%; padding: 0; overflow: hidden; border: 0; border-radius: 9px; background: #0b1728; cursor: zoom-in; }
+.manual-figure-button img { display: block; width: 100%; height: auto; max-height: 260px; object-fit: contain; }
+.manual-figure-zoom { position: absolute; right: 8px; bottom: 8px; padding: 4px 8px; border-radius: 6px; background: rgba(4, 13, 24, .82); color: #d7edff; font-size: .74rem; opacity: 0; transition: opacity .15s ease; }
+.manual-figure-button:hover .manual-figure-zoom, .manual-figure-button:focus-visible .manual-figure-zoom { opacity: 1; }
+.manual-figure figcaption, .manual-lightbox-content figcaption { display: grid; gap: 5px; padding-top: 12px; color: #aabed3; font-size: .86rem; line-height: 1.55; }
+.manual-figure figcaption strong, .manual-lightbox-content figcaption strong { color: #e5f2ff; font-size: .94rem; }
+.manual-approval-flow { display: grid; gap: 24px; }
+.manual-workflow { padding: 24px; border: 1px solid #335475; border-radius: 16px; background: rgba(18, 35, 58, .72); }
+.manual-workflow h3 { margin: 0 0 14px; color: #a9d8f7; font-size: 1.2rem; }
+.manual-workflow h4 { margin: 26px 0 10px; color: #e5f2ff; font-size: 1.05rem; }
+.manual-workflow p, .manual-workflow ol { margin: 0 0 12px; color: #d4e0ee; line-height: 1.8; }
+.manual-workflow ol { padding-left: 24px; }
+.manual-workflow li { margin: 5px 0; }
+.manual-workflow li::marker { color: #69b8ee; font-weight: 700; }
+.manual-workflow-figures { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 18px 0 12px; }
+.manual-workflow-figures-single { grid-template-columns: 1fr; }
+.manual-workflow-figure { padding: 12px; }
+.manual-workflow-figure .manual-figure-button img { max-height: none; }
+.manual-workflow-supervisor-figures { grid-template-columns: 1fr; }
+.manual-workflow-supervisor-figures .manual-figure:first-child { max-width: 320px; }
+.manual-workflow-outcome { border-color: rgba(117, 201, 167, .38); background: rgba(20, 53, 55, .38); }
+.manual-lightbox { position: fixed; z-index: 1000; inset: 0; display: grid; place-items: center; padding: 32px; background: rgba(2, 8, 17, .86); outline: 0; }
+.manual-lightbox-close { position: absolute; top: 20px; right: 24px; width: 42px; height: 42px; border: 1px solid rgba(206, 231, 252, .4); border-radius: 50%; background: rgba(15, 32, 52, .9); color: #fff; cursor: pointer; font-size: 1.7rem; line-height: 1; }
+.manual-lightbox-content { display: grid; max-width: min(1100px, 92vw); max-height: 90vh; margin: 0; padding: 18px; border: 1px solid #466584; border-radius: 16px; background: #102138; box-shadow: 0 24px 80px rgba(0, 0, 0, .5); }
+.manual-lightbox-content img { display: block; max-width: 100%; max-height: 72vh; width: auto; height: auto; margin: auto; object-fit: contain; }
+.manual-empty { display: grid; gap: 8px; padding: 48px; border: 1px dashed #38536e; border-radius: 16px; color: #a4b8cc; text-align: center; }
+.manual-empty strong { color: #ecf4ff; }
+.visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (max-width: 920px) {
+    .manual-page { padding: 20px 18px 48px; }
+    .manual-hero { padding: 30px 26px; }
+    .manual-layout { grid-template-columns: 1fr; }
+    .manual-toc { position: static; }
+    .manual-toc nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 640px) {
+    .manual-hero { padding: 26px 21px; }
+    .manual-hero-mark { display: none; }
+    .manual-toolbar, .manual-section-grid { display: grid; grid-template-columns: 1fr; }
+    .manual-figures { grid-template-columns: 1fr; }
+    .manual-workflow { padding: 18px; }
+    .manual-workflow-figures, .manual-workflow-supervisor-figures { grid-template-columns: 1fr; }
+    .manual-result-count { justify-self: end; }
+    .manual-toc nav { grid-template-columns: 1fr; }
+    .manual-lightbox { padding: 16px; }
+}

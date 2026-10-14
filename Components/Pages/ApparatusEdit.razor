@@ -5,11 +5,13 @@
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode @(new InteractiveServerRenderMode(prerender: false))
 @using Microsoft.AspNetCore.Components.Forms
+@using global::System.Text.Json
 @using SIT.DepartmentSystem.Web.Models.Api
 @using SIT.DepartmentSystem.Web.Services.Interfaces
 @inject BrowserApiClient Api
 @inject NavigationManager Nav
 @inject IMenuManagementService MenuService
+@inject IJSRuntime JS
 
 <h3>@PageTitle</h3>
 
@@ -150,21 +152,31 @@
         </div>
 
         <div class="form-row">
-            <label>設備所屬 Team *</label>
-            <select required @bind="_form.OwnerTeamOptionId">
-                <option value="">請選擇設備所屬 Team</option>
-                @foreach (var team in _ownershipOptions.Teams)
+            <label>部門 *</label>
+            <select required @bind="_form.DepartmentOptionId" @bind:after="OnDepartmentChanged">
+                <option value="">請選擇部門</option>
+                @foreach (var department in _ownershipOptions.Departments)
                 {
-                    <option value="@team.Id">@team.Name / @team.Value</option>
+                    <option value="@department.Id">@DepartmentTeamRules.DisplayName(department.Name, department.Value)</option>
+                }
+            </select>
+        </div>
+        <div class="form-row">
+            <label>設備所屬 Team *</label>
+            <select required @bind="_form.OwnerTeamOptionId" @bind:after="OnOwnerTeamChanged">
+                <option value="">請選擇設備所屬 Team</option>
+                @foreach (var team in AllowedOwnerTeams)
+                {
+                    <option value="@team.Id">@DepartmentTeamRules.DisplayName(team.Name, team.Value)</option>
                 }
             </select>
         </div>
 
         <div class="form-row">
             <label>保管人 *</label>
-            <select required value="@_form.CustodianAccount" @onchange="OnCustodianAccountChanged">
+            <select required @bind="_form.CustodianAccount">
                 <option value="">請選擇保管人</option>
-                @foreach (var user in _ownershipOptions.Users)
+                @foreach (var user in AllowedCustodians)
                 {
                     <option value="@user.Account">@user.DisplayName</option>
                 }
@@ -315,7 +327,9 @@
     </div>
 }
 
-<div class="form-card">
+@if (_isEdit)
+{
+<div id="apparatus-file-upload" class="form-card">
     <div class="case-card-head">
         <div>
             <div class="case-kicker">FILE UPLOAD</div>
@@ -363,6 +377,7 @@
         </div>
     }
 </div>
+}
 
 <div class="form-actions">
     <button class="primary-btn" @onclick="SaveAsync" disabled="@_saving">
@@ -392,9 +407,10 @@
     private bool _saving;
     private bool _uploading;
     private string? _message;
-    private bool _hasCreatedRecord;
     private ElementReference _fileInputContainer;
     private bool _reloadRequested;
+    private bool _focusFilesAfterLoad;
+    private bool _filesFocusCompleted;
     private bool _loading = true;
     private bool _savingResourceCapabilities;
     private bool _savingEnvironmentPresence;
@@ -413,38 +429,61 @@
 
     private List<SystemOptionDto> _apparatusKindOptions = new();
     private ApparatusOwnershipOptionsDto _ownershipOptions = new();
+    private IReadOnlyList<ApparatusOwnerTeamOptionDto> AllowedOwnerTeams => !_form.DepartmentOptionId.HasValue ? []
+        : DepartmentTeamRules.GetAllowedTeamsForDepartment(
+            _ownershipOptions.Departments.FirstOrDefault(x => x.Id == _form.DepartmentOptionId)?.Value,
+            _ownershipOptions.Teams, team => team.Name, team => team.Value);
+    private IReadOnlyList<ApparatusCustodianOptionDto> AllowedCustodians =>
+        !_form.DepartmentOptionId.HasValue || !_form.OwnerTeamOptionId.HasValue
+            ? []
+            : GetAllowedCustodians();
 
     protected override void OnParametersSet()
     {
         _reloadRequested = true;
         _loading = true;
         _message = null;
+        _focusFilesAfterLoad = _isEdit &&
+            string.Equals(Focus, "files", StringComparison.OrdinalIgnoreCase);
+        _filesFocusCompleted = false;
     }
+
+    [SupplyParameterFromQuery(Name = "focus")]
+    public string? Focus { get; set; }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (!_reloadRequested) return;
-        _reloadRequested = false;
+        if (_reloadRequested)
+        {
+            _reloadRequested = false;
 
-        try
-        {
-            await InitializeAsync();
+            try
+            {
+                await InitializeAsync();
+            }
+            catch (Exception ex)
+            {
+                _message = $"載入資料失敗：{ex.Message}";
+            }
+            finally
+            {
+                _loading = false;
+                StateHasChanged();
+            }
+
+            return;
         }
-        catch (Exception ex)
+
+        if (_focusFilesAfterLoad && !_filesFocusCompleted && _isEdit && !_loading)
         {
-            _message = $"載入資料失敗：{ex.Message}";
-        }
-        finally
-        {
-            _loading = false;
-            StateHasChanged();
+            _filesFocusCompleted = true;
+            await JS.InvokeVoidAsync("csitScrollIntoView", "apparatus-file-upload");
         }
     }
 
     private async Task InitializeAsync()
     {
         _message = null;
-        _hasCreatedRecord = false;
         _form = new ApparatusUpsertRequest { ReservationStatus = "可借用" };
         _selectedFiles = new();
         _files = new();
@@ -459,8 +498,6 @@
 
         if (_isEdit)
         {
-            _hasCreatedRecord = true;
-
             Console.WriteLine($"[ApparatusEdit] Edit load start. moduleCode={EffectiveModuleCode}, id={Id}");
 
             var detail = await Api.GetAsync<ApparatusDetailDto>(
@@ -494,6 +531,7 @@
                     DaysUse = detail.DaysUse,
                     PriceUse = detail.PriceUse,
                     CustodianAccount = detail.CustodianAccount,
+                    DepartmentOptionId = detail.DepartmentOptionId,
                     OwnerTeamOptionId = detail.OwnerTeamOptionId,
                     Agent = detail.Agent,
                     ReservationStatus = string.IsNullOrWhiteSpace(detail.ReservationStatus) ? "可借用" : detail.ReservationStatus,
@@ -503,6 +541,12 @@
                 };
 
                 _files = detail.Files ?? new();
+
+                if (_ownershipOptions.Departments.All(x => x.Id != _form.DepartmentOptionId))
+                {
+                    _form.DepartmentOptionId = null;
+                }
+                OnDepartmentChanged();
 
                 if (IsEquipment)
                 {
@@ -514,7 +558,6 @@
                 Console.WriteLine($"[ApparatusEdit] Edit load done. id={_form.Id}, kind={_form.Kind}");
             }
 
-            _hasCreatedRecord = false;
             return;
         }
 
@@ -598,13 +641,19 @@
             return;
         }
 
-        if (IsEquipment && string.IsNullOrWhiteSpace(_form.CustodianAccount))
+        if (string.IsNullOrWhiteSpace(_form.CustodianAccount))
         {
             _message = "請選擇保管人。";
             return;
         }
 
-        if (IsEquipment && !_form.OwnerTeamOptionId.HasValue)
+        if (!_form.DepartmentOptionId.HasValue)
+        {
+            _message = "請選擇部門。";
+            return;
+        }
+
+        if (!_form.OwnerTeamOptionId.HasValue)
         {
             _message = "請選擇設備所屬 Team。";
             return;
@@ -616,7 +665,7 @@
         {
             BrowserApiResponse response;
 
-            if (_isEdit || _hasCreatedRecord)
+            if (_isEdit)
             {
                 Console.WriteLine($"[ApparatusEdit] Update start. moduleCode={EffectiveModuleCode}, id={_form.Id}, name={_form.Name}, kind={_form.Kind}");
                 response = await Api.PutJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}", _form);
@@ -632,7 +681,27 @@
             if (response.IsSuccessStatusCode)
             {
                 Console.WriteLine($"[ApparatusEdit] Save success. status={response.StatusCode}, body={body}");
-                Nav.NavigateTo($"/assets/{EffectiveModuleCode}");
+                if (!_isEdit)
+                {
+                    var createdId = _form.Id ?? string.Empty;
+                    try
+                    {
+                        var created = JsonSerializer.Deserialize<NewApparatusIdResponse>(
+                            body, new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                        if (!string.IsNullOrWhiteSpace(created?.Id))
+                            createdId = created.Id;
+                    }
+                    catch (JsonException)
+                    {
+                        // The create endpoint normally returns the canonical id; use the preallocated id as fallback.
+                    }
+
+                    Nav.NavigateTo($"/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(createdId)}/edit?focus=files");
+                }
+                else
+                {
+                    Nav.NavigateTo($"/assets/{Uri.EscapeDataString(EffectiveModuleCode)}");
+                }
                 return;
             }
 
@@ -669,6 +738,13 @@
 
     private async Task UploadFilesAsync()
     {
+        if (!_isEdit)
+        {
+            _message = "請先儲存設備，再上傳檔案。";
+            Console.WriteLine("[ApparatusEdit] Upload blocked. Asset is not saved.");
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(_form.Id))
         {
             _message = "尚未取得 ID。";
@@ -697,24 +773,6 @@
 
         try
         {
-            if (!_isEdit && !_hasCreatedRecord)
-            {
-                Console.WriteLine($"[ApparatusEdit] Create before upload start. moduleCode={EffectiveModuleCode}, id={_form.Id}");
-
-                var createResponse = await Api.PostJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}", _form);
-                var createText = createResponse.Body;
-
-                if (!createResponse.IsSuccessStatusCode)
-                {
-                    _message = $"上傳前建立資料失敗：{createResponse.StatusCode} {createText}";
-                    Console.WriteLine($"[ApparatusEdit] Create before upload failed. status={createResponse.StatusCode}, body={createText}");
-                    return;
-                }
-
-                _hasCreatedRecord = true;
-                Console.WriteLine($"[ApparatusEdit] Create before upload success. id={_form.Id}");
-            }
-
             Console.WriteLine($"[ApparatusEdit] Upload start. moduleCode={EffectiveModuleCode}, id={_form.Id}, count={_selectedFiles.Count}");
 
             var response = await Api.UploadFilesAsync(
@@ -726,7 +784,9 @@
             {
                 _selectedFiles.Clear();
                 await LoadFilesAsync();
-                _message = "上傳成功。";
+                _message = response.StatusCode == 202
+                    ? "已送主管審核，核准後才會顯示正式檔案。"
+                    : "上傳成功。";
                 Console.WriteLine($"[ApparatusEdit] Upload success. id={_form.Id}, body={responseText}");
                 return;
             }
@@ -828,10 +888,48 @@
         }
     }
 
-    private void OnCustodianAccountChanged(ChangeEventArgs args)
+    private void OnDepartmentChanged()
     {
-        var account = args.Value?.ToString()?.Trim();
-        _form.CustodianAccount = string.IsNullOrWhiteSpace(account) ? null : account.ToLowerInvariant();
+        if (_form.OwnerTeamOptionId.HasValue &&
+            AllowedOwnerTeams.All(team => team.Id != _form.OwnerTeamOptionId.Value))
+        {
+            _form.OwnerTeamOptionId = null;
+        }
+
+        ClearCustodianIfNotAllowed();
+    }
+
+    private void OnOwnerTeamChanged()
+    {
+        ClearCustodianIfNotAllowed();
+    }
+
+    private IReadOnlyList<ApparatusCustodianOptionDto> GetAllowedCustodians()
+    {
+        var department = _ownershipOptions.Departments
+            .FirstOrDefault(x => x.Id == _form.DepartmentOptionId)?.Value;
+        var team = _ownershipOptions.Teams
+            .FirstOrDefault(x => x.Id == _form.OwnerTeamOptionId)?.Value;
+        if (string.IsNullOrWhiteSpace(department) || string.IsNullOrWhiteSpace(team))
+            return [];
+
+        return _ownershipOptions.Users
+            .Where(user =>
+                string.Equals(user.Department?.Trim(), department.Trim(), StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(user.TeamCode?.Trim(), team.Trim(), StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    private void ClearCustodianIfNotAllowed()
+    {
+        if (string.IsNullOrWhiteSpace(_form.CustodianAccount))
+            return;
+
+        if (AllowedCustodians.All(user =>
+                !string.Equals(user.Account, _form.CustodianAccount, StringComparison.OrdinalIgnoreCase)))
+        {
+            _form.CustodianAccount = null;
+        }
     }
 
     private async Task<List<SystemOptionDto>> LoadOptionCategoryAsync(string category)
@@ -996,6 +1094,7 @@
 
     public sealed class ApparatusOwnershipOptionsDto
     {
+        public List<ApparatusOwnerTeamOptionDto> Departments { get; set; } = new();
         public List<ApparatusOwnerTeamOptionDto> Teams { get; set; } = new();
         public List<ApparatusCustodianOptionDto> Users { get; set; } = new();
     }
@@ -1012,6 +1111,7 @@
         public string Account { get; set; } = string.Empty;
         public string DisplayName { get; set; } = string.Empty;
         public string Department { get; set; } = string.Empty;
+        public string TeamCode { get; set; } = string.Empty;
     }
 
     public class ApparatusFileDto
@@ -1056,6 +1156,7 @@
         public string? DaysUse { get; set; }
         public string? PriceUse { get; set; }
         public string? CustodianAccount { get; set; }
+        public Guid? DepartmentOptionId { get; set; }
         public Guid? OwnerTeamOptionId { get; set; }
         public string? Agent { get; set; }
         public string? ReservationStatus { get; set; }

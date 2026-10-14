@@ -1,0 +1,33 @@
+@using SIT.DepartmentSystem.Web.Services.Approval
+@using SIT.DepartmentSystem.Web.Entities
+
+@if (Items.Count > 0)
+{
+    <section class="surface-card" aria-label="我的審核中與退回上傳" style="margin:1rem 0">
+        <h3>我的審核中與退回上傳</h3>
+        <p class="hint-text">這些檔案尚未成為正式附件或報告；正式寫入完成後會從此清單移除。</p>
+        <div class="project-table-wrap"><table class="project-table">
+            <thead><tr><th>檔案名稱</th><th>上傳時間</th><th>狀態</th><th>退回原因</th></tr></thead>
+            <tbody>
+                @foreach (var item in Items)
+                {
+                    <tr><td>@item.FileName</td><td>@item.SubmittedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                        <td>@StatusLabel(item.Status)</td><td>@(item.Status == ApprovalStatus.Rejected ? item.RejectReason : "-")</td></tr>
+                }
+            </tbody>
+        </table></div>
+    </section>
+}
+
+@code {
+    [Parameter, EditorRequired] public IReadOnlyList<OwnApprovalUploadDto> Items { get; set; } = [];
+
+    public static string StatusLabel(ApprovalStatus status) => status switch
+    {
+        ApprovalStatus.Pending => "待主管審核",
+        ApprovalStatus.ApprovedPendingCommit => "已核准，正式寫入中",
+        ApprovalStatus.CommitFailed => "已核准，正式寫入失敗，待處理",
+        ApprovalStatus.Rejected => "已退回",
+        _ => "已正式寫入"
+    };
+}

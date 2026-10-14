@@ -9,7 +9,18 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="tests\**\*.cs" />
+    <Content Remove="tests\**" />
+    <None Remove="tests\**" />
+    <Content Remove="tools\**" />
+    <None Remove="tools\**" />
+    <Content Remove=".manual-auth\**" />
+    <None Remove=".manual-auth\**" />
+    <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Cookies" Version="2.3.9" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.7" />
+    <PackageReference Include="OpenIddict.AspNetCore" Version="7.7.0" />
+    <PackageReference Include="OpenIddict.Validation.SystemNetHttp" Version="7.7.0" />
     <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.7" />
     <PackageReference Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="10.0.1" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.1" PrivateAssets="all" IncludeAssets="runtime; build; native; contentfiles; analyzers; buildtransitive" />

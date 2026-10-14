@@ -41,6 +41,7 @@ public class ModulesController : ControllerBase
     }
 
     [HttpPost]
+    [BusinessWrite]
     public async Task<ActionResult> Create([FromBody] ModuleUpsertRequest request)
     {
         var id = await _service.CreateAsync(request);
