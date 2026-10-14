@@ -73,6 +73,18 @@ public sealed class CanonicalKmContractTests
         MarkSent(factory);
         var name = status.ToLowerInvariant();
         var json = File.ReadAllText(Path.Combine(ContractDirectory, "fixtures", $"callback-{name}.json"));
+        using (var fixture = JsonDocument.Parse(json))
+        {
+            var timestamps = fixture.RootElement.GetProperty("timestamps");
+            Assert.Equal("2026-10-14T02:48:00Z", timestamps.GetProperty("updatedAt").GetString());
+            var required = status switch
+            {
+                "Processing" => "startedAt",
+                "Completed" => "completedAt",
+                _ => "failedAt"
+            };
+            Assert.True(timestamps.TryGetProperty(required, out _));
+        }
         Assert.True(Valid($"callback-{name}.schema.json", json));
         var callback = JsonSerializer.Deserialize<KmStatusCallback>(json, WireOptions);
         Assert.NotNull(callback);
@@ -95,6 +107,9 @@ public sealed class CanonicalKmContractTests
         var name = status.ToLowerInvariant();
         var node = Fixture(name);
         node["timestamps"]!.AsObject().Remove(property);
+        Assert.Equal("2026-10-14T02:48:00Z",
+            node["timestamps"]!["updatedAt"]!.GetValue<string>());
+        Assert.Single(node["timestamps"]!.AsObject());
         var json = node.ToJsonString();
         Assert.False(Valid($"callback-{name}.schema.json", json));
         var callback = JsonSerializer.Deserialize<KmStatusCallback>(json, WireOptions);
@@ -176,12 +191,36 @@ public sealed class CanonicalKmContractTests
         Assert.False(Valid("ingestion-request.schema.json", node.ToJsonString()));
     }
 
+    [Theory]
+    [InlineData("processing")]
+    [InlineData("completed")]
+    [InlineData("failed")]
+    public void InvalidUpdatedAtIsRejectedByFormatAssertion(string status)
+    {
+        var node = Fixture(status);
+        node["timestamps"]!["updatedAt"] = "not-a-date-time";
+        Assert.False(Valid($"callback-{status}.schema.json", node.ToJsonString()));
+    }
+
     [Fact]
-    public void InvalidCallbackTimestampIsRejectedByFormatAssertion()
+    public void InvalidRequiredTimestampIsRejectedByFormatAssertion()
     {
         var node = Fixture("processing");
         node["timestamps"]!["startedAt"] = "not-a-date-time";
         Assert.False(Valid("callback-processing.schema.json", node.ToJsonString()));
+    }
+
+    [Theory]
+    [InlineData("processing")]
+    [InlineData("completed")]
+    [InlineData("failed")]
+    public void UpdatedAtIsOptionalAndNullable(string status)
+    {
+        var node = Fixture(status);
+        node["timestamps"]!.AsObject().Remove("updatedAt");
+        Assert.True(Valid($"callback-{status}.schema.json", node.ToJsonString()));
+        node["timestamps"]!["updatedAt"] = null;
+        Assert.True(Valid($"callback-{status}.schema.json", node.ToJsonString()));
     }
 
     private static JsonObject SampleRequest()

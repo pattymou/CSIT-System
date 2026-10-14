@@ -35,6 +35,13 @@
     "timestamps": {
       "type": "object",
       "properties": {
+        "updatedAt": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
         "startedAt": {
           "type": [
             "string",
