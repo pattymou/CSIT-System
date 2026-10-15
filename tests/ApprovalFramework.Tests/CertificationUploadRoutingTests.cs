@@ -1,7 +1,14 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Abstractions;
+using Microsoft.AspNetCore.Routing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Primitives;
+using System.Text;
+using SIT.DepartmentSystem.Web.Controllers;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Services;
@@ -11,6 +18,46 @@ namespace ApprovalFramework.Tests;
 
 public sealed class CertificationUploadRoutingTests
 {
+    [Theory]
+    [InlineData("task-id", "已送主管審核，核准後才會建立正式測試報告。")]
+    [InlineData("task-no", "已送主管審核，核准後才會建立正式測試報告。")]
+    [InlineData("new-version", "已送主管審核，核准後才會建立正式版本。")]
+    public async Task PendingTestReportUploadWrites202BodyWithoutLocationOrFormalSideEffects(
+        string endpoint, string expectedMessage)
+    {
+        using var env = new EnvironmentFixture(true);
+        var existingFileId = endpoint == "new-version" ? env.SeedFormalReport() : Guid.Empty;
+        using var db = env.Factory.CreateDbContext();
+        var formalCountBefore = db.ModuleCaseFiles.Count();
+        using var services = new ServiceCollection().AddLogging().AddControllers().Services.BuildServiceProvider();
+        var http = new DefaultHttpContext { RequestServices = services, User = User("engineer") };
+        http.Request.Form = new FormCollection(new Dictionary<string, StringValues>(),
+            new FormFileCollection { File() });
+        http.Response.Body = new MemoryStream();
+        var controller = new ModuleTaskFilesController(null!, new TestAuthorization(), env.Upload)
+        {
+            ControllerContext = new ControllerContext { HttpContext = http }
+        };
+
+        var result = endpoint switch
+        {
+            "task-id" => await controller.UploadTaskReports(env.ReportTarget.Id),
+            "task-no" => await controller.UploadTaskReportsByTaskNo(env.ReportCaseId, "T1"),
+            "new-version" => await controller.UploadNewVersion(existingFileId),
+            _ => throw new ArgumentOutOfRangeException(nameof(endpoint))
+        };
+        await result.ExecuteResultAsync(new ActionContext(http, new RouteData(), new ActionDescriptor()));
+
+        Assert.Equal(StatusCodes.Status202Accepted, http.Response.StatusCode);
+        Assert.Contains(expectedMessage,
+            Encoding.UTF8.GetString(((MemoryStream)http.Response.Body).ToArray()));
+        Assert.False(http.Response.Headers.ContainsKey("Location"));
+        Assert.Single(Directory.GetFiles(env.StagingRoot, "*", SearchOption.AllDirectories));
+        Assert.Equal(ApprovalStatus.Pending, Assert.Single(db.PendingSubmissions).Status);
+        Assert.Equal(formalCountBefore, db.ModuleCaseFiles.Count());
+        Assert.Empty(db.KmIntegrationOutbox);
+    }
+
     [Theory]
     [InlineData(ThreeLevelUploadKind.CaseAttachment)]
     [InlineData(ThreeLevelUploadKind.CaseAttachmentByNo)]
@@ -255,6 +302,7 @@ public sealed class CertificationUploadRoutingTests
         public readonly ThreeLevelApprovalUploadService Upload;
         public readonly ThreeLevelUploadTarget CaseTarget;
         public readonly ThreeLevelUploadTarget ReportTarget;
+        public readonly Guid ReportCaseId;
         public readonly ThreeLevelUploadTarget VerificationTarget;
         public readonly ThreeLevelUploadTarget VerificationReportTarget;
         public readonly string StagingRoot = Path.Combine(Path.GetTempPath(), "csit-cert-test-" + Guid.NewGuid().ToString("N"));
@@ -296,6 +344,7 @@ public sealed class CertificationUploadRoutingTests
             }
             CaseTarget = new ThreeLevelUploadTarget(ThreeLevelUploadKind.CaseAttachment, caseId);
             ReportTarget = new ThreeLevelUploadTarget(ThreeLevelUploadKind.TestReport, taskId);
+            ReportCaseId = caseId;
             VerificationTarget = new ThreeLevelUploadTarget(ThreeLevelUploadKind.CaseAttachment, verificationCaseId);
             VerificationReportTarget = new ThreeLevelUploadTarget(ThreeLevelUploadKind.TestReport, verificationTaskId);
             var source = new ApprovalSourceResolver(Factory);
@@ -308,6 +357,25 @@ public sealed class CertificationUploadRoutingTests
             var scope = new ApprovalReviewerScopeResolver(Factory, auth);
             var submissions = new ApprovalSubmissionService(Factory, scope, registry, root, staging);
             Upload = new ThreeLevelApprovalUploadService(source, policy, submissions, staging, Formal);
+        }
+
+        public Guid SeedFormalReport()
+        {
+            using var db = Factory.CreateDbContext();
+            var task = db.ModuleRecordTasks.Single(x => x.Id == ReportTarget.Id);
+            var parent = db.ModuleRecordCases.Single(x => x.Id == task.CaseId);
+            var id = Guid.NewGuid();
+            db.ModuleCaseFiles.Add(new ModuleCaseFile
+            {
+                Id = id, RecordId = parent.RecordId, CaseId = parent.Id, CaseNo = parent.CaseNo,
+                TaskId = task.Id, TaskNo = task.TaskNo, FileName = "existing.pdf",
+                FilePath = "test-fixture", FileKind = ModuleCaseFileKinds.TestReport,
+                DocumentId = Guid.NewGuid(), VersionNo = 1, FileSize = 4,
+                ContentType = "application/pdf", ReviewStatus = TestReportReviewStatuses.Approved,
+                IsFinal = true, IsRawDataExported = true, CreatedAt = DateTime.UtcNow
+            });
+            db.SaveChanges();
+            return id;
         }
 
         public void Dispose()

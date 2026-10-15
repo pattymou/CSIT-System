@@ -61,7 +61,7 @@ public class CaseFilesController : ControllerBase
                 new ThreeLevelUploadTarget(ThreeLevelUploadKind.CaseAttachment, caseId),
                 files, User, uploadEmp, false);
             return result.Decision == ApprovalUploadDecisionKind.Pending
-                ? Accepted("已送主管審核，核准後才會建立正式附件。") : Ok();
+                ? StatusCode(StatusCodes.Status202Accepted, "已送主管審核，核准後才會建立正式附件。") : Ok();
         }
         catch (Exception ex)
         {
@@ -87,7 +87,7 @@ public class CaseFilesController : ControllerBase
                 new ThreeLevelUploadTarget(ThreeLevelUploadKind.CaseAttachmentByNo, recordId, decodedCaseNo),
                 files, User, uploadEmp, false);
             return result.Decision == ApprovalUploadDecisionKind.Pending
-                ? Accepted("已送主管審核，核准後才會建立正式附件。") : Ok();
+                ? StatusCode(StatusCodes.Status202Accepted, "已送主管審核，核准後才會建立正式附件。") : Ok();
         }
         catch (Exception ex)
         {

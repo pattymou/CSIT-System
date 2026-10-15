@@ -40,7 +40,7 @@ public class ModuleTaskFilesController : ControllerBase
                 new ThreeLevelUploadTarget(ThreeLevelUploadKind.TaskAttachment, taskId),
                 files.ToList(), User, GetUploadEmp(), false);
             return result.Decision == ApprovalUploadDecisionKind.Pending
-                ? Accepted("已送主管審核，核准後才會建立正式附件。") : Ok("上傳成功");
+                ? StatusCode(StatusCodes.Status202Accepted, "已送主管審核，核准後才會建立正式附件。") : Ok("上傳成功");
         }
         catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
         catch (Exception ex)
@@ -73,7 +73,7 @@ public class ModuleTaskFilesController : ControllerBase
                 new ThreeLevelUploadTarget(ThreeLevelUploadKind.TaskAttachmentByNo, caseId, taskNo),
                 files.ToList(), User, GetUploadEmp(), false);
             return result.Decision == ApprovalUploadDecisionKind.Pending
-                ? Accepted("已送主管審核，核准後才會建立正式附件。") : Ok("上傳成功");
+                ? StatusCode(StatusCodes.Status202Accepted, "已送主管審核，核准後才會建立正式附件。") : Ok("上傳成功");
         }
         catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
         catch (Exception ex)
@@ -106,7 +106,7 @@ public class ModuleTaskFilesController : ControllerBase
                 new ThreeLevelUploadTarget(ThreeLevelUploadKind.TestReport, taskId),
                 files.ToList(), User, GetUploadEmp(), await CanReviewAsync());
             return result.Decision == ApprovalUploadDecisionKind.Pending
-                ? Accepted("已送主管審核，核准後才會建立正式測試報告。") : Ok("測試報告上傳成功");
+                ? StatusCode(StatusCodes.Status202Accepted, "已送主管審核，核准後才會建立正式測試報告。") : Ok("測試報告上傳成功");
         }
         catch (InvalidOperationException ex)
         {
@@ -135,7 +135,7 @@ public class ModuleTaskFilesController : ControllerBase
                 new ThreeLevelUploadTarget(ThreeLevelUploadKind.TestReportByTaskNo, caseId, taskNo),
                 files.ToList(), User, GetUploadEmp(), await CanReviewAsync());
             return result.Decision == ApprovalUploadDecisionKind.Pending
-                ? Accepted("已送主管審核，核准後才會建立正式測試報告。") : Ok("測試報告上傳成功");
+                ? StatusCode(StatusCodes.Status202Accepted, "已送主管審核，核准後才會建立正式測試報告。") : Ok("測試報告上傳成功");
         }
         catch (InvalidOperationException ex)
         {
@@ -164,7 +164,7 @@ public class ModuleTaskFilesController : ControllerBase
                 new ThreeLevelUploadTarget(ThreeLevelUploadKind.TestReportVersion, fileId),
                 files.ToList(), User, GetUploadEmp(), await CanReviewAsync());
             return result.Decision == ApprovalUploadDecisionKind.Pending
-                ? Accepted("已送主管審核，核准後才會建立正式版本。") : Ok("測試報告新版上傳成功");
+                ? StatusCode(StatusCodes.Status202Accepted, "已送主管審核，核准後才會建立正式版本。") : Ok("測試報告新版上傳成功");
         }
         catch (InvalidOperationException ex)
         {

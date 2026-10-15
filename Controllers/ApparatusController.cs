@@ -205,7 +205,7 @@ public class ApparatusController : ControllerBase
 
             var decision = await _approvalUpload.UploadAsync(moduleCode, id, files.ToList(), User);
             return decision == ApprovalUploadDecisionKind.Pending
-                ? Accepted("已送主管審核，核准後才會建立正式資產檔案。")
+                ? StatusCode(StatusCodes.Status202Accepted, "已送主管審核，核准後才會建立正式資產檔案。")
                 : Ok("上傳成功");
         }
         catch (Exception ex)
