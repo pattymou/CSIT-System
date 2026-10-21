@@ -85,4 +85,6 @@ if (@(Get-NetTCPConnection -State Listen -LocalPort 5010 |
         Select-Object -ExpandProperty OwningProcess -Unique)[0] -ne $productionBefore[0]) {
     throw 'Production PID changed during DEV watcher installation.'
 }
-Write-Output ('DEV_WATCHER_INSTALLED task=' + $taskName + ' principal=LOCAL SERVICE baseline=' + $baselineSha)
+$recordedBaseline = [string] ((Get-Content -LiteralPath $baselineFile -Raw | ConvertFrom-Json).Sha)
+Write-Output ('DEV_WATCHER_INSTALLED task=' + $taskName +
+    ' principal=LOCAL SERVICE baseline=' + $recordedBaseline)

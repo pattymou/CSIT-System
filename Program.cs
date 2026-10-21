@@ -51,7 +51,8 @@ if (builder.Environment.IsDevelopment())
                 .OfType<X509Certificate2>()
                 .SingleOrDefault();
             if (localCertificate is null || !localCertificate.HasPrivateKey ||
-                !localCertificate.MatchesHostname("localhost", allowWildcards: false, allowCommonName: false))
+                !string.Equals(localCertificate.Subject, "CN=localhost", StringComparison.OrdinalIgnoreCase) ||
+                !localCertificate.MatchesHostname("localhost", allowWildcards: false, allowCommonName: true))
                 throw new InvalidOperationException("CSIT DEV localhost TLS certificate is unavailable or invalid.");
         }
         builder.WebHost.ConfigureKestrel(options =>

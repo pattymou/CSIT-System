@@ -170,7 +170,11 @@ function Start-DevRelease([string] $ReleasePath, [string] $ReleaseSha) {
         if ($env:ASPNETCORE_ENVIRONMENT -ne 'Development' -or $env:DOTNET_ENVIRONMENT -ne 'Development') {
             throw 'Development environment gate failed.'
         }
-        $process = Start-Process -FilePath $exe -WorkingDirectory $ReleasePath -WindowStyle Hidden -PassThru
+        $logPrefix = Join-Path $root ('logs\runtime-' + $ReleaseSha.Substring(0, 8) + '-' +
+            (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss'))
+        $process = Start-Process -FilePath $exe -WorkingDirectory $ReleasePath -WindowStyle Hidden `
+            -RedirectStandardOutput ($logPrefix + '.stdout.log') `
+            -RedirectStandardError ($logPrefix + '.stderr.log') -PassThru
         Start-Sleep -Seconds 5
         if ($process.HasExited) { throw 'The DEV runtime exited during startup.' }
         return $process.Id
