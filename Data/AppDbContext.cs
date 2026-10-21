@@ -56,6 +56,7 @@ public class AppDbContext : DbContext
     public DbSet<ValidationTestItemParameterOption> ValidationTestItemParameterOptions => Set<ValidationTestItemParameterOption>();
     public DbSet<DocumentFolder> DocumentFolders => Set<DocumentFolder>();
     public DbSet<DocumentLibraryFile> DocumentLibraryFiles => Set<DocumentLibraryFile>();
+    public DbSet<DocumentProcessingJob> DocumentProcessingJobs => Set<DocumentProcessingJob>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -123,9 +124,32 @@ public class AppDbContext : DbContext
             entity.Property(x => x.FileSize).HasColumnName("file_size");
             entity.Property(x => x.Sha256).HasColumnName("sha256").HasMaxLength(64).IsRequired();
             entity.Property(x => x.RelativePath).HasColumnName("relative_path").HasMaxLength(1000).IsRequired();
+            entity.Property(x => x.StorageArea).HasColumnName("storage_area").HasMaxLength(30)
+                .HasDefaultValue(DocumentStorageAreas.Library).IsRequired();
             entity.HasIndex(x => x.StandardFileName).IsUnique();
             entity.HasIndex(x => new { x.FolderId, x.UploadedAt });
             entity.HasOne(x => x.Folder).WithMany(x => x.Files).HasForeignKey(x => x.FolderId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<DocumentProcessingJob>(entity =>
+        {
+            entity.ToTable("document_processing_jobs", table =>
+                table.HasCheckConstraint("ck_document_processing_jobs_status",
+                    "status IN ('Pending', 'Processing', 'Completed', 'Failed')"));
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.DocumentFileId).HasColumnName("document_file_id");
+            entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(30).IsRequired();
+            entity.Property(x => x.AttemptCount).HasColumnName("attempt_count");
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            entity.Property(x => x.LastAttemptAt).HasColumnName("last_attempt_at");
+            entity.Property(x => x.LastError).HasColumnName("last_error").HasMaxLength(2000);
+            entity.HasIndex(x => x.DocumentFileId).IsUnique();
+            entity.HasIndex(x => new { x.Status, x.CreatedAt });
+            entity.HasOne(x => x.DocumentFile).WithOne(x => x.ProcessingJob)
+                .HasForeignKey<DocumentProcessingJob>(x => x.DocumentFileId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

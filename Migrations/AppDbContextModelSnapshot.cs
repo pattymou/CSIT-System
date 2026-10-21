@@ -448,6 +448,14 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("character varying(350)")
                         .HasColumnName("standard_file_name");
 
+                    b.Property<string>("StorageArea")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasDefaultValue("Library")
+                        .HasColumnName("storage_area");
+
                     b.Property<DateTime>("UploadedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("uploaded_at");
@@ -466,6 +474,57 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.HasIndex("FolderId", "UploadedAt");
 
                     b.ToTable("document_files", (string)null);
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentProcessingJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempt_count");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("DocumentFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("document_file_id");
+
+                    b.Property<DateTime?>("LastAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("last_attempt_at");
+
+                    b.Property<string>("LastError")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("last_error");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocumentFileId")
+                        .IsUnique();
+
+                    b.HasIndex("Status", "CreatedAt");
+
+                    b.ToTable("document_processing_jobs", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_document_processing_jobs_status", "status IN ('Pending', 'Processing', 'Completed', 'Failed')");
+                        });
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", b =>
@@ -7424,6 +7483,17 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("Folder");
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentProcessingJob", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFile", "DocumentFile")
+                        .WithOne("ProcessingJob")
+                        .HasForeignKey("SIT.DepartmentSystem.Web.Entities.DocumentProcessingJob", "DocumentFileId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("DocumentFile");
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", b =>
                 {
                     b.HasOne("SIT.DepartmentSystem.Web.Entities.SystemOption", "OwnerTeamOption")
@@ -7908,6 +7978,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("Children");
 
                     b.Navigation("Files");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFile", b =>
+                {
+                    b.Navigation("ProcessingJob");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", b =>

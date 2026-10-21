@@ -30,4 +30,19 @@ public sealed class DocumentLibraryFileDto
     public DateTime UploadedAt { get; set; }
     public long FileSize { get; set; }
     public string Sha256 { get; set; } = string.Empty;
+    public string ProcessingStatus { get; set; } = string.Empty;
+    public string ProcessingStatusDisplay { get; set; } = string.Empty;
+}
+
+public sealed class DocumentUploadBatchResultDto
+{
+    public List<DocumentUploadResultDto> Results { get; set; } = [];
+}
+
+public sealed class DocumentUploadResultDto
+{
+    public string OriginalFileName { get; set; } = string.Empty;
+    public bool Success { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public DocumentLibraryFileDto? File { get; set; }
 }

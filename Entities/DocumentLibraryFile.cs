@@ -12,6 +12,14 @@ public sealed class DocumentLibraryFile
     public long FileSize { get; set; }
     public string Sha256 { get; set; } = string.Empty;
     public string RelativePath { get; set; } = string.Empty;
+    public string StorageArea { get; set; } = DocumentStorageAreas.Library;
 
     public DocumentFolder Folder { get; set; } = null!;
+    public DocumentProcessingJob? ProcessingJob { get; set; }
+}
+
+public static class DocumentStorageAreas
+{
+    public const string Library = "Library";
+    public const string Staging = "Staging";
 }

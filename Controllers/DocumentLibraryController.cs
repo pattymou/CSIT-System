@@ -53,18 +53,36 @@ public sealed class DocumentLibraryController(IDocumentLibraryService service) :
     [RequestFormLimits(MultipartBodyLengthLimit = 200_000_000)]
     public async Task<IActionResult> Upload(Guid folderId, CancellationToken cancellationToken)
     {
-        try
+        if (Request.Form.Files.Count == 0) return BadRequest("請至少選擇一個檔案。");
+        var account = User.FindFirstValue("account")
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.Identity?.Name
+            ?? "System";
+        var result = new DocumentUploadBatchResultDto();
+        foreach (var file in Request.Form.Files)
         {
-            if (Request.Form.Files.Count != 1) return BadRequest("一次請選擇一個檔案。");
-            var account = User.FindFirstValue("account")
-                ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
-                ?? User.Identity?.Name
-                ?? "System";
-            return Ok(await service.UploadAsync(folderId, Request.Form.Files[0], account, cancellationToken));
+            try
+            {
+                var uploaded = await service.UploadAsync(folderId, file, account, cancellationToken);
+                result.Results.Add(new DocumentUploadResultDto
+                {
+                    OriginalFileName = uploaded.OriginalFileName,
+                    Success = true,
+                    Message = "已接收／待 KM 處理",
+                    File = uploaded
+                });
+            }
+            catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or IOException)
+            {
+                result.Results.Add(new DocumentUploadResultDto
+                {
+                    OriginalFileName = Path.GetFileName(file.FileName),
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
         }
-        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
-        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
-        catch (IOException ex) { return Problem(ex.Message); }
+        return Ok(result);
     }
 
     [HttpGet("files/{id:guid}/download")]

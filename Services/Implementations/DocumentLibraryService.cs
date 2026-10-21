@@ -12,6 +12,7 @@ namespace SIT.DepartmentSystem.Web.Services.Implementations;
 public sealed class DocumentLibraryService(
     IDbContextFactory<AppDbContext> dbFactory,
     IOptions<DocumentStorageOptions> options,
+    IOptions<DocumentStagingOptions> stagingOptions,
     IBusinessWriteAuthorizationGuard businessWrite) : IDocumentLibraryService
 {
     public async Task<List<DocumentFolderDto>> GetFoldersAsync(CancellationToken cancellationToken = default)
@@ -103,7 +104,7 @@ public sealed class DocumentLibraryService(
         return await db.DocumentLibraryFiles.AsNoTracking()
             .Where(x => x.FolderId == folderId)
             .OrderByDescending(x => x.UploadedAt)
-            .Select(x => ToDto(x))
+            .Select(x => ToDto(x, x.ProcessingJob == null ? null : x.ProcessingJob.Status))
             .ToListAsync(cancellationToken);
     }
 
@@ -131,7 +132,7 @@ public sealed class DocumentLibraryService(
         var originalName = DocumentLibraryRules.NormalizeOriginalFileName(file.FileName);
         var standardName = DocumentLibraryRules.CreateStandardFileName(originalName, now, id);
         var relativePath = Path.Combine(now.ToString("yyyy"), now.ToString("MM"), folderId.ToString("N"), standardName);
-        var absolutePath = ResolvePath(relativePath);
+        var absolutePath = ResolvePath(DocumentStorageAreas.Staging, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
 
         string sha256;
@@ -161,11 +162,22 @@ public sealed class DocumentLibraryService(
                 UploadedAt = now,
                 FileSize = file.Length,
                 Sha256 = sha256,
-                RelativePath = relativePath
+                RelativePath = relativePath,
+                StorageArea = DocumentStorageAreas.Staging
+            };
+            var job = new DocumentProcessingJob
+            {
+                Id = Guid.NewGuid(),
+                DocumentFileId = entity.Id,
+                Status = DocumentProcessingStatuses.Pending,
+                AttemptCount = 0,
+                CreatedAt = now,
+                UpdatedAt = now
             };
             db.DocumentLibraryFiles.Add(entity);
+            db.DocumentProcessingJobs.Add(job);
             await db.SaveChangesAsync(cancellationToken);
-            return ToDto(entity);
+            return ToDto(entity, job.Status);
         }
         catch
         {
@@ -182,17 +194,24 @@ public sealed class DocumentLibraryService(
         var entity = await db.DocumentLibraryFiles.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == fileId, cancellationToken);
         if (entity is null) return null;
-        var path = ResolvePath(entity.RelativePath);
+        var path = ResolvePath(entity.StorageArea, entity.RelativePath);
         if (!File.Exists(path)) throw new FileNotFoundException("文件實體檔案不存在。", path);
         var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
         return new DocumentDownload(stream, entity.OriginalFileName, entity.ContentType);
     }
 
-    private string ResolvePath(string relativePath)
+    private string ResolvePath(string storageArea, string relativePath)
     {
-        var configuredRoot = options.Value.RootPath?.Trim();
+        var configuredRoot = storageArea switch
+        {
+            DocumentStorageAreas.Library => options.Value.RootPath?.Trim(),
+            DocumentStorageAreas.Staging => stagingOptions.Value.RootPath?.Trim(),
+            _ => throw new InvalidOperationException("未知的文件儲存區域。")
+        };
         if (string.IsNullOrWhiteSpace(configuredRoot))
-            throw new InvalidOperationException("尚未設定 DocumentStorage:RootPath。");
+            throw new InvalidOperationException(storageArea == DocumentStorageAreas.Staging
+                ? "尚未設定 DocumentStaging:RootPath。"
+                : "尚未設定 DocumentStorage:RootPath。");
         var root = Path.GetFullPath(configuredRoot);
         var fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
         var rootPrefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
@@ -211,7 +230,7 @@ public sealed class DocumentLibraryService(
         return description;
     }
 
-    private static DocumentLibraryFileDto ToDto(DocumentLibraryFile entity) => new()
+    private static DocumentLibraryFileDto ToDto(DocumentLibraryFile entity, string? processingStatus) => new()
     {
         Id = entity.Id,
         FolderId = entity.FolderId,
@@ -221,6 +240,15 @@ public sealed class DocumentLibraryService(
         UploadedBy = entity.UploadedBy,
         UploadedAt = entity.UploadedAt,
         FileSize = entity.FileSize,
-        Sha256 = entity.Sha256
+        Sha256 = entity.Sha256,
+        ProcessingStatus = processingStatus ?? string.Empty,
+        ProcessingStatusDisplay = processingStatus switch
+        {
+            DocumentProcessingStatuses.Pending => "已接收／待 KM 處理",
+            DocumentProcessingStatuses.Processing => "處理中",
+            DocumentProcessingStatuses.Completed => "已完成",
+            DocumentProcessingStatuses.Failed => "處理失敗",
+            _ => "既有文件"
+        }
     };
 }

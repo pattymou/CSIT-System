@@ -94,24 +94,36 @@
                         <div class="upload-panel">
                             <div>
                                 <strong>上傳新文件</strong>
-                                <span>系統會保留原始檔名並自動產生標準檔名。</span>
+                                <span>可一次選擇多個檔案；傳輸完成後即進入待處理佇列。</span>
                             </div>
                             <div class="upload-actions" @ref="_uploadContainer">
-                                <input type="file" />
+                                <input type="file" multiple />
                                 <button type="button" class="document-primary" disabled="@_uploading" @onclick="UploadAsync">
                                     @(_uploading ? "上傳中..." : "上傳")
                                 </button>
                             </div>
                         </div>
+                        @if (_uploadResults.Count > 0)
+                        {
+                            <div class="upload-results" aria-live="polite">
+                                @foreach (var result in _uploadResults)
+                                {
+                                    <div class="upload-result @(result.Success ? "success" : "error")">
+                                        <strong>@result.OriginalFileName</strong>
+                                        <span>@result.Message</span>
+                                    </div>
+                                }
+                            </div>
+                        }
                     }
 
                     <div class="document-table-wrap">
                         <table class="document-table">
-                            <thead><tr><th>原始檔名</th><th>大小</th><th>上傳者</th><th>上傳時間</th><th>SHA256</th><th></th></tr></thead>
+                            <thead><tr><th>原始檔名</th><th>狀態</th><th>大小</th><th>上傳者</th><th>上傳時間</th><th>SHA256</th><th></th></tr></thead>
                             <tbody>
                                 @if (_files.Count == 0)
                                 {
-                                    <tr><td colspan="6" class="document-empty">此資料夾尚無文件。</td></tr>
+                                    <tr><td colspan="7" class="document-empty">此資料夾尚無文件。</td></tr>
                                 }
                                 else
                                 {
@@ -119,6 +131,7 @@
                                     {
                                         <tr>
                                             <td><strong>@file.OriginalFileName</strong><small>@file.StandardFileName</small></td>
+                                            <td><span class="processing-status @file.ProcessingStatus.ToLowerInvariant()">@file.ProcessingStatusDisplay</span></td>
                                             <td>@FormatSize(file.FileSize)</td>
                                             <td>@file.UploadedBy</td>
                                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
@@ -146,6 +159,7 @@
     private bool _canWrite;
     private string? _message;
     private bool _isError;
+    private List<DocumentUploadResultDto> _uploadResults = [];
 
     protected override async Task OnInitializedAsync()
     {
@@ -170,6 +184,7 @@
         _selectedFolder = folder;
         _files = [];
         _message = null;
+        _uploadResults = [];
         if (folder.Level != 3) return;
         try { _files = await Api.GetAsync<List<DocumentLibraryFileDto>>($"/api/document-library/folders/{folder.Id}/files"); }
         catch (Exception ex) { ShowError($"載入文件失敗：{ex.Message}"); }
@@ -180,15 +195,23 @@
         if (_selectedFolder?.Level != 3) return;
         _uploading = true;
         _message = null;
+        _uploadResults = [];
         try
         {
             var response = await Api.UploadFilesAsync(
                 $"/api/document-library/folders/{_selectedFolder.Id}/files", _uploadContainer);
             if (!response.IsSuccessStatusCode) throw new BrowserApiException(response.StatusCode, response.Body);
+            var batch = global::System.Text.Json.JsonSerializer.Deserialize<DocumentUploadBatchResultDto>(
+                response.Body, new global::System.Text.Json.JsonSerializerOptions(global::System.Text.Json.JsonSerializerDefaults.Web))
+                ?? throw new InvalidOperationException("無法讀取上傳結果。");
+            var uploadResults = batch.Results;
             await SelectFolderAsync(_selectedFolder);
             await LoadFoldersAsync();
-            _message = "文件上傳完成。";
-            _isError = false;
+            _uploadResults = uploadResults;
+            var successCount = _uploadResults.Count(x => x.Success);
+            var failedCount = _uploadResults.Count - successCount;
+            _message = $"已接收 {successCount} 份文件／待 KM 處理；失敗 {failedCount} 份。";
+            _isError = successCount == 0;
         }
         catch (Exception ex) { ShowError($"上傳失敗：{ex.Message}"); }
         finally { _uploading = false; }
