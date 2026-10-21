@@ -1,5 +1,8 @@
 ﻿@inherits LayoutComponentBase
 
+@inject IWebHostEnvironment HostEnvironment
+@inject IConfiguration Configuration
+
 <div class="obsidian-shell">
     <aside class="sidebar">
         <DynamicSidebar />
@@ -8,6 +11,14 @@
     <div class="content">
         <header class="topbar">
             <div>CSIT / Department System</div>
+            @if (HostEnvironment.IsDevelopment() && BuildSha is { Length: 40 } && DeploymentTimeUtc is not null)
+            {
+                <AuthorizeView Policy="@SystemAuthorization.Policies.CsitStaff">
+                    <Authorized>
+                        <small class="dev-build-badge">DEV Build：@BuildSha[..8] · 部署：@DeploymentTimeUtc</small>
+                    </Authorized>
+                </AuthorizeView>
+            }
         </header>
 
         <main class="page-body">
@@ -15,3 +26,8 @@
         </main>
     </div>
 </div>
+
+@code {
+    private string? BuildSha => Configuration["DevDeployment:Sha"];
+    private string? DeploymentTimeUtc => Configuration["DevDeployment:TimeUtc"];
+}

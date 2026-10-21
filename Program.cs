@@ -17,8 +17,22 @@ using SIT.DepartmentSystem.Web.Services.KmIntegration;
 using OpenIddict.Validation.AspNetCore;
 using SIT.DepartmentSystem.Web.Services.ValidationRequests;
 using System.Net;
+using System.Security.Cryptography.X509Certificates;
 
 var builder = WebApplication.CreateBuilder(args);
+var devRuntimeSecretsFile = Environment.GetEnvironmentVariable("CSIT_DEV_RUNTIME_SECRETS_FILE");
+if (!string.IsNullOrWhiteSpace(devRuntimeSecretsFile))
+{
+    if (!builder.Environment.IsDevelopment())
+        throw new InvalidOperationException("The DEV runtime secret source requires Development.");
+    var secretsRoot = Path.GetFullPath(Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "CSIT-DEV", "secrets")) +
+        Path.DirectorySeparatorChar;
+    var secretsPath = Path.GetFullPath(devRuntimeSecretsFile);
+    if (!secretsPath.StartsWith(secretsRoot, StringComparison.OrdinalIgnoreCase))
+        throw new InvalidOperationException("The DEV runtime secret source is outside its restricted directory.");
+    builder.Configuration.AddJsonFile(secretsPath, optional: false, reloadOnChange: false);
+}
 if (builder.Environment.IsDevelopment())
 {
     var serviceIngressThumbprint = Environment.GetEnvironmentVariable(
@@ -26,9 +40,27 @@ if (builder.Environment.IsDevelopment())
     if (!string.IsNullOrWhiteSpace(serviceIngressThumbprint))
     {
         var serviceIngressCertificate = DevKmServiceIngress.LoadCertificate(serviceIngressThumbprint);
+        X509Certificate2? localCertificate = null;
+        var localThumbprint = Environment.GetEnvironmentVariable("CSIT_DEV_LOCAL_CERT_THUMBPRINT");
+        if (!string.IsNullOrWhiteSpace(localThumbprint))
+        {
+            using var certificateStore = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+            certificateStore.Open(OpenFlags.ReadOnly);
+            localCertificate = certificateStore.Certificates
+                .Find(X509FindType.FindByThumbprint, localThumbprint, validOnly: true)
+                .OfType<X509Certificate2>()
+                .SingleOrDefault();
+            if (localCertificate is null || !localCertificate.HasPrivateKey ||
+                !localCertificate.MatchesHostname("localhost", allowWildcards: false, allowCommonName: false))
+                throw new InvalidOperationException("CSIT DEV localhost TLS certificate is unavailable or invalid.");
+        }
         builder.WebHost.ConfigureKestrel(options =>
         {
-            options.ListenLocalhost(7296, listen => listen.UseHttps());
+            options.ListenLocalhost(7296, listen =>
+            {
+                if (localCertificate is null) listen.UseHttps();
+                else listen.UseHttps(localCertificate);
+            });
             options.ListenAnyIP(DevKmServiceIngress.Port,
                 listen => listen.UseHttps(serviceIngressCertificate));
         });
