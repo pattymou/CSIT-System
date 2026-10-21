@@ -54,6 +54,8 @@ public class AppDbContext : DbContext
     public DbSet<ValidationTestItemDefinition> ValidationTestItemDefinitions => Set<ValidationTestItemDefinition>();
     public DbSet<ValidationTestItemParameterDefinition> ValidationTestItemParameterDefinitions => Set<ValidationTestItemParameterDefinition>();
     public DbSet<ValidationTestItemParameterOption> ValidationTestItemParameterOptions => Set<ValidationTestItemParameterOption>();
+    public DbSet<DocumentFolder> DocumentFolders => Set<DocumentFolder>();
+    public DbSet<DocumentLibraryFile> DocumentLibraryFiles => Set<DocumentLibraryFile>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -87,6 +89,45 @@ public class AppDbContext : DbContext
         modelBuilder.ConfigureSupervisorApproval();
         modelBuilder.ConfigureKmIntegration();
         modelBuilder.ConfigureValidationRequests();
+
+        modelBuilder.Entity<DocumentFolder>(entity =>
+        {
+            entity.ToTable("document_folders", table =>
+                table.HasCheckConstraint("ck_document_folders_level", "level BETWEEN 1 AND 3"));
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.ParentId).HasColumnName("parent_id");
+            entity.Property(x => x.Level).HasColumnName("level");
+            entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Description).HasColumnName("description").HasMaxLength(1000);
+            entity.Property(x => x.SortOrder).HasColumnName("sort_order");
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            entity.HasIndex(x => new { x.ParentId, x.Name }).IsUnique();
+            entity.HasIndex(x => new { x.ParentId, x.SortOrder });
+            entity.HasOne(x => x.Parent).WithMany(x => x.Children).HasForeignKey(x => x.ParentId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<DocumentLibraryFile>(entity =>
+        {
+            entity.ToTable("document_files");
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.FolderId).HasColumnName("folder_id");
+            entity.Property(x => x.OriginalFileName).HasColumnName("original_file_name").HasMaxLength(300).IsRequired();
+            entity.Property(x => x.StandardFileName).HasColumnName("standard_file_name").HasMaxLength(350).IsRequired();
+            entity.Property(x => x.ContentType).HasColumnName("content_type").HasMaxLength(200);
+            entity.Property(x => x.UploadedBy).HasColumnName("uploaded_by").HasMaxLength(200).IsRequired();
+            entity.Property(x => x.UploadedAt).HasColumnName("uploaded_at");
+            entity.Property(x => x.FileSize).HasColumnName("file_size");
+            entity.Property(x => x.Sha256).HasColumnName("sha256").HasMaxLength(64).IsRequired();
+            entity.Property(x => x.RelativePath).HasColumnName("relative_path").HasMaxLength(1000).IsRequired();
+            entity.HasIndex(x => x.StandardFileName).IsUnique();
+            entity.HasIndex(x => new { x.FolderId, x.UploadedAt });
+            entity.HasOne(x => x.Folder).WithMany(x => x.Files).HasForeignKey(x => x.FolderId)
+                .OnDelete(DeleteBehavior.Restrict);
+        });
 
         modelBuilder.Entity<ModuleEntity>(entity =>
         {

@@ -361,6 +361,9 @@ builder.Services.Configure<RawDataSettings>(
 
 builder.Services.AddScoped<IRawDataExportService, RawDataExportService>();
 builder.Services.AddScoped<ISystemOptionService, SystemOptionService>();
+builder.Services.Configure<DocumentStorageOptions>(
+    builder.Configuration.GetSection(DocumentStorageOptions.SectionName));
+builder.Services.AddScoped<IDocumentLibraryService, DocumentLibraryService>();
 
 builder.Services.AddScoped(sp =>
 {

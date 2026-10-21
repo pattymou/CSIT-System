@@ -1,0 +1,202 @@
+@page "/documents"
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@inject BrowserApiClient Api
+@inject AuthenticationStateProvider AuthProvider
+@inject IAuthorizationService AuthorizationService
+
+<PageTitle>文件專區</PageTitle>
+
+<div class="document-page">
+    <header class="document-hero">
+        <div>
+            <div class="document-kicker">DOCUMENT LIBRARY</div>
+            <h1>文件專區</h1>
+            <p>依三層資料夾分類瀏覽、上傳與下載文件。</p>
+        </div>
+        <span class="document-scope">獨立文件庫</span>
+    </header>
+
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="document-message @(_isError ? "error" : "success")">@_message</div>
+    }
+
+    <div class="document-workspace">
+        <aside class="document-tree-card">
+            <h2>資料夾</h2>
+            @if (_loading)
+            {
+                <div class="document-empty">載入中...</div>
+            }
+            else if (!_folders.Any())
+            {
+                <div class="document-empty">尚未建立文件資料夾。</div>
+            }
+            else
+            {
+                <div class="document-tree">
+                    @foreach (var l1 in ChildrenOf(null))
+                    {
+                        <details open>
+                            <summary @onclick="() => SelectFolderAsync(l1)"><span>📁</span> @l1.Name</summary>
+                            @foreach (var l2 in ChildrenOf(l1.Id))
+                            {
+                                <details class="tree-l2">
+                                    <summary @onclick="() => SelectFolderAsync(l2)"><span>📁</span> @l2.Name</summary>
+                                    @foreach (var l3 in ChildrenOf(l2.Id))
+                                    {
+                                        <button type="button"
+                                                class="tree-leaf @(_selectedFolder?.Id == l3.Id ? "active" : "")"
+                                                @onclick="() => SelectFolderAsync(l3)">
+                                            <span>📄</span><span>@l3.Name</span><small>@l3.DocumentCount</small>
+                                        </button>
+                                    }
+                                </details>
+                            }
+                        </details>
+                    }
+                </div>
+            }
+        </aside>
+
+        <main class="document-content-card">
+            @if (_selectedFolder is null)
+            {
+                <div class="document-welcome">
+                    <div class="document-welcome-icon">📚</div>
+                    <h2>請從左側選擇資料夾</h2>
+                    <p>選擇第三層資料夾後，即可查看文件清單。</p>
+                </div>
+            }
+            else
+            {
+                <div class="folder-heading">
+                    <div>
+                        <div class="folder-level">L@_selectedFolder.Level</div>
+                        <h2>@_selectedFolder.Name</h2>
+                        <p>@DisplayDescription(_selectedFolder.Description)</p>
+                    </div>
+                    @if (_selectedFolder.Level == 3)
+                    {
+                        <span class="file-count">@_files.Count 份文件</span>
+                    }
+                </div>
+
+                @if (_selectedFolder.Level < 3)
+                {
+                    <div class="document-empty large">請展開並選擇下一層資料夾。</div>
+                }
+                else
+                {
+                    @if (_canWrite)
+                    {
+                        <div class="upload-panel">
+                            <div>
+                                <strong>上傳新文件</strong>
+                                <span>系統會保留原始檔名並自動產生標準檔名。</span>
+                            </div>
+                            <div class="upload-actions" @ref="_uploadContainer">
+                                <input type="file" />
+                                <button type="button" class="document-primary" disabled="@_uploading" @onclick="UploadAsync">
+                                    @(_uploading ? "上傳中..." : "上傳")
+                                </button>
+                            </div>
+                        </div>
+                    }
+
+                    <div class="document-table-wrap">
+                        <table class="document-table">
+                            <thead><tr><th>原始檔名</th><th>大小</th><th>上傳者</th><th>上傳時間</th><th>SHA256</th><th></th></tr></thead>
+                            <tbody>
+                                @if (_files.Count == 0)
+                                {
+                                    <tr><td colspan="6" class="document-empty">此資料夾尚無文件。</td></tr>
+                                }
+                                else
+                                {
+                                    @foreach (var file in _files)
+                                    {
+                                        <tr>
+                                            <td><strong>@file.OriginalFileName</strong><small>@file.StandardFileName</small></td>
+                                            <td>@FormatSize(file.FileSize)</td>
+                                            <td>@file.UploadedBy</td>
+                                            <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                                            <td><code title="@file.Sha256">@file.Sha256[..12]…</code></td>
+                                            <td><a class="download-link" href="@($"/api/document-library/files/{file.Id}/download")">下載</a></td>
+                                        </tr>
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            }
+        </main>
+    </div>
+</div>
+
+@code {
+    private List<DocumentFolderDto> _folders = [];
+    private List<DocumentLibraryFileDto> _files = [];
+    private DocumentFolderDto? _selectedFolder;
+    private ElementReference _uploadContainer;
+    private bool _loading = true;
+    private bool _uploading;
+    private bool _canWrite;
+    private string? _message;
+    private bool _isError;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        _canWrite = (await AuthorizationService.AuthorizeAsync(auth.User, SystemAuthorization.Policies.BusinessWrite)).Succeeded;
+        await LoadFoldersAsync();
+    }
+
+    private IEnumerable<DocumentFolderDto> ChildrenOf(Guid? parentId) => _folders
+        .Where(x => x.ParentId == parentId)
+        .OrderBy(x => x.SortOrder).ThenBy(x => x.Name);
+
+    private async Task LoadFoldersAsync()
+    {
+        try { _folders = await Api.GetAsync<List<DocumentFolderDto>>("/api/document-library/folders"); }
+        catch (Exception ex) { ShowError($"載入文件資料夾失敗：{ex.Message}"); }
+        finally { _loading = false; }
+    }
+
+    private async Task SelectFolderAsync(DocumentFolderDto folder)
+    {
+        _selectedFolder = folder;
+        _files = [];
+        _message = null;
+        if (folder.Level != 3) return;
+        try { _files = await Api.GetAsync<List<DocumentLibraryFileDto>>($"/api/document-library/folders/{folder.Id}/files"); }
+        catch (Exception ex) { ShowError($"載入文件失敗：{ex.Message}"); }
+    }
+
+    private async Task UploadAsync()
+    {
+        if (_selectedFolder?.Level != 3) return;
+        _uploading = true;
+        _message = null;
+        try
+        {
+            var response = await Api.UploadFilesAsync(
+                $"/api/document-library/folders/{_selectedFolder.Id}/files", _uploadContainer);
+            if (!response.IsSuccessStatusCode) throw new BrowserApiException(response.StatusCode, response.Body);
+            await SelectFolderAsync(_selectedFolder);
+            await LoadFoldersAsync();
+            _message = "文件上傳完成。";
+            _isError = false;
+        }
+        catch (Exception ex) { ShowError($"上傳失敗：{ex.Message}"); }
+        finally { _uploading = false; }
+    }
+
+    private void ShowError(string message) { _message = message; _isError = true; }
+    private static string DisplayDescription(string? value) => string.IsNullOrWhiteSpace(value) ? "未填寫說明" : value;
+    private static string FormatSize(long bytes) => bytes >= 1_000_000
+        ? $"{bytes / 1_000_000d:0.##} MB"
+        : bytes >= 1_000 ? $"{bytes / 1_000d:0.##} KB" : $"{bytes} B";
+}

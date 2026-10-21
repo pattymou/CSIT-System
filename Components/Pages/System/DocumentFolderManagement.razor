@@ -1,0 +1,49 @@
+@page "/system/document-folders"
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = SystemAuthorization.Policies.Administration)]
+@inject BrowserApiClient Api
+
+<PageTitle>文件資料夾管理</PageTitle>
+
+<div class="folder-admin-page">
+    <header><div><div class="admin-kicker">DOCUMENT STRUCTURE</div><h1>文件資料夾管理</h1><p>建立 L1、L2、L3 三層分類；文件只會放在 L3。</p></div><button type="button" class="admin-primary" @onclick="StartCreate">＋ 新增資料夾</button></header>
+    @if (!string.IsNullOrWhiteSpace(_message)) { <div class="admin-message @(_isError ? "error" : "success")">@_message</div> }
+    <div class="folder-admin-grid">
+        <section class="folder-list-card">
+            <h2>目前結構</h2>
+            @if (_folders.Count == 0) { <div class="admin-empty">尚未建立資料夾。</div> }
+            @foreach (var folder in OrderedFolders())
+            {
+                <button type="button" class="folder-row @(_editingId == folder.Id ? "active" : "")" style="--level:@folder.Level" @onclick="() => Edit(folder)">
+                    <span class="folder-level-badge">L@folder.Level</span><span><strong>@folder.Name</strong><small>@Display(folder.Description)</small></span><span class="sort-badge">排序 @folder.SortOrder</span>
+                </button>
+            }
+        </section>
+        <section class="folder-form-card">
+            <div class="form-title"><div><div class="admin-kicker">@(_editingId.HasValue ? "EDIT FOLDER" : "NEW FOLDER")</div><h2>@(_editingId.HasValue ? "修改資料夾" : "新增資料夾")</h2></div>@if (_editingId.HasValue){<button type="button" class="text-button" @onclick="StartCreate">取消編輯</button>}</div>
+            <label>上層資料夾</label>
+            <select @bind="_form.ParentId" disabled="@_editingId.HasValue">
+                <option value="">無（建立 L1）</option>
+                @foreach (var parent in _folders.Where(x => x.Level < 3).OrderBy(x => x.Level).ThenBy(x => x.SortOrder)) { <option value="@parent.Id">@($"L{parent.Level} · {parent.Name}")</option> }
+            </select>
+            @if (_editingId.HasValue) { <small class="field-hint">資料夾建立後不可移動，可修改名稱、說明與排序。</small> }
+            <label>名稱 <span>*</span></label><input maxlength="200" @bind="_form.Name" placeholder="請輸入資料夾名稱" />
+            <label>簡單說明</label><textarea maxlength="1000" @bind="_form.Description" placeholder="說明此分類收錄的內容"></textarea>
+            <label>排序</label><input type="number" @bind="_form.SortOrder" />
+            <div class="form-actions"><button type="button" class="admin-primary" disabled="@_saving" @onclick="SaveAsync">@(_saving ? "儲存中..." : _editingId.HasValue ? "儲存修改" : "建立資料夾")</button><button type="button" class="admin-secondary" @onclick="ClearForm">清空</button></div>
+            <div class="level-note"><strong>層級規則</strong><span>未選上層 = L1；選 L1 = L2；選 L2 = L3。系統不允許第四層。</span></div>
+        </section>
+    </div>
+</div>
+
+@code {
+    private List<DocumentFolderDto> _folders=[]; private DocumentFolderUpsertRequest _form=new(); private Guid? _editingId; private bool _saving; private string? _message; private bool _isError;
+    protected override async Task OnInitializedAsync()=>await LoadAsync();
+    private async Task LoadAsync(){try{_folders=await Api.GetAsync<List<DocumentFolderDto>>("/api/document-library/folders");}catch(Exception ex){ShowError($"載入失敗：{ex.Message}");}}
+    private IEnumerable<DocumentFolderDto> OrderedFolders(){var result=new List<DocumentFolderDto>();void Add(Guid? parent){foreach(var item in _folders.Where(x=>x.ParentId==parent).OrderBy(x=>x.SortOrder).ThenBy(x=>x.Name)){result.Add(item);Add(item.Id);}}Add(null);return result;}
+    private void StartCreate(){_editingId=null;_form=new();_message=null;}
+    private void ClearForm(){var parent=_editingId.HasValue?_form.ParentId:null;_form=new(){ParentId=parent};}
+    private void Edit(DocumentFolderDto folder){_editingId=folder.Id;_form=new(){ParentId=folder.ParentId,Name=folder.Name,Description=folder.Description,SortOrder=folder.SortOrder};_message=null;}
+    private async Task SaveAsync(){_saving=true;_message=null;try{var response=_editingId.HasValue?await Api.PutJsonAsync($"/api/document-library/folders/{_editingId}",_form):await Api.PostJsonAsync("/api/document-library/folders",_form);response.EnsureSuccess();_message=_editingId.HasValue?"資料夾已更新。":"資料夾已建立。";_isError=false;StartCreate();await LoadAsync();}catch(Exception ex){ShowError($"儲存失敗：{ex.Message}");}finally{_saving=false;}}
+    private void ShowError(string value){_message=value;_isError=true;} private static string Display(string? value)=>string.IsNullOrWhiteSpace(value)?"未填寫說明":value;
+}

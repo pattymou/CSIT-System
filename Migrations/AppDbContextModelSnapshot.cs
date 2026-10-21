@@ -353,6 +353,121 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         });
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentFolder", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("description");
+
+                    b.Property<int>("Level")
+                        .HasColumnType("integer")
+                        .HasColumnName("level");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<Guid?>("ParentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("parent_id");
+
+                    b.Property<int>("SortOrder")
+                        .HasColumnType("integer")
+                        .HasColumnName("sort_order");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ParentId", "Name")
+                        .IsUnique();
+
+                    b.HasIndex("ParentId", "SortOrder");
+
+                    b.ToTable("document_folders", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_document_folders_level", "level BETWEEN 1 AND 3");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("ContentType")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("content_type");
+
+                    b.Property<long>("FileSize")
+                        .HasColumnType("bigint")
+                        .HasColumnName("file_size");
+
+                    b.Property<Guid>("FolderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("folder_id");
+
+                    b.Property<string>("OriginalFileName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("original_file_name");
+
+                    b.Property<string>("RelativePath")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("relative_path");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("sha256");
+
+                    b.Property<string>("StandardFileName")
+                        .IsRequired()
+                        .HasMaxLength(350)
+                        .HasColumnType("character varying(350)")
+                        .HasColumnName("standard_file_name");
+
+                    b.Property<DateTime>("UploadedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("uploaded_at");
+
+                    b.Property<string>("UploadedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("uploaded_by");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StandardFileName")
+                        .IsUnique();
+
+                    b.HasIndex("FolderId", "UploadedAt");
+
+                    b.ToTable("document_files", (string)null);
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", b =>
                 {
                     b.Property<Guid>("Id")
@@ -593,9 +708,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.HasIndex("OutboxId", "RequestedAt");
 
-                    b.ToTable("km_integration_manual_retry_audits", (string)null, t =>
+                    b.ToTable("km_integration_manual_retry_audits", null, t =>
                         {
                             t.HasCheckConstraint("ck_km_manual_retry_action", "action = 'ManualKmSyncRetry' AND previous_status = 'Failed'");
+
                             t.HasCheckConstraint("ck_km_manual_retry_reason", "length(btrim(reason)) BETWEEN 5 AND 500");
                         });
                 });
@@ -7287,6 +7403,27 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("Apparatus");
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentFolder", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.DocumentFolder", "Parent")
+                        .WithMany("Children")
+                        .HasForeignKey("ParentId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Parent");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFile", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.DocumentFolder", "Folder")
+                        .WithMany("Files")
+                        .HasForeignKey("FolderId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Folder");
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", b =>
                 {
                     b.HasOne("SIT.DepartmentSystem.Web.Entities.SystemOption", "OwnerTeamOption")
@@ -7764,6 +7901,13 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("Files");
 
                     b.Navigation("ResourceCapabilities");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentFolder", b =>
+                {
+                    b.Navigation("Children");
+
+                    b.Navigation("Files");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", b =>
