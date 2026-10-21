@@ -29,6 +29,8 @@ if (builder.Environment.IsDevelopment())
             options.ListenLocalhost(7296, listen => listen.UseHttps());
             options.ListenAnyIP(DevKmServiceIngress.Port,
                 listen => listen.UseHttps(serviceIngressCertificate));
+            options.ListenAnyIP(DevPublicWebIngress.Port,
+                listen => listen.UseHttps(serviceIngressCertificate));
         });
     }
 }
@@ -340,8 +342,21 @@ if (!app.Environment.IsDevelopment())
 
 if (app.Environment.IsDevelopment())
 {
+    app.UseWhen(context => context.Connection.LocalPort == DevPublicWebIngress.Port,
+        branch => branch.UseExceptionHandler(error => error.Run(async context =>
+        {
+            context.Response.StatusCode = StatusCodes.Status500InternalServerError;
+            await context.Response.WriteAsync("Server error.");
+        })));
     app.Use(async (context, next) =>
     {
+        if (context.Connection.LocalPort == DevPublicWebIngress.Port)
+            context.Response.Headers.CacheControl = "no-store";
+        if (!DevPublicWebIngress.IsAllowed(context))
+        {
+            context.Response.StatusCode = StatusCodes.Status404NotFound;
+            return;
+        }
         if (!DevKmServiceIngress.IsAllowed(context))
         {
             context.Response.StatusCode = StatusCodes.Status404NotFound;
