@@ -20,22 +20,23 @@ public sealed class DevPublicWebIngressTests
     public void PublicPortAllowsWebsiteButBlocksSwagger(string path, bool expected)
     {
         var context = new DefaultHttpContext();
-        context.Connection.LocalPort = DevPublicWebIngress.Port;
-        context.Request.Host = new HostString(DevKmServiceIngress.Hostname, DevPublicWebIngress.Port);
+        context.Connection.LocalPort = 7296;
+        context.Request.Host = new HostString(DevKmServiceIngress.Hostname,
+            DevPublicWebIngress.ExistingPublicPort);
         context.Request.Path = path;
         Assert.Equal(expected, DevPublicWebIngress.IsAllowed(context));
     }
 
     [Theory]
-    [InlineData("localhost", 7445)]
+    [InlineData("localhost", 7296)]
     [InlineData("csit-dev-da40.duckdns.org", 7296)]
-    [InlineData("other.example", 7445)]
-    public void PublicPortRejectsUnexpectedHosts(string host, int port)
+    [InlineData("other.example", 7443)]
+    public void OtherHostsAreNotTreatedAsPublicProxy(string host, int port)
     {
         var context = new DefaultHttpContext();
-        context.Connection.LocalPort = DevPublicWebIngress.Port;
+        context.Connection.LocalPort = 7296;
         context.Request.Host = new HostString(host, port);
-        Assert.False(DevPublicWebIngress.IsAllowed(context));
+        Assert.False(DevPublicWebIngress.IsPublicRequest(context));
     }
 
     [Fact]

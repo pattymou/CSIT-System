@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.EntityFrameworkCore;
@@ -15,6 +16,7 @@ using Microsoft.AspNetCore.Authentication;
 using SIT.DepartmentSystem.Web.Services.KmIntegration;
 using OpenIddict.Validation.AspNetCore;
 using SIT.DepartmentSystem.Web.Services.ValidationRequests;
+using System.Net;
 
 var builder = WebApplication.CreateBuilder(args);
 if (builder.Environment.IsDevelopment())
@@ -29,14 +31,25 @@ if (builder.Environment.IsDevelopment())
             options.ListenLocalhost(7296, listen => listen.UseHttps());
             options.ListenAnyIP(DevKmServiceIngress.Port,
                 listen => listen.UseHttps(serviceIngressCertificate));
-            options.ListenAnyIP(DevPublicWebIngress.Port,
-                listen => listen.UseHttps(serviceIngressCertificate));
         });
     }
 }
 builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication.OpenIdConnect", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
 builder.Logging.AddFilter("System.Net.Http.HttpClient.SharedIdentitySessionValidator", LogLevel.Warning);
+if (builder.Environment.IsDevelopment())
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedHost | ForwardedHeaders.XForwardedProto;
+        options.ForwardLimit = 1;
+        options.KnownIPNetworks.Clear();
+        options.KnownProxies.Clear();
+        options.KnownProxies.Add(IPAddress.Loopback);
+        options.KnownProxies.Add(IPAddress.IPv6Loopback);
+        options.AllowedHosts.Add(DevKmServiceIngress.Hostname);
+    });
+}
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
@@ -333,6 +346,8 @@ builder.Services.AddScoped(sp =>
 // builder.Services.AddAuthorization();
 
 var app = builder.Build();
+if (app.Environment.IsDevelopment())
+    app.UseForwardedHeaders();
 
 if (!app.Environment.IsDevelopment())
 {
@@ -342,7 +357,7 @@ if (!app.Environment.IsDevelopment())
 
 if (app.Environment.IsDevelopment())
 {
-    app.UseWhen(context => context.Connection.LocalPort == DevPublicWebIngress.Port,
+    app.UseWhen(DevPublicWebIngress.IsPublicRequest,
         branch => branch.UseExceptionHandler(error => error.Run(async context =>
         {
             context.Response.StatusCode = StatusCodes.Status500InternalServerError;
@@ -350,7 +365,7 @@ if (app.Environment.IsDevelopment())
         })));
     app.Use(async (context, next) =>
     {
-        if (context.Connection.LocalPort == DevPublicWebIngress.Port)
+        if (DevPublicWebIngress.IsPublicRequest(context))
             context.Response.Headers.CacheControl = "no-store";
         if (!DevPublicWebIngress.IsAllowed(context))
         {
