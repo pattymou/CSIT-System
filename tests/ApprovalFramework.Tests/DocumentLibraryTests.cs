@@ -279,6 +279,57 @@ public sealed class DocumentLibraryTests
         Assert.Single(method.GetCustomAttributes(typeof(BusinessWriteAttribute), false));
     }
 
+    [Fact]
+    public async Task SystemDocuments_ReusesOnlyEquipmentAndApprovedFinalTestReportRecords()
+    {
+        var factory = new TestFactory();
+        var equipment = new Apparatus { Id = "EQ-1", ModuleCode = "equipment", Name = "Equipment" };
+        var goods = new Apparatus { Id = "GO-1", ModuleCode = "goods", Name = "Goods" };
+        var equipmentFile = new ApparatusFile
+        {
+            Id = Guid.NewGuid(), ApparatusId = equipment.Id, Apparatus = equipment,
+            FileName = "equipment.pdf", FilePath = "formal", FileSize = 123, CreatedAt = DateTime.UtcNow
+        };
+        var goodsFile = new ApparatusFile
+        {
+            Id = Guid.NewGuid(), ApparatusId = goods.Id, Apparatus = goods,
+            FileName = "goods.pdf", FilePath = "formal", FileSize = 456, CreatedAt = DateTime.UtcNow
+        };
+        var approvedFinal = CaseFile("approved.pdf", TestReportReviewStatuses.Approved, isFinal: true);
+        var pending = CaseFile("pending.pdf", TestReportReviewStatuses.Pending, isFinal: false);
+        var oldApprovedVersion = CaseFile("old.pdf", TestReportReviewStatuses.Approved, isFinal: false);
+        await AddAsync(factory, equipment, goods, equipmentFile, goodsFile, approvedFinal, pending, oldApprovedVersion);
+
+        var catalog = await CreateService(factory).GetSystemDocumentsAsync();
+
+        var verification = Assert.Single(catalog.Categories, x => x.Code == "verification-applications");
+        Assert.Empty(verification.Files);
+        Assert.Contains("尚無", verification.EmptyMessage);
+
+        var equipmentCategory = Assert.Single(catalog.Categories, x => x.Code == "equipment");
+        var listedEquipment = Assert.Single(equipmentCategory.Files);
+        Assert.Equal("equipment.pdf", listedEquipment.FileName);
+        Assert.Equal($"/api/assets/files/{equipmentFile.Id}/content", listedEquipment.DownloadUrl);
+
+        var reports = Assert.Single(catalog.Categories, x => x.Code == "test-reports");
+        var listedReport = Assert.Single(reports.Files);
+        Assert.Equal("approved.pdf", listedReport.FileName);
+        Assert.Equal($"/api/files/{approvedFinal.Id}/download", listedReport.DownloadUrl);
+    }
+
+    [Fact]
+    public void SystemDocumentsApi_UsesExistingCsitStaffAuthorization()
+    {
+        var controllerPolicy = typeof(DocumentLibraryController)
+            .GetCustomAttributes(typeof(AuthorizeAttribute), false)
+            .Cast<AuthorizeAttribute>();
+        Assert.Contains(controllerPolicy, x => x.Policy == SystemAuthorization.Policies.CsitStaff);
+
+        var method = typeof(DocumentLibraryController)
+            .GetMethod(nameof(DocumentLibraryController.GetSystemDocuments))!;
+        Assert.Empty(method.GetCustomAttributes(typeof(AllowAnonymousAttribute), false));
+    }
+
     private static DocumentLibraryService CreateService(TestFactory factory) => new(
         factory,
         Options.Create(new DocumentStorageOptions { RootPath = Path.GetTempPath() }),
@@ -303,6 +354,14 @@ public sealed class DocumentLibraryTests
     {
         Id = Guid.NewGuid(), DocumentFileId = fileId, Status = DocumentProcessingStatuses.Pending,
         CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+    };
+
+    private static ModuleCaseFile CaseFile(string name, string reviewStatus, bool isFinal) => new()
+    {
+        Id = Guid.NewGuid(), RecordId = Guid.NewGuid(), CaseNo = "CASE-1", FileName = name,
+        FilePath = "formal", FileSize = 100, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+        DocumentId = Guid.NewGuid(), VersionNo = 1, FileKind = ModuleCaseFileKinds.TestReport,
+        ReviewStatus = reviewStatus, IsFinal = isFinal
     };
 
     private static async Task AddAsync(TestFactory factory, params object[] entities)

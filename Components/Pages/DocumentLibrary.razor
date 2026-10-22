@@ -22,6 +22,62 @@
         <div class="document-message @(_isError ? "error" : "success")">@_message</div>
     }
 
+    <section class="system-documents-card">
+        <div class="system-documents-heading">
+            <div>
+                <div class="document-kicker">READ ONLY</div>
+                <h2>系統文件</h2>
+                <p>沿用正式系統的文件紀錄與下載權限；此處不提供刪除或搬移。</p>
+            </div>
+        </div>
+        @if (_systemDocumentsLoading)
+        {
+            <div class="document-empty">載入系統文件中...</div>
+        }
+        else
+        {
+            <div class="system-category-list">
+                @foreach (var category in _systemDocumentCatalog.Categories)
+                {
+                    <button type="button"
+                            class="system-category @(_selectedSystemCategory?.Code == category.Code ? "active" : "")"
+                            @onclick="() => _selectedSystemCategory = category">
+                        <span>@category.Name</span>
+                        <strong>@category.Files.Count</strong>
+                    </button>
+                }
+            </div>
+
+            @if (_selectedSystemCategory is not null)
+            {
+                <div class="document-table-wrap system-document-table">
+                    <table class="document-table">
+                        <thead><tr><th>名稱</th><th>來源模組</th><th>檔案大小</th><th>上傳日期</th><th></th></tr></thead>
+                        <tbody>
+                            @if (_selectedSystemCategory.Files.Count == 0)
+                            {
+                                <tr><td colspan="5" class="document-empty">@_selectedSystemCategory.EmptyMessage</td></tr>
+                            }
+                            else
+                            {
+                                @foreach (var file in _selectedSystemCategory.Files)
+                                {
+                                    <tr>
+                                        <td><strong>@file.FileName</strong></td>
+                                        <td>@file.SourceModule</td>
+                                        <td>@FormatSize(file.FileSize)</td>
+                                        <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                                        <td><a class="download-link" href="@file.DownloadUrl">下載</a></td>
+                                    </tr>
+                                }
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        }
+    </section>
+
     <div class="document-workspace">
         <aside class="document-tree-card">
             <h2>資料夾</h2>
@@ -160,12 +216,28 @@
     private string? _message;
     private bool _isError;
     private List<DocumentUploadResultDto> _uploadResults = [];
+    private SystemDocumentCatalogDto _systemDocumentCatalog = new();
+    private SystemDocumentCategoryDto? _selectedSystemCategory;
+    private bool _systemDocumentsLoading = true;
 
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthProvider.GetAuthenticationStateAsync();
         _canWrite = (await AuthorizationService.AuthorizeAsync(auth.User, SystemAuthorization.Policies.BusinessWrite)).Succeeded;
-        await LoadFoldersAsync();
+        await Task.WhenAll(LoadFoldersAsync(), LoadSystemDocumentsAsync());
+    }
+
+    private async Task LoadSystemDocumentsAsync()
+    {
+        try
+        {
+            _systemDocumentCatalog = await Api.GetAsync<SystemDocumentCatalogDto>(
+                "/api/document-library/system-documents");
+            _selectedSystemCategory = _systemDocumentCatalog.Categories.FirstOrDefault(x => x.Files.Count > 0)
+                ?? _systemDocumentCatalog.Categories.FirstOrDefault();
+        }
+        catch (Exception ex) { ShowError($"載入系統文件失敗：{ex.Message}"); }
+        finally { _systemDocumentsLoading = false; }
     }
 
     private IEnumerable<DocumentFolderDto> ChildrenOf(Guid? parentId) => _folders

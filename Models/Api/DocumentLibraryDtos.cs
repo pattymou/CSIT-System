@@ -46,3 +46,25 @@ public sealed class DocumentUploadResultDto
     public string Message { get; set; } = string.Empty;
     public DocumentLibraryFileDto? File { get; set; }
 }
+
+public sealed class SystemDocumentCatalogDto
+{
+    public List<SystemDocumentCategoryDto> Categories { get; set; } = [];
+}
+
+public sealed class SystemDocumentCategoryDto
+{
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string? EmptyMessage { get; set; }
+    public List<SystemDocumentFileDto> Files { get; set; } = [];
+}
+
+public sealed class SystemDocumentFileDto
+{
+    public string FileName { get; set; } = string.Empty;
+    public string SourceModule { get; set; } = string.Empty;
+    public long FileSize { get; set; }
+    public DateTime UploadedAt { get; set; }
+    public string DownloadUrl { get; set; } = string.Empty;
+}

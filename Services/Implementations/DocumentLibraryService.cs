@@ -33,6 +33,67 @@ public sealed class DocumentLibraryService(
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<SystemDocumentCatalogDto> GetSystemDocumentsAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+
+        var equipmentFiles = await db.ApparatusFiles.AsNoTracking()
+            .Where(x => x.Apparatus.ModuleCode.ToLower() == "equipment")
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => new SystemDocumentFileDto
+            {
+                FileName = x.FileName,
+                SourceModule = "設備管理",
+                FileSize = x.FileSize,
+                UploadedAt = x.CreatedAt,
+                DownloadUrl = $"/api/assets/files/{x.Id}/content"
+            })
+            .ToListAsync(cancellationToken);
+
+        var testReports = await db.ModuleCaseFiles.AsNoTracking()
+            .Where(x => x.FileKind == ModuleCaseFileKinds.TestReport
+                && x.ReviewStatus == TestReportReviewStatuses.Approved
+                && x.IsFinal)
+            .OrderByDescending(x => x.CreatedAt)
+            .Select(x => new SystemDocumentFileDto
+            {
+                FileName = x.FileName,
+                SourceModule = "測試報告",
+                FileSize = x.FileSize,
+                UploadedAt = x.CreatedAt,
+                DownloadUrl = $"/api/files/{x.Id}/download"
+            })
+            .ToListAsync(cancellationToken);
+
+        return new SystemDocumentCatalogDto
+        {
+            Categories =
+            [
+                new()
+                {
+                    Code = "verification-applications",
+                    Name = "驗證申請文件",
+                    EmptyMessage = "目前正式系統尚無已保存且可沿用既有下載功能的驗證申請文件。"
+                },
+                new()
+                {
+                    Code = "equipment",
+                    Name = "設備管理文件",
+                    EmptyMessage = "目前沒有可供查閱的設備管理文件。",
+                    Files = equipmentFiles
+                },
+                new()
+                {
+                    Code = "test-reports",
+                    Name = "測試報告",
+                    EmptyMessage = "目前沒有已核准的正式測試報告。",
+                    Files = testReports
+                }
+            ]
+        };
+    }
+
     public async Task<Guid> CreateFolderAsync(
         DocumentFolderUpsertRequest request,
         CancellationToken cancellationToken = default)

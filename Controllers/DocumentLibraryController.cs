@@ -16,6 +16,10 @@ public sealed class DocumentLibraryController(IDocumentLibraryService service) :
     public async Task<ActionResult<List<DocumentFolderDto>>> GetFolders(CancellationToken cancellationToken) =>
         Ok(await service.GetFoldersAsync(cancellationToken));
 
+    [HttpGet("system-documents")]
+    public async Task<ActionResult<SystemDocumentCatalogDto>> GetSystemDocuments(CancellationToken cancellationToken) =>
+        Ok(await service.GetSystemDocumentsAsync(cancellationToken));
+
     [HttpPost("folders")]
     [Authorize(Policy = SystemAuthorization.Policies.Administration)]
     [BusinessWrite]
