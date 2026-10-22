@@ -330,6 +330,18 @@ public sealed class DocumentLibraryTests
         Assert.Empty(method.GetCustomAttributes(typeof(AllowAnonymousAttribute), false));
     }
 
+    [Fact]
+    public void DocumentLibrary_InitializesBrowserApiRequestsSequentially()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(), "Components", "Pages", "DocumentLibrary.razor"));
+
+        Assert.DoesNotContain("Task.WhenAll(LoadFoldersAsync(), LoadSystemDocumentsAsync())", source);
+        var foldersCall = source.IndexOf("await LoadFoldersAsync();", StringComparison.Ordinal);
+        var systemDocumentsCall = source.IndexOf("await LoadSystemDocumentsAsync();", StringComparison.Ordinal);
+        Assert.True(foldersCall >= 0 && systemDocumentsCall > foldersCall);
+    }
+
     private static DocumentLibraryService CreateService(TestFactory factory) => new(
         factory,
         Options.Create(new DocumentStorageOptions { RootPath = Path.GetTempPath() }),

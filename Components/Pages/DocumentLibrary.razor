@@ -224,7 +224,8 @@
     {
         var auth = await AuthProvider.GetAuthenticationStateAsync();
         _canWrite = (await AuthorizationService.AuthorizeAsync(auth.User, SystemAuthorization.Policies.BusinessWrite)).Succeeded;
-        await Task.WhenAll(LoadFoldersAsync(), LoadSystemDocumentsAsync());
+        await LoadFoldersAsync();
+        await LoadSystemDocumentsAsync();
     }
 
     private async Task LoadSystemDocumentsAsync()
