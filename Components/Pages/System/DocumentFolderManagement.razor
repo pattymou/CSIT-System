@@ -34,7 +34,7 @@
             @foreach (var folder in OrderedFolders())
             {
                 <button type="button" class="folder-row @(_editingId == folder.Id ? "active" : "")" style="--level:@folder.Level" @onclick="() => Edit(folder)">
-                    <span class="folder-level-badge">L@folder.Level</span><span><strong>@folder.Name</strong><small>@Display(folder.Description)</small></span><span class="sort-badge">排序 @folder.SortOrder</span>
+                    <span><strong>@folder.Name</strong><small>@Display(folder.Description)</small></span><span class="sort-badge">排序 @folder.SortOrder</span>
                 </button>
             }
         </section>
