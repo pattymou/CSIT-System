@@ -1,7 +1,7 @@
 @page "/validation-requests"
 @page "/validation-requests/{Id:guid}"
-@layout RdLayout
-@attribute [Authorize(Policy = SystemAuthorization.Policies.RdApplicant)]
+@layout ApplicantLayout
+@attribute [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
 @rendermode InteractiveServer
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
@@ -17,6 +17,7 @@
 
 <header class="validation-request-header">
     <div><span class="eyebrow">RD APPLICATION</span><h1>驗證測試申請單</h1><p>可先儲存草稿；正式送出後將沿用既有主管審核流程。</p></div>
+    <button type="button" class="btn-secondary" @onclick="OpenMyApplications">我的驗證申請</button>
 </header>
 
 @if (_error is not null) { <div class="alert alert-danger">@_error</div> }
@@ -172,4 +173,5 @@ else
     private static DateOnly? ParseDate(object? value) => DateOnly.TryParse(value?.ToString(), out var date) ? date : null;
     private static string StatusText(VerificationApplicationStatus status) => status switch { VerificationApplicationStatus.Draft => "草稿", VerificationApplicationStatus.Returned => "已退回", _ => status.ToString() };
     private void Cancel() => Nav.NavigateTo("/verification-applications");
+    private void OpenMyApplications() => Nav.NavigateTo("/verification-applications");
 }

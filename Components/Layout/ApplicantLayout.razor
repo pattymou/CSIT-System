@@ -1,0 +1,10 @@
+@inherits LayoutComponentBase
+
+<AuthorizeView Policy="@SystemAuthorization.Policies.CsitStaff">
+    <Authorized>
+        <MainLayout Body="@Body" />
+    </Authorized>
+    <NotAuthorized>
+        <RdLayout Body="@Body" />
+    </NotAuthorized>
+</AuthorizeView>

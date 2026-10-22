@@ -1,8 +1,8 @@
 @page "/verification-applications/new"
 @page "/verification-applications/{Id:guid}/edit"
-@layout RdLayout
+@layout ApplicantLayout
 @rendermode InteractiveServer
-@attribute [Authorize(Policy = SystemAuthorization.Policies.RdApplicant)]
+@attribute [Authorize(Policy = SystemAuthorization.Policies.ReservationUser)]
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
 @using SIT.DepartmentSystem.Web.Entities
