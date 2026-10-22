@@ -39,6 +39,15 @@ public sealed class DocumentLibraryController(IDocumentLibraryService service) :
         catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
     }
 
+    [HttpDelete("folders/{id:guid}")]
+    [Authorize(Policy = SystemAuthorization.Policies.Administration)]
+    [BusinessWrite]
+    public async Task<IActionResult> DeleteFolder(Guid id, CancellationToken cancellationToken)
+    {
+        try { return await service.DeleteFolderAsync(id, cancellationToken) ? NoContent() : NotFound(); }
+        catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
+    }
+
     [HttpGet("folders/{folderId:guid}/files")]
     public async Task<IActionResult> GetFiles(Guid folderId, CancellationToken cancellationToken)
     {

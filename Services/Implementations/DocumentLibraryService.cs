@@ -91,6 +91,30 @@ public sealed class DocumentLibraryService(
         return true;
     }
 
+    public async Task<bool> DeleteFolderAsync(Guid id, CancellationToken cancellationToken = default)
+    {
+        await businessWrite.DemandAsync(cancellationToken);
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var entity = await db.DocumentFolders.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
+        if (entity is null) return false;
+
+        if (await db.DocumentFolders.AnyAsync(x => x.ParentId == id, cancellationToken))
+            throw new InvalidOperationException("此資料夾仍有子資料夾，請先刪除所有下層資料夾。");
+        if (await db.DocumentLibraryFiles.AnyAsync(x => x.FolderId == id, cancellationToken))
+            throw new InvalidOperationException("此資料夾仍有文件紀錄（包含待 KM 處理的文件），無法刪除。");
+
+        db.DocumentFolders.Remove(entity);
+        try
+        {
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        catch (DbUpdateException)
+        {
+            throw new InvalidOperationException("資料夾已新增下層資料或文件，請重新整理後再試。");
+        }
+        return true;
+    }
+
     public async Task<List<DocumentLibraryFileDto>> GetFilesAsync(
         Guid folderId,
         CancellationToken cancellationToken = default)
