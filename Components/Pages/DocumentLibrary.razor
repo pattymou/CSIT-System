@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @inject BrowserApiClient Api
+@inject IDocumentLibraryService DocumentLibraryService
 @inject AuthenticationStateProvider AuthProvider
 @inject IAuthorizationService AuthorizationService
 
@@ -232,8 +233,7 @@
     {
         try
         {
-            _systemDocumentCatalog = await Api.GetAsync<SystemDocumentCatalogDto>(
-                "/api/document-library/system-documents");
+            _systemDocumentCatalog = await DocumentLibraryService.GetSystemDocumentsAsync();
             _selectedSystemCategory = _systemDocumentCatalog.Categories.FirstOrDefault(x => x.Files.Count > 0)
                 ?? _systemDocumentCatalog.Categories.FirstOrDefault();
         }

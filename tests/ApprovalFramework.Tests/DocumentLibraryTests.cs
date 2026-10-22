@@ -331,15 +331,15 @@ public sealed class DocumentLibraryTests
     }
 
     [Fact]
-    public void DocumentLibrary_InitializesBrowserApiRequestsSequentially()
+    public void DocumentLibrary_LoadsSystemCatalogDirectlyFromServerService()
     {
         var source = File.ReadAllText(Path.Combine(
             FindRepositoryRoot(), "Components", "Pages", "DocumentLibrary.razor"));
 
-        Assert.DoesNotContain("Task.WhenAll(LoadFoldersAsync(), LoadSystemDocumentsAsync())", source);
-        var foldersCall = source.IndexOf("await LoadFoldersAsync();", StringComparison.Ordinal);
-        var systemDocumentsCall = source.IndexOf("await LoadSystemDocumentsAsync();", StringComparison.Ordinal);
-        Assert.True(foldersCall >= 0 && systemDocumentsCall > foldersCall);
+        Assert.Contains("@inject IDocumentLibraryService DocumentLibraryService", source);
+        Assert.Contains("@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]", source);
+        Assert.Contains("DocumentLibraryService.GetSystemDocumentsAsync()", source);
+        Assert.DoesNotContain("Api.GetAsync<SystemDocumentCatalogDto>", source);
     }
 
     private static DocumentLibraryService CreateService(TestFactory factory) => new(
