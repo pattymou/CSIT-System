@@ -129,6 +129,97 @@ public sealed class DocumentLibraryTests
     }
 
     [Fact]
+    public async Task MoveL2_PreservesDescendantsDocumentsJobsAndIdentifiers()
+    {
+        var factory = new TestFactory();
+        var sourceL1 = Folder(1, "Source");
+        var targetL1 = Folder(1, "Target");
+        var l2 = Folder(2, "Movable", sourceL1.Id);
+        var l3 = Folder(3, "Documents", l2.Id);
+        var file = Document(l3.Id);
+        var job = PendingJob(file.Id);
+        await AddAsync(factory, sourceL1, targetL1, l2, l3, file, job);
+
+        Assert.True(await CreateService(factory).UpdateFolderAsync(l2.Id, new()
+        {
+            ParentId = targetL1.Id, Name = l2.Name, Description = l2.Description, SortOrder = l2.SortOrder
+        }));
+
+        await using var db = await factory.CreateDbContextAsync();
+        Assert.Equal(targetL1.Id, (await db.DocumentFolders.SingleAsync(x => x.Id == l2.Id)).ParentId);
+        Assert.Equal(l2.Id, (await db.DocumentFolders.SingleAsync(x => x.Id == l3.Id)).ParentId);
+        Assert.Equal(l3.Id, (await db.DocumentLibraryFiles.SingleAsync(x => x.Id == file.Id)).FolderId);
+        Assert.Equal(file.Id, (await db.DocumentProcessingJobs.SingleAsync(x => x.Id == job.Id)).DocumentFileId);
+    }
+
+    [Fact]
+    public async Task MoveL3_PreservesDocumentMetadataAndJob()
+    {
+        var factory = new TestFactory();
+        var l1 = Folder(1, "Root");
+        var sourceL2 = Folder(2, "Source", l1.Id);
+        var targetL2 = Folder(2, "Target", l1.Id);
+        var l3 = Folder(3, "Movable", sourceL2.Id);
+        var file = Document(l3.Id);
+        var originalSha = file.Sha256;
+        var originalPath = file.RelativePath;
+        var job = PendingJob(file.Id);
+        await AddAsync(factory, l1, sourceL2, targetL2, l3, file, job);
+
+        await CreateService(factory).UpdateFolderAsync(l3.Id, new()
+        {
+            ParentId = targetL2.Id, Name = l3.Name, SortOrder = l3.SortOrder
+        });
+
+        await using var db = await factory.CreateDbContextAsync();
+        Assert.Equal(targetL2.Id, (await db.DocumentFolders.SingleAsync(x => x.Id == l3.Id)).ParentId);
+        var storedFile = await db.DocumentLibraryFiles.SingleAsync(x => x.Id == file.Id);
+        Assert.Equal(originalSha, storedFile.Sha256);
+        Assert.Equal(originalPath, storedFile.RelativePath);
+        Assert.Equal(file.Id, (await db.DocumentProcessingJobs.SingleAsync(x => x.Id == job.Id)).DocumentFileId);
+    }
+
+    [Fact]
+    public async Task MoveFolder_RejectsRootMoveWrongLevelCycleAndDuplicateName()
+    {
+        var rootFactory = new TestFactory();
+        var root = Folder(1, "Root");
+        var otherRoot = Folder(1, "Other");
+        await AddAsync(rootFactory, root, otherRoot);
+        var rootError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CreateService(rootFactory).UpdateFolderAsync(root.Id, new() { ParentId = otherRoot.Id, Name = root.Name }));
+        Assert.Contains("L1 必須維持根層", rootError.Message);
+
+        var levelFactory = new TestFactory();
+        var levelRoot = Folder(1, "Root");
+        var l2 = Folder(2, "L2", levelRoot.Id);
+        var otherL2 = Folder(2, "Other L2", levelRoot.Id);
+        await AddAsync(levelFactory, levelRoot, l2, otherL2);
+        var levelError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CreateService(levelFactory).UpdateFolderAsync(l2.Id, new() { ParentId = otherL2.Id, Name = l2.Name }));
+        Assert.Contains("L2 只能移至 L1", levelError.Message);
+
+        var duplicateFactory = new TestFactory();
+        var source = Folder(1, "Source");
+        var target = Folder(1, "Target");
+        var moving = Folder(2, "Same", source.Id);
+        var existing = Folder(2, "Same", target.Id);
+        await AddAsync(duplicateFactory, source, target, moving, existing);
+        var duplicateError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CreateService(duplicateFactory).UpdateFolderAsync(moving.Id, new() { ParentId = target.Id, Name = moving.Name }));
+        Assert.Contains("相同名稱", duplicateError.Message);
+
+        var cycleFactory = new TestFactory();
+        var cycleFolder = Folder(2, "Cycle");
+        var malformedDescendant = Folder(1, "Descendant", cycleFolder.Id);
+        await AddAsync(cycleFactory, cycleFolder, malformedDescendant);
+        var cycleError = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            CreateService(cycleFactory).UpdateFolderAsync(cycleFolder.Id,
+                new() { ParentId = malformedDescendant.Id, Name = cycleFolder.Name }));
+        Assert.Contains("循環", cycleError.Message);
+    }
+
+    [Fact]
     public async Task DeleteFolder_RemovesCompletelyEmptyFolder()
     {
         var factory = new TestFactory();
@@ -197,6 +288,20 @@ public sealed class DocumentLibraryTests
     private static DocumentFolder Folder(int level, string name = "Folder", Guid? parentId = null) => new()
     {
         Id = Guid.NewGuid(), ParentId = parentId, Level = level, Name = name,
+        CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+    };
+
+    private static DocumentLibraryFile Document(Guid folderId) => new()
+    {
+        Id = Guid.NewGuid(), FolderId = folderId, OriginalFileName = "document.txt",
+        StandardFileName = $"DOC-{Guid.NewGuid():N}.txt", UploadedBy = "patty", UploadedAt = DateTime.UtcNow,
+        FileSize = 8, Sha256 = new string('b', 64), RelativePath = $"2026/10/{Guid.NewGuid():N}.txt",
+        StorageArea = DocumentStorageAreas.Staging
+    };
+
+    private static DocumentProcessingJob PendingJob(Guid fileId) => new()
+    {
+        Id = Guid.NewGuid(), DocumentFileId = fileId, Status = DocumentProcessingStatuses.Pending,
         CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
     };
 

@@ -15,6 +15,14 @@
                   ConfirmIsDanger="true"
                   OnConfirm="ConfirmDeleteAsync"
                   OnClose="CloseDeleteConfirm" />
+<AppMessageDialog Visible="@_showMoveConfirm"
+                  Title="確認移動資料夾"
+                  Message="@MoveConfirmationMessage"
+                  Type="AppMessageDialogType.Warning"
+                  ShowCancel="true"
+                  ConfirmText="確認移動並儲存"
+                  OnConfirm="ConfirmMoveAsync"
+                  OnClose="CloseMoveConfirm" />
 
 <div class="folder-admin-page">
     <header><div><div class="admin-kicker">DOCUMENT STRUCTURE</div><h1>文件資料夾管理</h1><p>建立 L1、L2、L3 三層分類；文件只會放在 L3。</p></div><button type="button" class="admin-primary" @onclick="StartCreate">＋ 新增資料夾</button></header>
@@ -32,12 +40,19 @@
         </section>
         <section class="folder-form-card">
             <div class="form-title"><div><div class="admin-kicker">@(_editingId.HasValue ? "EDIT FOLDER" : "NEW FOLDER")</div><h2>@(_editingId.HasValue ? "修改資料夾" : "新增資料夾")</h2></div>@if (_editingId.HasValue){<button type="button" class="text-button" @onclick="StartCreate">取消編輯</button>}</div>
-            <label>上層資料夾</label>
-            <select @bind="_form.ParentId" disabled="@_editingId.HasValue">
-                <option value="">無（建立 L1）</option>
-                @foreach (var parent in _folders.Where(x => x.Level < 3).OrderBy(x => x.Level).ThenBy(x => x.SortOrder)) { <option value="@parent.Id">@($"L{parent.Level} · {parent.Name}")</option> }
+            <label>@(_editingId.HasValue ? "移動至" : "上層資料夾")</label>
+            <select @bind="_form.ParentId" disabled="@(EditingFolder?.Level == 1)">
+                @if (!_editingId.HasValue || EditingFolder?.Level == 1)
+                {
+                    <option value="">無（L1 根層）</option>
+                }
+                @foreach (var parent in ParentOptions())
+                {
+                    <option value="@parent.Id">@($"L{parent.Level} · {BuildPath(parent.ParentId, parent.Name)}")</option>
+                }
             </select>
-            @if (_editingId.HasValue) { <small class="field-hint">資料夾建立後不可移動，可修改名稱、說明與排序。</small> }
+            @if (EditingFolder?.Level == 1) { <small class="field-hint">L1 固定為根層，不可移至其他資料夾下。</small> }
+            else if (_editingId.HasValue) { <small class="field-hint">L2 只能移至 L1；L3 只能移至 L2。移動不會搬動實體檔案或重新觸發 KM。</small> }
             <label>名稱 <span>*</span></label><input maxlength="200" @bind="_form.Name" placeholder="請輸入資料夾名稱" />
             <label>簡單說明</label><textarea maxlength="1000" @bind="_form.Description" placeholder="說明此分類收錄的內容"></textarea>
             <label>排序</label><input type="number" @bind="_form.SortOrder" />
@@ -47,6 +62,7 @@
                 @if (_editingId.HasValue)
                 {
                     <button type="button" class="admin-danger" disabled="@(_saving || _deleting)" @onclick="BeginDelete">@(_deleting ? "刪除中..." : "刪除資料夾")</button>
+                    <span class="delete-rule">僅可刪除空資料夾（無子資料夾、無文件）</span>
                 }
             </div>
             <div class="level-note"><strong>層級規則</strong><span>未選上層 = L1；選 L1 = L2；選 L2 = L3。系統不允許第四層。</span></div>
@@ -55,15 +71,22 @@
 </div>
 
 @code {
-    private List<DocumentFolderDto> _folders=[]; private DocumentFolderUpsertRequest _form=new(); private Guid? _editingId; private bool _saving; private bool _deleting; private bool _showDeleteConfirm; private DocumentFolderDto? _deleteTarget; private string? _message; private bool _isError;
+    private List<DocumentFolderDto> _folders=[]; private DocumentFolderUpsertRequest _form=new(); private Guid? _editingId; private bool _saving; private bool _deleting; private bool _showDeleteConfirm; private bool _showMoveConfirm; private DocumentFolderDto? _deleteTarget; private string? _message; private bool _isError;
     protected override async Task OnInitializedAsync()=>await LoadAsync();
     private async Task LoadAsync(){try{_folders=await Api.GetAsync<List<DocumentFolderDto>>("/api/document-library/folders");}catch(Exception ex){ShowError($"載入失敗：{ex.Message}");}}
     private IEnumerable<DocumentFolderDto> OrderedFolders(){var result=new List<DocumentFolderDto>();void Add(Guid? parent){foreach(var item in _folders.Where(x=>x.ParentId==parent).OrderBy(x=>x.SortOrder).ThenBy(x=>x.Name)){result.Add(item);Add(item.Id);}}Add(null);return result;}
+    private DocumentFolderDto? EditingFolder=>_editingId is null?null:_folders.SingleOrDefault(x=>x.Id==_editingId.Value);
+    private IEnumerable<DocumentFolderDto> ParentOptions()=>_editingId is null?_folders.Where(x=>x.Level<3).OrderBy(x=>x.Level).ThenBy(x=>x.SortOrder):EditingFolder is {Level:>1} folder?_folders.Where(x=>x.Level==folder.Level-1).OrderBy(x=>x.SortOrder).ThenBy(x=>x.Name):[];
     private void StartCreate(){ResetForm();_message=null;}
-    private void ResetForm(){_editingId=null;_form=new();_deleteTarget=null;_showDeleteConfirm=false;}
+    private void ResetForm(){_editingId=null;_form=new();_deleteTarget=null;_showDeleteConfirm=false;_showMoveConfirm=false;}
     private void ClearForm(){var parent=_editingId.HasValue?_form.ParentId:null;_form=new(){ParentId=parent};}
     private void Edit(DocumentFolderDto folder){_editingId=folder.Id;_form=new(){ParentId=folder.ParentId,Name=folder.Name,Description=folder.Description,SortOrder=folder.SortOrder};_message=null;}
-    private async Task SaveAsync(){_saving=true;_message=null;try{var wasEditing=_editingId.HasValue;var response=wasEditing?await Api.PutJsonAsync($"/api/document-library/folders/{_editingId}",_form):await Api.PostJsonAsync("/api/document-library/folders",_form);response.EnsureSuccess();ResetForm();await LoadAsync();_message=wasEditing?"資料夾已更新。":"資料夾已建立。";_isError=false;}catch(Exception ex){ShowError($"儲存失敗：{ex.Message}");}finally{_saving=false;}}
+    private Task SaveAsync(){_message=null;if(EditingFolder is { } folder&&folder.ParentId!=_form.ParentId){_showMoveConfirm=true;return Task.CompletedTask;}return PersistAsync();}
+    private async Task PersistAsync(){_saving=true;try{var wasEditing=_editingId.HasValue;var wasMoving=EditingFolder is { } folder&&folder.ParentId!=_form.ParentId;var response=wasEditing?await Api.PutJsonAsync($"/api/document-library/folders/{_editingId}",_form):await Api.PostJsonAsync("/api/document-library/folders",_form);response.EnsureSuccess();ResetForm();await LoadAsync();_message=wasMoving?"資料夾已移動，樹狀結構已更新。":wasEditing?"資料夾已更新。":"資料夾已建立。";_isError=false;}catch(Exception ex){ShowError($"儲存失敗：{ex.Message}");}finally{_saving=false;}}
+    private string MoveConfirmationMessage=>EditingFolder is not { } folder?string.Empty:$"確定移動資料夾？原位置：{BuildPath(folder.ParentId,folder.Name)}；新位置：{BuildPath(_form.ParentId,string.IsNullOrWhiteSpace(_form.Name)?folder.Name:_form.Name.Trim())}。底下資料夾與文件會一起保留在原 ID 下。";
+    private void CloseMoveConfirm()=>_showMoveConfirm=false;
+    private async Task ConfirmMoveAsync(){_showMoveConfirm=false;await PersistAsync();}
+    private string BuildPath(Guid? parentId,string name){var parts=new List<string>{name};var cursor=parentId;var visited=new HashSet<Guid>();while(cursor is not null&&visited.Add(cursor.Value)){var parent=_folders.SingleOrDefault(x=>x.Id==cursor.Value);if(parent is null)break;parts.Insert(0,parent.Name);cursor=parent.ParentId;}return string.Join(" / ",parts);}
     private void BeginDelete(){if(!_editingId.HasValue)return;_deleteTarget=_folders.SingleOrDefault(x=>x.Id==_editingId.Value);_showDeleteConfirm=_deleteTarget is not null;}
     private string DeleteConfirmationMessage=>_deleteTarget is null?string.Empty:$"確定刪除 L{_deleteTarget.Level}「{_deleteTarget.Name}」？只有完全空白的資料夾可以刪除。";
     private void CloseDeleteConfirm(){_showDeleteConfirm=false;_deleteTarget=null;}

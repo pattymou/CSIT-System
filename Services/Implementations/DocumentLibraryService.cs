@@ -77,12 +77,39 @@ public sealed class DocumentLibraryService(
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var entity = await db.DocumentFolders.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (entity is null) return false;
-        if (request.ParentId != entity.ParentId)
-            throw new InvalidOperationException("建立後不可移動資料夾；可修改名稱、說明與排序。");
+
+        if (entity.Level == 1)
+        {
+            if (request.ParentId is not null)
+                throw new InvalidOperationException("L1 必須維持根層，不可移至其他資料夾下。");
+        }
+        else
+        {
+            if (request.ParentId is null)
+                throw new InvalidOperationException($"L{entity.Level} 必須選擇 L{entity.Level - 1} 作為上層資料夾。");
+            var newParent = await db.DocumentFolders.AsNoTracking()
+                .SingleOrDefaultAsync(x => x.Id == request.ParentId, cancellationToken)
+                ?? throw new InvalidOperationException("找不到要移入的上層資料夾。");
+            if (newParent.Level != entity.Level - 1)
+                throw new InvalidOperationException($"L{entity.Level} 只能移至 L{entity.Level - 1} 資料夾下。");
+
+            var parentLinks = await db.DocumentFolders.AsNoTracking()
+                .Select(x => new { x.Id, x.ParentId })
+                .ToDictionaryAsync(x => x.Id, x => x.ParentId, cancellationToken);
+            var ancestorId = request.ParentId;
+            while (ancestorId is not null)
+            {
+                if (ancestorId == entity.Id)
+                    throw new InvalidOperationException("不可將資料夾移至自己或自己的下層，避免形成循環。");
+                ancestorId = parentLinks.TryGetValue(ancestorId.Value, out var parentId) ? parentId : null;
+            }
+        }
+
         var name = DocumentLibraryRules.NormalizeName(request.Name);
         if (await db.DocumentFolders.AnyAsync(
-                x => x.Id != id && x.ParentId == entity.ParentId && x.Name.ToLower() == name.ToLower(), cancellationToken))
+                x => x.Id != id && x.ParentId == request.ParentId && x.Name.ToLower() == name.ToLower(), cancellationToken))
             throw new InvalidOperationException("同一層已有相同名稱的資料夾。");
+        entity.ParentId = request.ParentId;
         entity.Name = name;
         entity.Description = NormalizeDescription(request.Description);
         entity.SortOrder = request.SortOrder;
