@@ -19,4 +19,6 @@ public interface IVerificationApplicationService
     Task<VerificationApplicationDto?> GetForLeaderReviewAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default);
     Task<ListResponseDto<VerificationApplicationDto>> ListForApplicantAsync(ClaimsPrincipal user, int page, int pageSize, CancellationToken cancellationToken = default);
     Task<ListResponseDto<VerificationApplicationDto>> ListForLeaderReviewAsync(ClaimsPrincipal user, int page, int pageSize, CancellationToken cancellationToken = default);
+    Task<VerificationApplicationDto?> GetForCsitAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<ListResponseDto<VerificationApplicationDto>> ListForCsitAsync(ClaimsPrincipal user, int page, int pageSize, CancellationToken cancellationToken = default);
 }

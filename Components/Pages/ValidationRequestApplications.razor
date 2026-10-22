@@ -1,0 +1,48 @@
+@page "/validation-request-applications"
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using SIT.DepartmentSystem.Web.Entities
+@inject IVerificationApplicationService Applications
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject NavigationManager Nav
+
+<PageTitle>驗證申請專區</PageTitle>
+<h3 class="page-title">驗證申請專區</h3>
+<p>查閱已送出的驗證申請；主管審核仍在原有待審流程進行。</p>
+
+@if (_error is not null) { <div class="surface-card error-text">@_error</div> }
+else if (_loading) { <div class="surface-card">載入中...</div> }
+else
+{
+    <div class="surface-card"><div class="project-table-wrap"><table class="project-table">
+        <thead><tr><th>申請編號</th><th>Model Name</th><th>申請人</th><th>申請日期</th><th>審核狀態</th></tr></thead>
+        <tbody>
+        @if (_items.Count == 0) { <tr><td colspan="5" class="empty-row">目前沒有已送出的驗證申請。</td></tr> }
+        @foreach (var item in _items)
+        {
+            <tr class="clickable-row" @onclick="() => Open(item.Id)">
+                <td><strong>@item.ApplicationNo</strong></td><td>@Display(item.ProductModel)</td><td>@item.ApplicantName</td>
+                <td>@FormatDate(item.SubmittedAt)</td><td><span class="record-status-pill">@StatusText(item.Status)</span></td>
+            </tr>
+        }
+        </tbody>
+    </table></div></div>
+}
+
+@code {
+    private List<VerificationApplicationDto> _items = [];
+    private bool _loading = true;
+    private string? _error;
+    protected override async Task OnInitializedAsync()
+    {
+        try { var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User; _items = (await Applications.ListForCsitAsync(user, 1, 200)).Items.ToList(); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _loading = false; }
+    }
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "－" : value;
+    private static string FormatDate(DateTime? value) => value?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "－";
+    private static string StatusText(VerificationApplicationStatus status) => status switch { VerificationApplicationStatus.Submitted => "待審核", VerificationApplicationStatus.Returned => "已退回", VerificationApplicationStatus.Rejected => "已拒絕", VerificationApplicationStatus.Accepted => "已接受", _ => status.ToString() };
+    private void Open(Guid id) => Nav.NavigateTo($"/validation-request-applications/{id}");
+}

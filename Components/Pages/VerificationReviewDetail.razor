@@ -24,6 +24,10 @@ else if (_item is not null)
             <div><span>產品</span><strong>@_item.Customer / @_item.ProductModel</strong></div>
             <div class="full"><span>驗證需求</span><div>@_item.ValidationRequirement</div></div>
         </div>
+        @if (_item.ValidationRequest is not null)
+        {
+            <ValidationRequestSubmissionView Submission="_item.ValidationRequest" />
+        }
         <div class="form-row full-width review-note"><label>處理說明（Return / Reject 必填）</label><textarea @bind="_note"></textarea></div>
         <div class="form-actions">
             <button type="button" class="btn-secondary" disabled="@_working" @onclick="ReturnAsync">Return</button>

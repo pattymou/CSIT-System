@@ -1,0 +1,48 @@
+@using SIT.DepartmentSystem.Web.Models.Api
+
+<div class="validation-field" data-parameter-code="@Parameter.Code">
+    <label class="validation-field-label">@Parameter.DisplayLabel @if (Parameter.IsRequired) { <span class="required-mark">*</span> }</label>
+    @if (!string.IsNullOrWhiteSpace(Parameter.HelpText)) { <div class="validation-help">@Parameter.HelpText</div> }
+    @switch (Parameter.FieldType)
+    {
+        case "TextArea":
+            <textarea value="@TextValue" @oninput="SetText" disabled="@ReadOnly"></textarea>
+            break;
+        case "Number":
+            <input type="number" value="@TextValue" @oninput="SetText" disabled="@ReadOnly" />
+            break;
+        case "Dropdown":
+        case "SingleSelect":
+            <select value="@TextValue" @onchange="SetText" disabled="@ReadOnly"><option value="">請選擇</option>@foreach (var option in Parameter.Options.Where(x => x.IsEnabled)) { <option value="@option.ValueCode">@option.DisplayLabel</option> }</select>
+            break;
+        case "MultiSelect":
+            <div class="validation-choice-list">@foreach (var option in Parameter.Options.Where(x => x.IsEnabled)) { <label><input type="checkbox" checked="@Contains(option.ValueCode)" disabled="@ReadOnly" @onchange="e => SetMulti(option.ValueCode, e)" /> @option.DisplayLabel</label> }</div>
+            break;
+        case "Checkbox":
+            <label class="validation-checkbox"><input type="checkbox" checked="@string.Equals(TextValue, "true", StringComparison.OrdinalIgnoreCase)" disabled="@ReadOnly" @onchange="SetBool" /> 是</label>
+            break;
+        default:
+            <input value="@TextValue" @oninput="SetText" disabled="@ReadOnly" />
+            break;
+    }
+    @if (Parameter.Children.Count > 0)
+    {
+        <div class="validation-group-fields">@foreach (var child in Parameter.Children.Where(x => x.IsEnabled)) { <ValidationRequestParameterInput Parameter="child" Values="Values" ReadOnly="ReadOnly" /> }</div>
+    }
+</div>
+
+@code {
+    [Parameter, EditorRequired] public ValidationParameterDto Parameter { get; set; } = null!;
+    [Parameter, EditorRequired] public Dictionary<string, List<string>> Values { get; set; } = null!;
+    [Parameter] public bool ReadOnly { get; set; }
+    private string TextValue => Values.TryGetValue(Parameter.Code, out var values) ? values.FirstOrDefault() ?? "" : "";
+    private bool Contains(string value) => Values.TryGetValue(Parameter.Code, out var values) && values.Contains(value, StringComparer.OrdinalIgnoreCase);
+    private void SetText(ChangeEventArgs e) => Values[Parameter.Code] = [e.Value?.ToString() ?? ""];
+    private void SetBool(ChangeEventArgs e) => Values[Parameter.Code] = [string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase) ? "true" : "false"];
+    private void SetMulti(string value, ChangeEventArgs e)
+    {
+        if (!Values.TryGetValue(Parameter.Code, out var values)) Values[Parameter.Code] = values = [];
+        if (string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase)) { if (!values.Contains(value, StringComparer.OrdinalIgnoreCase)) values.Add(value); }
+        else values.RemoveAll(x => string.Equals(x, value, StringComparison.OrdinalIgnoreCase));
+    }
+}

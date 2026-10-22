@@ -23,9 +23,20 @@ public sealed record ValidationRequestConfigurationDto(string TemplateCode, stri
     ValidationTemplateVersionDto Version, IReadOnlyList<ValidationTemplateVersionDto> Versions,
     IReadOnlyList<ValidationProductTypeDto> ProductTypes, IReadOnlyList<ValidationSectionDto> Sections,
     IReadOnlyList<ValidationTestCategoryDto> TestCategories, IReadOnlyList<string> SupportedFieldTypes);
-public sealed record ValidationRequestPreviewDto(string TemplateCode, int TemplateVersion, string ProductTypeCode,
+public sealed record ValidationRequestPreviewDto(string TemplateCode, Guid TemplateVersionId, int TemplateVersion, string ProductTypeCode,
     string ProductTypeLabel, IReadOnlyList<ValidationSectionDto> Sections,
     IReadOnlyList<ValidationTestCategoryDto> TestCategories);
+
+public sealed class ValidationRequestSubmissionDto
+{
+    public Guid TemplateVersionId { get; set; }
+    public int TemplateVersion { get; set; }
+    public string ProductTypeCode { get; set; } = string.Empty;
+    public Dictionary<string, List<string>> FieldValues { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public HashSet<string> SelectedTestItemCodes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, Dictionary<string, List<string>>> TestParameterValues { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public ValidationRequestPreviewDto? FormSnapshot { get; set; }
+}
 
 public sealed record SaveValidationProductTypeRequest(string Code, string DisplayLabel, bool IsEnabled, int DisplayOrder);
 public sealed record SaveValidationFieldRequest(Guid SectionId, Guid? ParentFieldId, string Code, string DisplayLabel,

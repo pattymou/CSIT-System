@@ -1,0 +1,21 @@
+@using SIT.DepartmentSystem.Web.Models.Api
+
+@if (Submission.FormSnapshot is { } snapshot)
+{
+    <div class="validation-submission-view">
+        <div class="surface-card validation-snapshot-heading">
+            <strong>新版驗證申請內容</strong>
+            <span>表單版本 @Submission.TemplateVersion · @snapshot.ProductTypeLabel</span>
+        </div>
+        <ValidationRequestPreview Preview="snapshot" ProductTypes="ProductTypes(snapshot)"
+                                  SelectedProductCode="Submission.ProductTypeCode" Values="Submission.FieldValues"
+                                  SelectedTestItemCodes="Submission.SelectedTestItemCodes"
+                                  TestParameterValues="Submission.TestParameterValues" ReadOnly="true" />
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public ValidationRequestSubmissionDto Submission { get; set; } = null!;
+    private static IReadOnlyList<ValidationProductTypeDto> ProductTypes(ValidationRequestPreviewDto snapshot) =>
+        [new(Guid.Empty, snapshot.ProductTypeCode, snapshot.ProductTypeLabel, true, 0, [], [])];
+}

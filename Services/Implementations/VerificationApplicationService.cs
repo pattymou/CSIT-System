@@ -1,5 +1,6 @@
 using System.Data;
 using System.Security.Claims;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
@@ -10,6 +11,7 @@ namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
 public sealed class VerificationApplicationService : IVerificationApplicationService
 {
+    private static readonly JsonSerializerOptions PayloadJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly AppDbContext _db;
     private readonly IModuleRecordCreationService _moduleRecordCreation;
     private readonly ISystemOptionService _systemOptions;
@@ -57,6 +59,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             MapContent(request),
             now);
 
+        SaveValidationRequest(entity, request.ValidationRequest, now);
+
         _db.VerificationApplications.Add(entity);
         await _db.SaveChangesAsync(cancellationToken);
         return await MapWithDraftOptionsAsync(entity, cancellationToken);
@@ -75,7 +79,9 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await FindApplicantApplicationRequiredAsync(id, account, cancellationToken);
         await EnsureTeamAllowedAsync(request.TeamOptionId, request.RoutingDepartmentOptionId, cancellationToken);
-        entity.UpdateContent(request.RoutingDepartmentOptionId, request.TeamOptionId, MapContent(request), DateTime.UtcNow);
+        var now = DateTime.UtcNow;
+        entity.UpdateContent(request.RoutingDepartmentOptionId, request.TeamOptionId, MapContent(request), now);
+        SaveValidationRequest(entity, request.ValidationRequest, now);
         await _db.SaveChangesAsync(cancellationToken);
         return await MapWithDraftOptionsAsync(entity, cancellationToken);
     }
@@ -85,6 +91,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         await _businessWrite.DemandAsync(cancellationToken);
         var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await FindApplicantApplicationRequiredAsync(id, account, cancellationToken);
+        ValidateValidationRequestForSubmit(entity);
         var routing = await ResolveRoutingAsync(entity.RoutingDepartmentOptionId, entity.TeamOptionId, cancellationToken);
         entity.Submit(routing, DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
@@ -234,6 +241,22 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         return ListAsync(x => x.Status == VerificationApplicationStatus.Submitted && x.AssignedLeaderAccount == account, page, pageSize, cancellationToken);
     }
 
+    public async Task<VerificationApplicationDto?> GetForCsitAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    {
+        EnsureCsitStaff(user);
+        var entity = await _db.VerificationApplications.AsNoTracking()
+            .Include(x => x.Files).Include(x => x.ModuleRecord)
+            .SingleOrDefaultAsync(x => x.Id == id && x.Status != VerificationApplicationStatus.Draft, cancellationToken);
+        return entity is null ? null : await MapWithDraftOptionsAsync(entity, cancellationToken);
+    }
+
+    public Task<ListResponseDto<VerificationApplicationDto>> ListForCsitAsync(
+        ClaimsPrincipal user, int page, int pageSize, CancellationToken cancellationToken = default)
+    {
+        EnsureCsitStaff(user);
+        return ListAsync(x => x.Status != VerificationApplicationStatus.Draft, page, pageSize, cancellationToken);
+    }
+
     private async Task<ListResponseDto<VerificationApplicationDto>> ListAsync(
         System.Linq.Expressions.Expression<Func<VerificationApplication, bool>> predicate,
         int page,
@@ -331,7 +354,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         ProjectName = request.ProjectName,
         SubPu = request.SubPu,
         Customer = request.Customer,
-        ProductModel = request.ProductModel,
+        ProductModel = FieldValue(request.ValidationRequest, "MODEL_NAME") ?? request.ProductModel,
         RequestedFinishDate = request.RequestedFinishDate,
         ValidationRequirement = request.ValidationRequirement,
         HardwareVersion = request.HardwareVersion,
@@ -347,6 +370,91 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         UtilityVersion = request.UtilityVersion,
         DspModel = request.DspModel
     };
+
+    private static string? FieldValue(ValidationRequestSubmissionDto? request, string code) =>
+        request?.FieldValues.TryGetValue(code, out var values) == true
+            ? values.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x))?.Trim()
+            : null;
+
+    private static void SaveValidationRequest(VerificationApplication entity, ValidationRequestSubmissionDto? request, DateTime now)
+    {
+        if (request is null) return;
+        if (request.FormSnapshot is null) throw new ArgumentException("The validation form snapshot is required.");
+        if (request.TemplateVersionId != request.FormSnapshot.TemplateVersionId || request.TemplateVersion != request.FormSnapshot.TemplateVersion)
+            throw new ArgumentException("The validation form version does not match its snapshot.");
+        if (!string.Equals(request.ProductTypeCode, request.FormSnapshot.ProductTypeCode, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The validation product type does not match its snapshot.");
+        entity.SetValidationRequest(request.TemplateVersionId, request.TemplateVersion, request.ProductTypeCode,
+            JsonSerializer.Serialize(request, PayloadJsonOptions), now);
+    }
+
+    private static void ValidateValidationRequestForSubmit(VerificationApplication entity)
+    {
+        if (string.IsNullOrWhiteSpace(entity.ValidationFormPayloadJson)) return;
+        var request = JsonSerializer.Deserialize<ValidationRequestSubmissionDto>(entity.ValidationFormPayloadJson, PayloadJsonOptions)
+            ?? throw new InvalidOperationException("The validation form data is invalid.");
+        var snapshot = request.FormSnapshot ?? throw new InvalidOperationException("The validation form snapshot is missing.");
+        var missing = snapshot.Sections.SelectMany(x => x.Fields).SelectMany(Flatten)
+            .Where(x => x.IsEnabled && IsVisible(x, request.FieldValues) && IsRequired(x, request.FieldValues))
+            .Where(x => x.FieldType is not ("Attachment" or "Group" or "RepeatableGroup"))
+            .Where(x => !request.FieldValues.TryGetValue(x.Code, out var values) || values.All(string.IsNullOrWhiteSpace))
+            .Select(x => x.DisplayLabel).ToList();
+        var missingTests = snapshot.TestCategories.SelectMany(x => x.TestItems)
+            .Where(x => x.IsEnabled && x.IsMandatory && !request.SelectedTestItemCodes.Contains(x.Code))
+            .Select(x => x.DisplayLabel).ToList();
+        var missingParameters = snapshot.TestCategories.SelectMany(x => x.TestItems)
+            .Where(x => x.IsEnabled && request.SelectedTestItemCodes.Contains(x.Code))
+            .SelectMany(item => item.Parameters.SelectMany(FlattenParameters)
+                .Where(x => x.IsEnabled && x.IsRequired)
+                .Where(x => !request.TestParameterValues.TryGetValue(item.Code, out var values) ||
+                            !values.TryGetValue(x.Code, out var answers) || answers.All(string.IsNullOrWhiteSpace))
+                .Select(x => $"{item.DisplayLabel}／{x.DisplayLabel}"))
+            .ToList();
+        if (missing.Count > 0 || missingTests.Count > 0 || missingParameters.Count > 0)
+            throw new InvalidOperationException($"新版申請單尚未完整填寫：{string.Join("、", missing.Concat(missingTests).Concat(missingParameters))}");
+    }
+
+    private static IEnumerable<ValidationFieldDto> Flatten(ValidationFieldDto field)
+    {
+        yield return field;
+        foreach (var child in field.Children.SelectMany(Flatten)) yield return child;
+    }
+
+    private static IEnumerable<ValidationParameterDto> FlattenParameters(ValidationParameterDto parameter)
+    {
+        yield return parameter;
+        foreach (var child in parameter.Children.SelectMany(FlattenParameters)) yield return child;
+    }
+
+    private static bool IsVisible(ValidationFieldDto field, IReadOnlyDictionary<string, List<string>> values) =>
+        field.Conditions.Where(x => x.Action == "Visible").All(x => Evaluate(x, values));
+
+    private static bool IsRequired(ValidationFieldDto field, IReadOnlyDictionary<string, List<string>> values) =>
+        field.IsRequired || field.Conditions.Where(x => x.Action == "Required").Any(x => Evaluate(x, values));
+
+    private static bool Evaluate(ValidationConditionDto condition, IReadOnlyDictionary<string, List<string>> values)
+    {
+        values.TryGetValue(condition.SourceFieldCode, out var actual);
+        actual ??= [];
+        var expected = condition.ExpectedValue ?? string.Empty;
+        return condition.Operator switch
+        {
+            "Equals" => actual.Any(x => string.Equals(x, expected, StringComparison.OrdinalIgnoreCase)),
+            "NotEquals" => actual.All(x => !string.Equals(x, expected, StringComparison.OrdinalIgnoreCase)),
+            "Contains" => actual.Contains(expected, StringComparer.OrdinalIgnoreCase),
+            "NotContains" => !actual.Contains(expected, StringComparer.OrdinalIgnoreCase),
+            "IsTrue" => actual.Any(x => string.Equals(x, "true", StringComparison.OrdinalIgnoreCase)),
+            "IsFalse" => actual.All(x => !string.Equals(x, "true", StringComparison.OrdinalIgnoreCase)),
+            _ => false
+        };
+    }
+
+    private static void EnsureCsitStaff(ClaimsPrincipal user)
+    {
+        if (user.Identity?.IsAuthenticated != true ||
+            !user.HasClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff))
+            throw new UnauthorizedAccessException("CSIT staff access is required.");
+    }
 
     private static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
     private static string Normalize(string? value) => value?.Trim() ?? string.Empty;
@@ -413,6 +521,9 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         ProcessingNote = entity.ProcessingNote,
         ModuleRecordNo = entity.Status == VerificationApplicationStatus.Accepted ? entity.ModuleRecord?.RecordNo : null,
         UpdatedAt = entity.UpdatedAt,
+        ValidationRequest = string.IsNullOrWhiteSpace(entity.ValidationFormPayloadJson)
+            ? null
+            : JsonSerializer.Deserialize<ValidationRequestSubmissionDto>(entity.ValidationFormPayloadJson, PayloadJsonOptions),
         Files = entity.Files.Select(x => new VerificationApplicationFileDto
         {
             Id = x.Id,

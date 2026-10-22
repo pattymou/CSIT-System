@@ -28,6 +28,7 @@ public abstract class VerificationApplicationContentRequest
     public string? SampleMacAddress { get; set; }
     public string? UtilityVersion { get; set; }
     public string? DspModel { get; set; }
+    public ValidationRequestSubmissionDto? ValidationRequest { get; set; }
 }
 
 public class VerificationApplicationDto
@@ -74,6 +75,7 @@ public class VerificationApplicationDto
     public string? ModuleRecordNo { get; set; }
     public DateTime UpdatedAt { get; set; }
     public IReadOnlyList<VerificationApplicationFileDto> Files { get; set; } = [];
+    public ValidationRequestSubmissionDto? ValidationRequest { get; set; }
 }
 
 public class VerificationApplicationFileDto

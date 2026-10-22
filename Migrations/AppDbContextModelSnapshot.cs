@@ -7228,9 +7228,26 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("utility_version");
 
+                    b.Property<string>("ValidationFormPayloadJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("validation_form_payload_json");
+
+                    b.Property<string>("ValidationProductTypeCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("validation_product_type_code");
+
                     b.Property<string>("ValidationRequirement")
                         .HasColumnType("text")
                         .HasColumnName("validation_requirement");
+
+                    b.Property<Guid?>("ValidationTemplateVersionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("validation_template_version_id");
+
+                    b.Property<int?>("ValidationTemplateVersionNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("validation_template_version_number");
 
                     b.Property<Guid?>("VerificationCategoryId")
                         .HasColumnType("uuid")

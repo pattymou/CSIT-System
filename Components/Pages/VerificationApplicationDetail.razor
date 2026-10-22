@@ -36,6 +36,11 @@ else if (_item is not null)
             { <div><span class="label">Project / Record No</span><strong>@_item.ModuleRecordNo</strong></div> }
         </div>
 
+        @if (_item.ValidationRequest is not null)
+        {
+            <ValidationRequestSubmissionView Submission="_item.ValidationRequest" />
+        }
+
         @if (_item.Status == VerificationApplicationStatus.Returned)
         { <div class="workflow-note"><strong>退回原因：</strong>@Display(_item.ProcessingNote)</div> }
         else if (_item.Status == VerificationApplicationStatus.Rejected)
@@ -98,7 +103,7 @@ else if (_item is not null)
     }
 
     private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
-    private void Edit() => Nav.NavigateTo($"/verification-applications/{Id}/edit");
+    private void Edit() => Nav.NavigateTo(_item?.ValidationRequest is null ? $"/verification-applications/{Id}/edit" : $"/validation-requests/{Id}");
     private void Back() => Nav.NavigateTo("/verification-applications");
     private static string FormatDate(DateTime? value) => value?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "—";
     private static string StatusText(VerificationApplicationStatus status) => status switch

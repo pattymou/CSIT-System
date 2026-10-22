@@ -8,47 +8,61 @@
         @switch (Field.FieldType)
         {
             case "TextArea":
-                <textarea value="@TextValue" @oninput="SetText"></textarea>
+                <textarea value="@TextValue" @oninput="SetText" disabled="@ReadOnly"></textarea>
                 break;
             case "SensitiveText":
-                <input type="password" value="@TextValue" @oninput="SetText" autocomplete="new-password" placeholder="••••••••" />
+                <input type="password" value="@TextValue" @oninput="SetText" disabled="@ReadOnly" autocomplete="new-password" placeholder="••••••••" />
                 break;
             case "Number":
-                <input type="number" value="@TextValue" @oninput="SetText" />
+                <input type="number" value="@TextValue" @oninput="SetText" disabled="@ReadOnly" />
                 break;
             case "Dropdown":
             case "SingleSelect":
                 @if (Field.DataSource == "ValidationProductType")
                 {
-                    <select value="@TextValue" @onchange="SetProductType"><option value="">請選擇</option>@foreach (var option in ProductTypes.Where(x => x.IsEnabled).OrderBy(x => x.DisplayOrder)) { <option value="@option.Code">@option.DisplayLabel</option> }</select>
+                    <select value="@TextValue" @onchange="SetProductType" disabled="@ReadOnly"><option value="">請選擇</option>@foreach (var option in ProductTypes.Where(x => x.IsEnabled).OrderBy(x => x.DisplayOrder)) { <option value="@option.Code">@option.DisplayLabel</option> }</select>
                 }
                 else
                 {
-                    <select value="@TextValue" @onchange="SetText"><option value="">請選擇</option>@foreach (var option in Field.Options.Where(x => x.IsEnabled)) { <option value="@option.ValueCode">@option.DisplayLabel</option> }</select>
+                    <select value="@TextValue" @onchange="SetText" disabled="@ReadOnly"><option value="">請選擇</option>@foreach (var option in Field.Options.Where(x => x.IsEnabled)) { <option value="@option.ValueCode">@option.DisplayLabel</option> }</select>
                 }
                 break;
             case "MultiSelect":
-                <div class="validation-choice-list">@foreach (var option in Field.Options.Where(x => x.IsEnabled)) { <label><input type="checkbox" checked="@Contains(option.ValueCode)" @onchange="e => SetMulti(option.ValueCode, e)" /> @option.DisplayLabel</label> }</div>
+                <div class="validation-choice-list">@foreach (var option in Field.Options.Where(x => x.IsEnabled)) { <label><input type="checkbox" checked="@Contains(option.ValueCode)" disabled="@ReadOnly" @onchange="e => SetMulti(option.ValueCode, e)" /> @option.DisplayLabel</label> }</div>
                 break;
             case "Checkbox":
-                <label class="validation-checkbox"><input type="checkbox" checked="@BoolValue" @onchange="SetBool" /> 是</label>
+                <label class="validation-checkbox"><input type="checkbox" checked="@BoolValue" disabled="@ReadOnly" @onchange="SetBool" /> 是</label>
                 break;
             case "Attachment":
                 <div class="validation-upload-placeholder" aria-disabled="true"><span>附件</span><small>附件上傳功能將於下一階段啟用</small></div>
                 break;
             case "Lookup":
-                <select disabled><option>請選擇系統資料</option></select>
+                <input value="@TextValue" @oninput="SetText" disabled="@ReadOnly" />
                 break;
             case "RepeatableText":
-                <div class="validation-repeatable"><input value="@TextValue" @oninput="SetText" /><button type="button" disabled>＋ 新增</button></div>
+                <div class="validation-repeatable">
+                    @for (var index = 0; index < RepeatableTextCount; index++)
+                    {
+                        var row = index;
+                        <div><input value="@TextAt(row)" @oninput="e => SetTextAt(row, e)" disabled="@ReadOnly" />@if (!ReadOnly && RepeatableTextCount > 1) { <button type="button" @onclick="() => RemoveTextRow(row)">移除</button> }</div>
+                    }
+                    @if (!ReadOnly) { <button type="button" @onclick="AddTextRow">＋ 新增</button> }
+                </div>
+                break;
+            case "RepeatableGroup":
+                @for (var index = 0; index < RepeatableGroupCount; index++)
+                {
+                    var row = index;
+                    <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" ReadOnly="ReadOnly" ValueIndex="row" /> }</div>
+                    @if (!ReadOnly && RepeatableGroupCount > 1) { <button type="button" class="validation-add-row" @onclick="() => RemoveGroupRow(row)">移除此組</button> }
+                }
+                @if (!ReadOnly) { <button type="button" class="validation-add-row" @onclick="AddGroupRow">＋ 新增一組</button> }
                 break;
             case "Group":
-            case "RepeatableGroup":
-                <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" /> }</div>
-                @if (Field.FieldType == "RepeatableGroup") { <button type="button" class="validation-add-row" disabled>＋ 新增一組</button> }
+                <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" ReadOnly="ReadOnly" /> }</div>
                 break;
             default:
-                <input value="@TextValue" @oninput="SetText" />
+                <input value="@TextValue" @oninput="SetText" disabled="@ReadOnly" />
                 break;
         }
     </div>
@@ -56,30 +70,41 @@
 
 @code {
     [Parameter, EditorRequired] public ValidationFieldDto Field { get; set; } = null!;
-    [Parameter, EditorRequired] public Dictionary<string, object?> Values { get; set; } = null!;
+    [Parameter, EditorRequired] public Dictionary<string, List<string>> Values { get; set; } = null!;
     [Parameter] public EventCallback ValuesChanged { get; set; }
     [Parameter] public IReadOnlyList<ValidationProductTypeDto> ProductTypes { get; set; } = [];
     [Parameter] public EventCallback<string> ProductTypeChanged { get; set; }
-    private string TextValue => Values.TryGetValue(Field.Code, out var v) ? v?.ToString() ?? "" : "";
-    private bool BoolValue => Values.TryGetValue(Field.Code, out var v) && v is true;
-    private bool Contains(string value) => Values.TryGetValue(Field.Code, out var v) && v is HashSet<string> set && set.Contains(value);
+    [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public int? ValueIndex { get; set; }
+    private string TextValue => TextAt(ValueIndex ?? 0);
+    private bool BoolValue => string.Equals(TextValue, "true", StringComparison.OrdinalIgnoreCase);
+    private bool Contains(string value) => Values.TryGetValue(Field.Code, out var v) && v.Contains(value, StringComparer.OrdinalIgnoreCase);
     private bool IsVisible => Field.Conditions.Where(x => x.Action == "Visible").All(Evaluate);
     private bool IsRequired => Field.IsRequired || Field.Conditions.Where(x => x.Action == "Required").Any(Evaluate);
     private string WidthClass => Field.FieldType is "TextArea" or "Attachment" or "Group" or "RepeatableGroup" or "RepeatableText" || Field.DisplayLabel.Length > 42 ? "validation-field-wide" : "";
     private bool Evaluate(ValidationConditionDto c)
     {
-        Values.TryGetValue(c.SourceFieldCode, out var value); var expected = c.ExpectedValue ?? "";
+        Values.TryGetValue(c.SourceFieldCode, out var value); value ??= []; var expected = c.ExpectedValue ?? "";
         return c.Operator switch
         {
-            "Equals" => string.Equals(value?.ToString(), expected, StringComparison.OrdinalIgnoreCase),
-            "NotEquals" => !string.Equals(value?.ToString(), expected, StringComparison.OrdinalIgnoreCase),
-            "Contains" => value is HashSet<string> set && set.Contains(expected),
-            "NotContains" => value is not HashSet<string> set || !set.Contains(expected),
-            "IsTrue" => value is true, "IsFalse" => value is false, _ => false
+            "Equals" => value.Any(x => string.Equals(x, expected, StringComparison.OrdinalIgnoreCase)),
+            "NotEquals" => value.All(x => !string.Equals(x, expected, StringComparison.OrdinalIgnoreCase)),
+            "Contains" => value.Contains(expected, StringComparer.OrdinalIgnoreCase),
+            "NotContains" => !value.Contains(expected, StringComparer.OrdinalIgnoreCase),
+            "IsTrue" => value.Any(x => string.Equals(x, "true", StringComparison.OrdinalIgnoreCase)),
+            "IsFalse" => value.All(x => !string.Equals(x, "true", StringComparison.OrdinalIgnoreCase)), _ => false
         };
     }
-    private async Task SetText(ChangeEventArgs e) { Values[Field.Code] = e.Value?.ToString(); await ValuesChanged.InvokeAsync(); }
-    private async Task SetProductType(ChangeEventArgs e) { var code = e.Value?.ToString() ?? ""; Values[Field.Code] = code; await ValuesChanged.InvokeAsync(); await ProductTypeChanged.InvokeAsync(code); }
-    private async Task SetBool(ChangeEventArgs e) { Values[Field.Code] = e.Value is true || string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase); await ValuesChanged.InvokeAsync(); }
-    private async Task SetMulti(string value, ChangeEventArgs e) { if (!Values.TryGetValue(Field.Code, out var current) || current is not HashSet<string> set) Values[Field.Code] = set = []; if (e.Value is true || e.Value?.ToString() == "true") set.Add(value); else set.Remove(value); await ValuesChanged.InvokeAsync(); }
+    private int RepeatableTextCount => Math.Max(1, Values.TryGetValue(Field.Code, out var values) ? values.Count : 0);
+    private int RepeatableGroupCount => Math.Max(1, Field.Children.Select(x => Values.TryGetValue(x.Code, out var values) ? values.Count : 0).DefaultIfEmpty().Max());
+    private string TextAt(int index) => Values.TryGetValue(Field.Code, out var values) && index < values.Count ? values[index] : "";
+    private async Task SetText(ChangeEventArgs e) => await SetTextAt(ValueIndex ?? 0, e);
+    private async Task SetTextAt(int index, ChangeEventArgs e) { if (!Values.TryGetValue(Field.Code, out var values)) Values[Field.Code] = values = []; while (values.Count <= index) values.Add(""); values[index] = e.Value?.ToString() ?? ""; await ValuesChanged.InvokeAsync(); }
+    private async Task SetProductType(ChangeEventArgs e) { var code = e.Value?.ToString() ?? ""; Values[Field.Code] = [code]; await ValuesChanged.InvokeAsync(); await ProductTypeChanged.InvokeAsync(code); }
+    private async Task SetBool(ChangeEventArgs e) { Values[Field.Code] = [string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase) ? "true" : "false"]; await ValuesChanged.InvokeAsync(); }
+    private async Task SetMulti(string value, ChangeEventArgs e) { if (!Values.TryGetValue(Field.Code, out var set)) Values[Field.Code] = set = []; if (string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase)) { if (!set.Contains(value, StringComparer.OrdinalIgnoreCase)) set.Add(value); } else set.RemoveAll(x => string.Equals(x, value, StringComparison.OrdinalIgnoreCase)); await ValuesChanged.InvokeAsync(); }
+    private void AddTextRow() { if (!Values.TryGetValue(Field.Code, out var values)) Values[Field.Code] = values = []; values.Add(""); }
+    private void RemoveTextRow(int index) { if (Values.TryGetValue(Field.Code, out var values) && index < values.Count) values.RemoveAt(index); }
+    private void AddGroupRow() { foreach (var child in Field.Children) { if (!Values.TryGetValue(child.Code, out var values)) Values[child.Code] = values = []; values.Add(""); } }
+    private void RemoveGroupRow(int index) { foreach (var child in Field.Children) if (Values.TryGetValue(child.Code, out var values) && index < values.Count) values.RemoveAt(index); }
 }

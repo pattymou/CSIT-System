@@ -39,8 +39,8 @@
                         <div class="validation-fields">
                             @foreach (var field in group.Fields)
                             {
-                                <ValidationRequestFieldPreview Field="field" Values="_values" ValuesChanged="StateHasChanged"
-                                                               ProductTypes="ProductTypes" ProductTypeChanged="HandleProductTypeChanged" />
+                                <ValidationRequestFieldPreview Field="field" Values="Values" ValuesChanged="StateHasChanged"
+                                                               ProductTypes="ProductTypes" ProductTypeChanged="HandleProductTypeChanged" ReadOnly="ReadOnly" />
                             }
                         </div>
                     </section>
@@ -60,11 +60,20 @@
                             @foreach (var item in category.TestItems.Where(x => x.IsEnabled))
                             {
                                 <label class="validation-test-item @(item.IsMandatory ? "mandatory" : null)">
-                                    <input type="checkbox" checked="@item.IsMandatory" disabled="@item.IsMandatory" />
+                                    <input type="checkbox" checked="@IsSelected(item)" disabled="@(ReadOnly || item.IsMandatory)" @onchange="e => SetTestItem(item, e)" />
                                     <span><strong>@item.DisplayLabel</strong><small>@(item.IsMandatory ? "必選" : "可選")</small>
                                         @if (!string.IsNullOrWhiteSpace(item.Description)) { <small>@item.Description</small> }
                                     </span>
                                 </label>
+                                @if (IsSelected(item) && item.Parameters.Count > 0)
+                                {
+                                    <div class="validation-test-parameters">
+                                        @foreach (var parameter in item.Parameters.Where(x => x.IsEnabled))
+                                        {
+                                            <ValidationRequestParameterInput Parameter="parameter" Values="ParameterValues(item.Code)" ReadOnly="ReadOnly" />
+                                        }
+                                    </div>
+                                }
                             }
                         </div>
                     </div>
@@ -81,7 +90,10 @@
     [Parameter] public string SelectedProductCode { get; set; } = "";
     [Parameter] public EventCallback<string> SelectedProductCodeChanged { get; set; }
     [Parameter] public bool ShowPreviewBadge { get; set; }
-    private readonly Dictionary<string, object?> _values = new(StringComparer.OrdinalIgnoreCase);
+    [Parameter] public Dictionary<string, List<string>> Values { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    [Parameter] public HashSet<string> SelectedTestItemCodes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    [Parameter] public Dictionary<string, Dictionary<string, List<string>>> TestParameterValues { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    [Parameter] public bool ReadOnly { get; set; }
     private string? _activeTab;
     private string? _lastProductCode;
     private ValidationSectionDto? ActiveSection => Preview?.Sections.FirstOrDefault(x => x.Code == _activeTab);
@@ -92,7 +104,9 @@
         if (_lastProductCode != Preview.ProductTypeCode)
         {
             _lastProductCode = Preview.ProductTypeCode;
-            _values["PRODUCT_TYPE"] = Preview.ProductTypeCode;
+            Values["PRODUCT_TYPE"] = [Preview.ProductTypeCode];
+            foreach (var mandatory in Preview.TestCategories.SelectMany(x => x.TestItems).Where(x => x.IsEnabled && x.IsMandatory))
+                SelectedTestItemCodes.Add(mandatory.Code);
         }
         if (_activeTab is null || (_activeTab != TestItemsTab && Preview.Sections.All(x => x.Code != _activeTab)))
             _activeTab = Preview.Sections.FirstOrDefault()?.Code ?? TestItemsTab;
@@ -100,7 +114,21 @@
 
     private async Task HandleProductTypeChanged(string code)
     {
-        _values["PRODUCT_TYPE"] = code;
+        Values["PRODUCT_TYPE"] = [code];
         if (SelectedProductCodeChanged.HasDelegate) await SelectedProductCodeChanged.InvokeAsync(code);
+    }
+
+    private bool IsSelected(ValidationTestItemDto item) => item.IsMandatory || SelectedTestItemCodes.Contains(item.Code);
+    private void SetTestItem(ValidationTestItemDto item, ChangeEventArgs e)
+    {
+        if (item.IsMandatory || ReadOnly) return;
+        if (string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase)) SelectedTestItemCodes.Add(item.Code);
+        else SelectedTestItemCodes.Remove(item.Code);
+    }
+    private Dictionary<string, List<string>> ParameterValues(string itemCode)
+    {
+        if (!TestParameterValues.TryGetValue(itemCode, out var values))
+            TestParameterValues[itemCode] = values = new(StringComparer.OrdinalIgnoreCase);
+        return values;
     }
 }

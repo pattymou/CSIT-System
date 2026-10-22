@@ -64,7 +64,7 @@ public sealed class ValidationRequestConfigurationService(IDbContextFactory<AppD
             .Select(x => x.TestItemCategoryId).ToListAsync(ct);
         var sections = (await LoadSections(db, version.Id, ct)).Where(x => x.AlwaysVisible || sectionIds.Contains(x.Id)).ToList();
         var categories = (await LoadCategories(db, version.Id, ct)).Where(x => x.AlwaysVisible || categoryIds.Contains(x.Id)).ToList();
-        return new(template.Code, version.VersionNumber, product.Code, product.DisplayLabel, sections, categories);
+        return new(template.Code, version.Id, version.VersionNumber, product.Code, product.DisplayLabel, sections, categories);
     }
 
     public async Task<Guid> SaveProductTypeAsync(Guid? id, SaveValidationProductTypeRequest request, CancellationToken ct = default)

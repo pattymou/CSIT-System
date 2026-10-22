@@ -71,7 +71,7 @@ else
     }
 
     private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
-    private void Create() => Nav.NavigateTo("/verification-applications/new");
+    private void Create() => Nav.NavigateTo("/validation-requests");
     private void Open(Guid id) => Nav.NavigateTo($"/verification-applications/{id}");
     private static string FormatDate(DateTime? value) => value?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "—";
     private static string FormatDate(DateTime value) => value.ToLocalTime().ToString("yyyy-MM-dd HH:mm");

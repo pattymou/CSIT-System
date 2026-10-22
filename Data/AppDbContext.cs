@@ -274,6 +274,10 @@ public class AppDbContext : DbContext
             entity.Property(x => x.SampleMacAddress).HasColumnName("sample_mac_address").HasMaxLength(200);
             entity.Property(x => x.UtilityVersion).HasColumnName("utility_version").HasMaxLength(200);
             entity.Property(x => x.DspModel).HasColumnName("dsp_model").HasMaxLength(200);
+            entity.Property(x => x.ValidationTemplateVersionId).HasColumnName("validation_template_version_id");
+            entity.Property(x => x.ValidationTemplateVersionNumber).HasColumnName("validation_template_version_number");
+            entity.Property(x => x.ValidationProductTypeCode).HasColumnName("validation_product_type_code").HasMaxLength(100);
+            entity.Property(x => x.ValidationFormPayloadJson).HasColumnName("validation_form_payload_json").HasColumnType("jsonb");
             entity.Property(x => x.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(20).IsRequired();
             entity.Property(x => x.ModuleRecordId).HasColumnName("module_record_id");
             entity.Property(x => x.SubmittedAt).HasColumnName("submitted_at");

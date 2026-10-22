@@ -79,6 +79,10 @@ public class VerificationApplication
     public string? SampleMacAddress { get; private set; }
     public string? UtilityVersion { get; private set; }
     public string? DspModel { get; private set; }
+    public Guid? ValidationTemplateVersionId { get; private set; }
+    public int? ValidationTemplateVersionNumber { get; private set; }
+    public string? ValidationProductTypeCode { get; private set; }
+    public string? ValidationFormPayloadJson { get; private set; }
 
     public VerificationApplicationStatus Status { get; private set; } = VerificationApplicationStatus.Draft;
     public Guid? ModuleRecordId { get; private set; }
@@ -132,6 +136,20 @@ public class VerificationApplication
         RoutingDepartmentOptionId = routingDepartmentOptionId;
         TeamOptionId = teamOptionId;
         ApplyContent(content);
+        UpdatedAt = now;
+    }
+
+    public void SetValidationRequest(Guid templateVersionId, int templateVersionNumber, string productTypeCode, string payloadJson, DateTime now)
+    {
+        EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
+        if (templateVersionId == Guid.Empty) throw new ArgumentException("Template version is required.", nameof(templateVersionId));
+        if (templateVersionNumber <= 0) throw new ArgumentOutOfRangeException(nameof(templateVersionNumber));
+        if (string.IsNullOrWhiteSpace(productTypeCode)) throw new ArgumentException("Product type is required.", nameof(productTypeCode));
+        if (string.IsNullOrWhiteSpace(payloadJson)) throw new ArgumentException("Validation form payload is required.", nameof(payloadJson));
+        ValidationTemplateVersionId = templateVersionId;
+        ValidationTemplateVersionNumber = templateVersionNumber;
+        ValidationProductTypeCode = productTypeCode.Trim();
+        ValidationFormPayloadJson = payloadJson;
         UpdatedAt = now;
     }
 
