@@ -7,6 +7,7 @@
 @inject IVerificationApplicationService VerificationApplications
 @inject AuthenticationStateProvider AuthProvider
 @inject IAuthorizationService AuthorizationService
+@inject NavigationManager Nav
 
 <PageTitle>主管審核中心</PageTitle>
 <h1>主管審核中心</h1>
@@ -55,8 +56,11 @@ else
                         <tbody>
                         @foreach (var item in _verificationItems)
                         {
-                            <tr>
-                                <td><a class="table-link-btn" href="@($"/verification-reviews/{item.Id}")">@item.ApplicationNo</a></td>
+                            <tr class="clickable-row verification-review-row" tabindex="0" role="link"
+                                aria-label="@($"開啟驗證申請 {item.ApplicationNo}")"
+                                @onclick="() => OpenVerification(item.Id)"
+                                @onkeydown="e => OpenVerificationByKeyboard(e, item.Id)">
+                                <td><strong>@item.ApplicationNo</strong></td>
                                 <td>@Display(item.ProductModel ?? item.ProjectName)</td>
                                 <td>@Display(item.ValidationRequest?.FormSnapshot?.ProductTypeLabel ?? item.ValidationRequest?.ProductTypeCode)</td>
                                 <td>@Display(item.TeamName ?? item.TeamCode)</td>
@@ -201,6 +205,11 @@ else
     }
 
     private async Task ApproveAsync(Guid id) => await ExecuteAsync(user => Submissions.ApproveAsync(id, user), "已核准，資料正在正式寫入中。", id);
+    private void OpenVerification(Guid id) => Nav.NavigateTo($"/verification-reviews/{id}");
+    private void OpenVerificationByKeyboard(KeyboardEventArgs args, Guid id)
+    {
+        if (args.Key is "Enter" or " ") OpenVerification(id);
+    }
     private async Task RetryAsync(Guid id) => await ExecuteAsync(user => Submissions.RetryAsync(id, user), "已重新排入正式提交。");
     private void BeginReject(Guid id) { _rejectingId = id; _rejectReason = null; _message = null; _successMessage = null; }
     private void CancelReject() { _rejectingId = null; _rejectReason = null; }

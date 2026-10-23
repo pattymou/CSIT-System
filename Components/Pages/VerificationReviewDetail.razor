@@ -11,25 +11,26 @@
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject NavigationManager Nav
 
-<h3 class="page-title">驗證申請審核明細</h3>
-
 @if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card @(_error ? "error-text" : "review-success")">@_message</div> }
 @if (_loading) { <div class="surface-card">載入中...</div> }
 else if (_item is not null)
 {
     <div class="surface-card">
-        <div class="detail-grid">
-            <div><span>申請編號</span><strong>@_item.ApplicationNo</strong></div>
-            <div><span>狀態</span><strong>待審核</strong></div>
-            <div><span>Department</span><strong>@Display(_item.RoutingDepartmentName ?? _item.RoutingDepartmentCode)</strong></div>
-            <div><span>Team</span><strong>@Display(_item.TeamName)</strong></div>
-            <div><span>申請人</span><strong>@_item.ApplicantName (@_item.ApplicantAccount)</strong></div>
-            <div><span>申請人部門／Email</span><strong>@_item.Department／@_item.ApplicantEmail</strong></div>
-            <div><span>Model Name</span><strong>@Display(_item.ProjectName)</strong></div>
-            <div><span>Product Type</span><strong>@Display(_item.ValidationRequest?.FormSnapshot?.ProductTypeLabel ?? _item.ValidationRequest?.ProductTypeCode)</strong></div>
-            <div><span>送出時間</span><strong>@FormatDate(_item.SubmittedAt)</strong></div>
-            <div class="full"><span>驗證需求摘要</span><div>@Display(_item.ValidationRequirement)</div></div>
-        </div>
+        @if (_item.ValidationRequest?.FormSnapshot is null)
+        {
+            <div class="detail-grid">
+                <div><span>申請編號</span><strong>@_item.ApplicationNo</strong></div>
+                <div><span>狀態</span><strong>待審核</strong></div>
+                <div><span>Department</span><strong>@Display(_item.RoutingDepartmentName ?? _item.RoutingDepartmentCode)</strong></div>
+                <div><span>Team</span><strong>@Display(_item.TeamName)</strong></div>
+                <div><span>申請人</span><strong>@_item.ApplicantName (@_item.ApplicantAccount)</strong></div>
+                <div><span>申請人部門／Email</span><strong>@_item.Department／@_item.ApplicantEmail</strong></div>
+                <div><span>Model Name</span><strong>@Display(_item.ProjectName)</strong></div>
+                <div><span>Product Type</span><strong>@Display(_item.ValidationRequest?.ProductTypeCode)</strong></div>
+                <div><span>送出時間</span><strong>@FormatDate(_item.SubmittedAt)</strong></div>
+                <div class="full"><span>驗證需求摘要</span><div>@Display(_item.ValidationRequirement)</div></div>
+            </div>
+        }
 
         @if (_editing && _editPreview is not null)
         {

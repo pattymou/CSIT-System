@@ -111,7 +111,9 @@ public sealed class VerificationSupervisorReviewTests
 
         Assert.Contains("_sources.Add(new ApprovalSourceDto(VerificationSourceCode, \"驗證申請\"", source);
         Assert.Contains("VerificationApplications.ListForLeaderReviewAsync", source);
-        Assert.Contains("/verification-reviews/{item.Id}", source);
+        Assert.Contains("Nav.NavigateTo($\"/verification-reviews/{id}\")", source);
+        Assert.Contains("class=\"clickable-row verification-review-row\" tabindex=\"0\" role=\"link\"", source);
+        Assert.Contains("@onkeydown=\"e => OpenVerificationByKeyboard(e, item.Id)\"", source);
         Assert.Contains("item.ValidationRequest?.FormSnapshot?.ProductTypeLabel", source);
         Assert.DoesNotContain("VerificationApplications.AcceptAsync", source);
     }
@@ -147,6 +149,9 @@ public sealed class VerificationSupervisorReviewTests
 
         Assert.Contains("<ValidationRequestSubmissionView", review);
         Assert.Contains("<ValidationRequestPreview", review);
+        Assert.DoesNotContain("<h3 class=\"page-title\">驗證申請審核明細</h3>", review);
+        Assert.Contains("@if (_item.ValidationRequest?.FormSnapshot is null)", review);
+        Assert.Contains("此為舊版驗證申請", review);
         Assert.Contains("UpdateForLeaderReviewAsync", review);
         Assert.Contains("original.FormSnapshot", service);
         Assert.Contains("GetPreviewAsync(original.TemplateVersionId", service);
