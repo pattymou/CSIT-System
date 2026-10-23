@@ -74,7 +74,7 @@ else if (_item is not null)
         if (!_expectedEndDate.HasValue) { _message = "核准前請填寫預計結束日期。"; return; }
         await ExecuteAsync((user) => Applications.AcceptAsync(Id, user, _expectedEndDate.Value));
     }
-    private void Back() => Nav.NavigateTo("/verification-reviews");
+    private void Back() => Nav.NavigateTo("/supervisor-review");
     private async Task ExecuteAsync(Func<global::System.Security.Claims.ClaimsPrincipal, Task<VerificationApplicationDto>> action)
     {
         _working = true; _message = null;
@@ -82,7 +82,7 @@ else if (_item is not null)
         {
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
             await action(user);
-            Nav.NavigateTo("/verification-reviews");
+            Nav.NavigateTo("/supervisor-review");
         }
         catch (Exception ex) { _message = ex.Message; }
         finally { _working = false; }

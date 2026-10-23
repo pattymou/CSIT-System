@@ -107,7 +107,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     {
         await _businessWrite.DemandAsync(cancellationToken);
         var account = VerificationApplicationSecurity.GetAccount(user);
-        var entity = await FindLeaderApplicationRequiredAsync(id, account, cancellationToken);
+        var entity = await FindLeaderApplicationRequiredAsync(id, user, cancellationToken);
         entity.Return(account, note, DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
         return await MapWithDraftOptionsAsync(entity, cancellationToken);
@@ -121,7 +121,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     {
         await _businessWrite.DemandAsync(cancellationToken);
         var account = VerificationApplicationSecurity.GetAccount(user);
-        var entity = await FindLeaderApplicationRequiredAsync(id, account, cancellationToken);
+        var entity = await FindLeaderApplicationRequiredAsync(id, user, cancellationToken);
         entity.Reject(account, note, DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
         return await MapWithDraftOptionsAsync(entity, cancellationToken);
@@ -151,7 +151,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                 throw new InvalidOperationException("Only Submitted applications can be accepted.");
             }
 
-            VerificationApplicationSecurity.EnsureLeaderOwnership(entity, account);
+            VerificationApplicationSecurity.EnsureReviewerAccess(entity, user);
 
             if (entity.ModuleRecordId.HasValue)
             {
@@ -218,8 +218,10 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     public async Task<VerificationApplicationDto?> GetForLeaderReviewAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
     {
         var account = VerificationApplicationSecurity.GetAccount(user);
+        var isAdmin = user.IsInRole("Admin");
         var entity = await _db.VerificationApplications.AsNoTracking().Include(x => x.Files)
-            .SingleOrDefaultAsync(x => x.Id == id && x.Status == VerificationApplicationStatus.Submitted && x.AssignedLeaderAccount == account, cancellationToken);
+            .SingleOrDefaultAsync(x => x.Id == id && x.Status == VerificationApplicationStatus.Submitted &&
+                x.ApplicantAccount != account && (isAdmin || x.AssignedLeaderAccount == account), cancellationToken);
         return entity is null ? null : await MapWithDraftOptionsAsync(entity, cancellationToken);
     }
 
@@ -240,7 +242,9 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         CancellationToken cancellationToken = default)
     {
         var account = VerificationApplicationSecurity.GetAccount(user);
-        return ListAsync(x => x.Status == VerificationApplicationStatus.Submitted && x.AssignedLeaderAccount == account, page, pageSize, cancellationToken);
+        var isAdmin = user.IsInRole("Admin");
+        return ListAsync(x => x.Status == VerificationApplicationStatus.Submitted && x.ApplicantAccount != account &&
+            (isAdmin || x.AssignedLeaderAccount == account), page, pageSize, cancellationToken);
     }
 
     public async Task<VerificationApplicationDto?> GetForCsitAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
@@ -342,12 +346,12 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         return entity;
     }
 
-    private async Task<VerificationApplication> FindLeaderApplicationRequiredAsync(Guid id, string account, CancellationToken cancellationToken)
+    private async Task<VerificationApplication> FindLeaderApplicationRequiredAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken)
     {
         var entity = await _db.VerificationApplications.SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
             ?? throw new KeyNotFoundException($"Verification application {id} was not found.");
         if (entity.Status != VerificationApplicationStatus.Submitted) throw new InvalidOperationException("Only Submitted applications can be reviewed.");
-        VerificationApplicationSecurity.EnsureLeaderOwnership(entity, account);
+        VerificationApplicationSecurity.EnsureReviewerAccess(entity, user);
         return entity;
     }
 
