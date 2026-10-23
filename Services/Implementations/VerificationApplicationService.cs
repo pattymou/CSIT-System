@@ -6,27 +6,33 @@ using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.ValidationRequests;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
 public sealed class VerificationApplicationService : IVerificationApplicationService
 {
+    private const string VerificationAuditSource = "verification-applications";
+    private const int AuditDetailsChunkSize = 900;
     private static readonly JsonSerializerOptions PayloadJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly AppDbContext _db;
     private readonly IModuleRecordCreationService _moduleRecordCreation;
     private readonly ISystemOptionService _systemOptions;
     private readonly IBusinessWriteAuthorizationGuard _businessWrite;
+    private readonly IValidationRequestConfigurationService _validationRequests;
 
     public VerificationApplicationService(
         AppDbContext db,
         IModuleRecordCreationService moduleRecordCreation,
         ISystemOptionService systemOptions,
-        IBusinessWriteAuthorizationGuard businessWrite)
+        IBusinessWriteAuthorizationGuard businessWrite,
+        IValidationRequestConfigurationService validationRequests)
     {
         _db = db;
         _moduleRecordCreation = moduleRecordCreation;
         _systemOptions = systemOptions;
         _businessWrite = businessWrite;
+        _validationRequests = validationRequests;
     }
 
     public async Task<VerificationApplicationDto> CreateDraftAsync(
@@ -82,21 +88,140 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         return await MapWithDraftOptionsAsync(entity, cancellationToken);
     }
 
-    public async Task<VerificationApplicationDto> SubmitAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    public async Task<bool> IsDirectApprovalApplicantAsync(
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default)
+    {
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        var isActiveTeamLeader = await _db.TeamRoutings.AsNoTracking().AnyAsync(x =>
+            x.IsEnabled && x.LeaderAccount.ToLower() == account, cancellationToken);
+        return VerificationApplicationSecurity.CanBypassReview(user, isActiveTeamLeader);
+    }
+
+    public async Task<VerificationApplicationDto> SubmitAsync(
+        Guid id,
+        ClaimsPrincipal user,
+        DateOnly? expectedEndDate = null,
+        CancellationToken cancellationToken = default)
     {
         await _businessWrite.DemandAsync(cancellationToken);
         var account = VerificationApplicationSecurity.GetAccount(user);
-        var entity = await FindApplicantApplicationRequiredAsync(id, account, cancellationToken);
-        ValidateValidationRequestForSubmit(entity);
-        if (!string.IsNullOrWhiteSpace(entity.ValidationFormPayloadJson))
+        var directApproval = await IsDirectApprovalApplicantAsync(user, cancellationToken);
+        var directApprovalDate = directApproval
+            ? VerificationApplicationSecurity.RequireDirectApprovalDate(expectedEndDate)
+            : default;
+        await using var transaction = await _db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted,
+            cancellationToken);
+
+        try
         {
-            var selection = await ResolveDynamicRoutingAsync(entity.ValidationFormPayloadJson, true, cancellationToken);
-            entity.UpdateDraftRouting(selection.DepartmentOptionId!.Value, selection.TeamOptionId, DateTime.UtcNow);
+            var entity = await _db.VerificationApplications
+                .FromSqlInterpolated($"SELECT * FROM verification_applications WHERE id = {id} FOR UPDATE")
+                .SingleOrDefaultAsync(cancellationToken)
+                ?? throw new KeyNotFoundException($"Verification application {id} was not found.");
+            VerificationApplicationSecurity.EnsureApplicantOwnership(entity, account);
+            ValidateValidationRequestForSubmit(entity);
+            var now = DateTime.UtcNow;
+            if (!string.IsNullOrWhiteSpace(entity.ValidationFormPayloadJson))
+            {
+                var selection = await ResolveDynamicRoutingAsync(entity.ValidationFormPayloadJson, true, cancellationToken);
+                entity.UpdateDraftRouting(selection.DepartmentOptionId!.Value, selection.TeamOptionId, now);
+            }
+            var routing = await ResolveRoutingAsync(entity.RoutingDepartmentOptionId, entity.TeamOptionId, cancellationToken);
+            entity.Submit(routing, now);
+
+            if (directApproval)
+            {
+                var reason = user.IsInRole("Admin")
+                    ? "Admin self-submission: supervisor review bypassed."
+                    : "Active Team Leader self-submission: supervisor review bypassed.";
+                await CreateRecordAndAcceptAsync(entity, directApprovalDate, account, now, reason, cancellationToken);
+                _db.ApprovalAuditEvents.Add(ApprovalAuditEvent.Create(
+                    entity.Id,
+                    VerificationAuditSource,
+                    VerificationApplicationWorkflow.ModuleCode,
+                    ApprovalAuditActions.ApprovalBypassed,
+                    account,
+                    now,
+                    null,
+                    null,
+                    details: reason));
+            }
+
+            await _db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return await MapWithDraftOptionsAsync(entity, cancellationToken);
         }
-        var routing = await ResolveRoutingAsync(entity.RoutingDepartmentOptionId, entity.TeamOptionId, cancellationToken);
-        entity.Submit(routing, DateTime.UtcNow);
-        await _db.SaveChangesAsync(cancellationToken);
-        return await MapWithDraftOptionsAsync(entity, cancellationToken);
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+    }
+
+    public async Task<VerificationApplicationDto> UpdateForLeaderReviewAsync(
+        Guid id,
+        ClaimsPrincipal user,
+        UpdateVerificationApplicationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        await _businessWrite.DemandAsync(cancellationToken);
+        ArgumentNullException.ThrowIfNull(request);
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        await using var transaction = await _db.Database.BeginTransactionAsync(
+            IsolationLevel.ReadCommitted,
+            cancellationToken);
+
+        try
+        {
+            var entity = await _db.VerificationApplications
+                .FromSqlInterpolated($"SELECT * FROM verification_applications WHERE id = {id} FOR UPDATE")
+                .SingleOrDefaultAsync(cancellationToken)
+                ?? throw new KeyNotFoundException($"Verification application {id} was not found.");
+            if (entity.Status != VerificationApplicationStatus.Submitted)
+                throw new InvalidOperationException("Only Submitted applications can be edited by a reviewer.");
+            VerificationApplicationSecurity.EnsureReviewerAccess(entity, user);
+
+            var original = DeserializeValidationRequest(entity)
+                ?? throw new InvalidOperationException("Legacy applications cannot be edited with the dynamic review editor.");
+            var edited = request.ValidationRequest
+                ?? throw new ArgumentException("The validation request is required.", nameof(request));
+            if (edited.TemplateVersionId != original.TemplateVersionId || edited.TemplateVersion != original.TemplateVersion)
+                throw new InvalidOperationException("The original validation form version cannot be changed during review.");
+
+            edited.FormSnapshot = string.Equals(edited.ProductTypeCode, original.ProductTypeCode, StringComparison.OrdinalIgnoreCase)
+                ? original.FormSnapshot ?? throw new InvalidOperationException("The original validation form snapshot is missing.")
+                : await _validationRequests.GetPreviewAsync(original.TemplateVersionId, edited.ProductTypeCode, cancellationToken);
+            ValidateSubmissionSnapshot(edited);
+            var prepared = await PrepareDraftAsync(request, cancellationToken);
+            var selection = await ResolveDynamicRoutingAsync(edited, true, cancellationToken);
+            var routing = await ResolveRoutingAsync(selection.DepartmentOptionId, selection.TeamOptionId, cancellationToken);
+            var before = AuditContent(entity.RoutingDepartmentOptionId, entity.TeamOptionId, original);
+            var now = DateTime.UtcNow;
+            var payloadJson = JsonSerializer.Serialize(edited, PayloadJsonOptions);
+            entity.UpdateSubmittedContent(
+                routing,
+                prepared.Content,
+                edited.TemplateVersionId,
+                edited.TemplateVersion,
+                edited.ProductTypeCode,
+                payloadJson,
+                now);
+            ValidateValidationRequestForSubmit(entity);
+            AddEditAudit(entity, account, now, before,
+                AuditContent(routing.RoutingDepartmentOptionId, routing.TeamOptionId, edited));
+            await _db.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+            return await MapWithDraftOptionsAsync(entity, cancellationToken);
+        }
+        catch
+        {
+            await transaction.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
     }
 
     public async Task<VerificationApplicationDto> ReturnAsync(
@@ -135,6 +260,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     {
         await _businessWrite.DemandAsync(cancellationToken);
         var account = VerificationApplicationSecurity.GetAccount(user);
+        VerificationApplicationSecurity.RequireDirectApprovalDate(expectedEndDate);
         await using var transaction = await _db.Database.BeginTransactionAsync(
             IsolationLevel.ReadCommitted,
             cancellationToken);
@@ -153,45 +279,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
 
             VerificationApplicationSecurity.EnsureReviewerAccess(entity, user);
 
-            if (entity.ModuleRecordId.HasValue)
-            {
-                throw new InvalidOperationException("The application already has a ModuleRecord.");
-            }
-
-            var moduleCode = string.IsNullOrWhiteSpace(entity.ModuleCode)
-                ? throw new InvalidOperationException("The submitted application has no resolved ModuleCode.")
-                : entity.ModuleCode;
-
-            var moduleRecord = await _moduleRecordCreation.CreateAsync(new ModuleRecordCreationRequest
-            {
-                ModuleCode = moduleCode,
-                Name = entity.ProjectName,
-                Customer = entity.Customer,
-                Status = "Open",
-                Progress = 0,
-                ExpectedEndDate = expectedEndDate,
-                SampleReadyDate = entity.SampleReadyDate,
-                ApplicantNote = entity.ValidationRequirement,
-                Npi = entity.Npi,
-                HardwareVersion = entity.HardwareVersion,
-                SoftwareVersion = entity.SoftwareVersion,
-                Location = entity.Location,
-                Department = entity.RoutingDepartmentCode,
-                Team = entity.TeamCode,
-                RequestDepartment = entity.Department,
-                RequestApplicant = entity.ApplicantName,
-                SubPu = entity.SubPu,
-                FirmwareVersion = entity.FirmwareVersion,
-                WirelessDrive = entity.WirelessDrive,
-                CustomerProductName = entity.ProductModel,
-                Chipset = entity.Chipset,
-                SampleMacAddress = entity.SampleMacAddress,
-                UtilityVersion = entity.UtilityVersion,
-                DspModel = entity.DspModel,
-                JiraLink = entity.JiraLink
-            }, cancellationToken);
-
-            entity.Accept(moduleRecord.Id, expectedEndDate, account, DateTime.UtcNow);
+            await CreateRecordAndAcceptAsync(entity, expectedEndDate, account, DateTime.UtcNow, null, cancellationToken);
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return await MapWithDraftOptionsAsync(entity, cancellationToken);
@@ -505,11 +593,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     private static void SaveValidationRequest(VerificationApplication entity, ValidationRequestSubmissionDto? request, DateTime now)
     {
         if (request is null) return;
-        if (request.FormSnapshot is null) throw new ArgumentException("The validation form snapshot is required.");
-        if (request.TemplateVersionId != request.FormSnapshot.TemplateVersionId || request.TemplateVersion != request.FormSnapshot.TemplateVersion)
-            throw new ArgumentException("The validation form version does not match its snapshot.");
-        if (!string.Equals(request.ProductTypeCode, request.FormSnapshot.ProductTypeCode, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("The validation product type does not match its snapshot.");
+        ValidateSubmissionSnapshot(request);
         entity.SetValidationRequest(request.TemplateVersionId, request.TemplateVersion, request.ProductTypeCode,
             JsonSerializer.Serialize(request, PayloadJsonOptions), now);
     }
@@ -573,6 +657,108 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             "IsFalse" => actual.All(x => !string.Equals(x, "true", StringComparison.OrdinalIgnoreCase)),
             _ => false
         };
+    }
+
+    private async Task CreateRecordAndAcceptAsync(
+        VerificationApplication entity,
+        DateOnly expectedEndDate,
+        string processedBy,
+        DateTime now,
+        string? processingNote,
+        CancellationToken cancellationToken)
+    {
+        if (entity.ModuleRecordId.HasValue)
+            throw new InvalidOperationException("The application already has a ModuleRecord.");
+        var moduleCode = string.IsNullOrWhiteSpace(entity.ModuleCode)
+            ? throw new InvalidOperationException("The submitted application has no resolved ModuleCode.")
+            : entity.ModuleCode;
+        var moduleRecord = await _moduleRecordCreation.CreateAsync(new ModuleRecordCreationRequest
+        {
+            ModuleCode = moduleCode,
+            Name = entity.ProjectName,
+            Customer = entity.Customer,
+            Status = "Open",
+            Progress = 0,
+            ExpectedEndDate = expectedEndDate,
+            SampleReadyDate = entity.SampleReadyDate,
+            ApplicantNote = entity.ValidationRequirement,
+            Npi = entity.Npi,
+            HardwareVersion = entity.HardwareVersion,
+            SoftwareVersion = entity.SoftwareVersion,
+            Location = entity.Location,
+            Department = entity.RoutingDepartmentCode,
+            Team = entity.TeamCode,
+            RequestDepartment = entity.Department,
+            RequestApplicant = entity.ApplicantName,
+            SubPu = entity.SubPu,
+            FirmwareVersion = entity.FirmwareVersion,
+            WirelessDrive = entity.WirelessDrive,
+            CustomerProductName = entity.ProductModel,
+            Chipset = entity.Chipset,
+            SampleMacAddress = entity.SampleMacAddress,
+            UtilityVersion = entity.UtilityVersion,
+            DspModel = entity.DspModel,
+            JiraLink = entity.JiraLink
+        }, cancellationToken);
+        entity.Accept(moduleRecord.Id, expectedEndDate, processedBy, now, processingNote);
+    }
+
+    private static ValidationRequestSubmissionDto? DeserializeValidationRequest(VerificationApplication entity) =>
+        string.IsNullOrWhiteSpace(entity.ValidationFormPayloadJson)
+            ? null
+            : JsonSerializer.Deserialize<ValidationRequestSubmissionDto>(entity.ValidationFormPayloadJson, PayloadJsonOptions);
+
+    private static void ValidateSubmissionSnapshot(ValidationRequestSubmissionDto request)
+    {
+        if (request.FormSnapshot is null)
+            throw new ArgumentException("The validation form snapshot is required.");
+        if (request.TemplateVersionId != request.FormSnapshot.TemplateVersionId ||
+            request.TemplateVersion != request.FormSnapshot.TemplateVersion)
+            throw new ArgumentException("The validation form version does not match its snapshot.");
+        if (!string.Equals(request.ProductTypeCode, request.FormSnapshot.ProductTypeCode, StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("The validation product type does not match its snapshot.");
+    }
+
+    private static object AuditContent(
+        Guid? departmentOptionId,
+        Guid? teamOptionId,
+        ValidationRequestSubmissionDto request) => new
+    {
+        DepartmentOptionId = departmentOptionId,
+        TeamOptionId = teamOptionId,
+        request.TemplateVersionId,
+        request.TemplateVersion,
+        request.ProductTypeCode,
+        request.FieldValues,
+        SelectedTestItemCodes = request.SelectedTestItemCodes.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+        request.TestParameterValues
+    };
+
+    private void AddEditAudit(
+        VerificationApplication entity,
+        string actor,
+        DateTime now,
+        object before,
+        object after)
+    {
+        var details = JsonSerializer.Serialize(new { entity.ApplicationNo, Before = before, After = after }, PayloadJsonOptions);
+        var chunkCount = Math.Max(1, (details.Length + AuditDetailsChunkSize - 1) / AuditDetailsChunkSize);
+        for (var index = 0; index < chunkCount; index++)
+        {
+            var offset = index * AuditDetailsChunkSize;
+            var length = Math.Min(AuditDetailsChunkSize, details.Length - offset);
+            var chunk = $"part {index + 1}/{chunkCount}:" + details.Substring(offset, length);
+            _db.ApprovalAuditEvents.Add(ApprovalAuditEvent.Create(
+                entity.Id,
+                VerificationAuditSource,
+                VerificationApplicationWorkflow.ModuleCode,
+                ApprovalAuditActions.VerificationContentEdited,
+                actor,
+                now,
+                null,
+                null,
+                details: chunk));
+        }
     }
 
     private static void EnsureCsitStaff(ClaimsPrincipal user)

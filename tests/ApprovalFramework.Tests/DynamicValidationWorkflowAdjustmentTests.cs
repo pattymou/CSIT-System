@@ -121,7 +121,7 @@ public sealed class DynamicValidationWorkflowAdjustmentTests
         Assert.Contains("_productTeamOptionId", settings);
 
         var review = Read("Components", "Pages", "VerificationReviewDetail.razor");
-        Assert.Contains("預計結束日期（核准必填）", review);
+        Assert.Contains("預計結束日期（同意必填）", review);
         Assert.Contains("_expectedEndDate.Value", review);
     }
 

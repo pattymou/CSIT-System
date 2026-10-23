@@ -162,6 +162,26 @@ public class VerificationApplication
         UpdatedAt = now;
     }
 
+    public void UpdateSubmittedContent(
+        VerificationApplicationRouting routing,
+        VerificationApplicationContent content,
+        Guid templateVersionId,
+        int templateVersionNumber,
+        string productTypeCode,
+        string payloadJson,
+        DateTime now)
+    {
+        EnsureStatus(VerificationApplicationStatus.Submitted);
+        ArgumentNullException.ThrowIfNull(routing);
+        ApplyContent(content);
+        RoutingDepartmentOptionId = routing.RoutingDepartmentOptionId;
+        TeamOptionId = routing.TeamOptionId;
+        ApplyRouting(routing);
+        SetValidationRequestValues(templateVersionId, templateVersionNumber, productTypeCode, payloadJson);
+        EnsureSubmitRequirements();
+        UpdatedAt = now;
+    }
+
     public void Submit(VerificationApplicationRouting routing, DateTime now)
     {
         EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
@@ -170,13 +190,7 @@ public class VerificationApplication
             throw new InvalidOperationException("Resolved Team does not match the application.");
         if (RoutingDepartmentOptionId != routing.RoutingDepartmentOptionId)
             throw new InvalidOperationException("Resolved Department does not match the application.");
-        RoutingDepartmentCode = RequiredRoutingValue(routing.RoutingDepartmentCode, nameof(routing.RoutingDepartmentCode));
-        RoutingDepartmentName = RequiredRoutingValue(routing.RoutingDepartmentName, nameof(routing.RoutingDepartmentName));
-        TeamCode = RequiredRoutingValue(routing.TeamCode, nameof(routing.TeamCode));
-        TeamName = RequiredRoutingValue(routing.TeamName, nameof(routing.TeamName));
-        ModuleCode = RequiredRoutingValue(routing.ModuleCode, nameof(routing.ModuleCode));
-        AssignedLeaderAccount = RequiredRoutingValue(routing.AssignedLeaderAccount, nameof(routing.AssignedLeaderAccount));
-        AssignedLeaderDisplayName = Clean(routing.AssignedLeaderDisplayName);
+        ApplyRouting(routing);
         EnsureSubmitRequirements();
         Status = VerificationApplicationStatus.Submitted;
         SubmittedAt = now;
@@ -206,7 +220,7 @@ public class VerificationApplication
         SetProcessing(processedBy, note, now);
     }
 
-    public void Accept(Guid moduleRecordId, DateOnly expectedEndDate, string processedBy, DateTime now)
+    public void Accept(Guid moduleRecordId, DateOnly expectedEndDate, string processedBy, DateTime now, string? processingNote = null)
     {
         EnsureStatus(VerificationApplicationStatus.Submitted);
         if (ModuleRecordId.HasValue)
@@ -219,7 +233,30 @@ public class VerificationApplication
         ExpectedEndDate = expectedEndDate;
         Status = VerificationApplicationStatus.Accepted;
         AcceptedAt = now;
-        SetProcessing(processedBy, null, now);
+        SetProcessing(processedBy, processingNote, now);
+    }
+
+    private void ApplyRouting(VerificationApplicationRouting routing)
+    {
+        RoutingDepartmentCode = RequiredRoutingValue(routing.RoutingDepartmentCode, nameof(routing.RoutingDepartmentCode));
+        RoutingDepartmentName = RequiredRoutingValue(routing.RoutingDepartmentName, nameof(routing.RoutingDepartmentName));
+        TeamCode = RequiredRoutingValue(routing.TeamCode, nameof(routing.TeamCode));
+        TeamName = RequiredRoutingValue(routing.TeamName, nameof(routing.TeamName));
+        ModuleCode = RequiredRoutingValue(routing.ModuleCode, nameof(routing.ModuleCode));
+        AssignedLeaderAccount = RequiredRoutingValue(routing.AssignedLeaderAccount, nameof(routing.AssignedLeaderAccount));
+        AssignedLeaderDisplayName = Clean(routing.AssignedLeaderDisplayName);
+    }
+
+    private void SetValidationRequestValues(Guid templateVersionId, int templateVersionNumber, string productTypeCode, string payloadJson)
+    {
+        if (templateVersionId == Guid.Empty) throw new ArgumentException("Template version is required.", nameof(templateVersionId));
+        if (templateVersionNumber <= 0) throw new ArgumentOutOfRangeException(nameof(templateVersionNumber));
+        if (string.IsNullOrWhiteSpace(productTypeCode)) throw new ArgumentException("Product type is required.", nameof(productTypeCode));
+        if (string.IsNullOrWhiteSpace(payloadJson)) throw new ArgumentException("Validation form payload is required.", nameof(payloadJson));
+        ValidationTemplateVersionId = templateVersionId;
+        ValidationTemplateVersionNumber = templateVersionNumber;
+        ValidationProductTypeCode = productTypeCode.Trim();
+        ValidationFormPayloadJson = payloadJson;
     }
 
     private void EnsureSubmitRequirements()

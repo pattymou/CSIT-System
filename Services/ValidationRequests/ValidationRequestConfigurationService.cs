@@ -9,6 +9,7 @@ public interface IValidationRequestConfigurationService
 {
     Task<ValidationRequestConfigurationDto> GetConfigurationAsync(CancellationToken cancellationToken = default);
     Task<ValidationRequestPreviewDto> GetPreviewAsync(string productTypeCode, CancellationToken cancellationToken = default);
+    Task<ValidationRequestPreviewDto> GetPreviewAsync(Guid templateVersionId, string productTypeCode, CancellationToken cancellationToken = default);
     Task<Guid> SaveProductTypeAsync(Guid? id, SaveValidationProductTypeRequest request, CancellationToken cancellationToken = default);
     Task SetSectionMappingsAsync(Guid productTypeId, IReadOnlyList<Guid> sectionIds, CancellationToken cancellationToken = default);
     Task SetCategoryMappingsAsync(Guid productTypeId, IReadOnlyList<Guid> categoryIds, CancellationToken cancellationToken = default);
@@ -72,6 +73,29 @@ public sealed class ValidationRequestConfigurationService(IDbContextFactory<AppD
         var sections = (await LoadSections(db, version.Id, ct)).Where(x => x.AlwaysVisible || sectionIds.Contains(x.Id)).ToList();
         var categories = (await LoadCategories(db, version.Id, ct)).Where(x => x.AlwaysVisible || categoryIds.Contains(x.Id)).ToList();
         return new(template.Code, version.Id, version.VersionNumber, product.Code, product.DisplayLabel, sections, categories);
+    }
+
+    public async Task<ValidationRequestPreviewDto> GetPreviewAsync(Guid templateVersionId, string productTypeCode, CancellationToken ct = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(ct);
+        var version = await db.ValidationFormTemplateVersions.AsNoTracking()
+            .Include(x => x.Template)
+            .SingleOrDefaultAsync(x => x.Id == templateVersionId && x.Template.Code == "VALIDATION_TEST_REQUEST", ct)
+            ?? throw new KeyNotFoundException("The original validation form version was not found.");
+        var product = await db.ValidationProductTypes.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Code == productTypeCode && x.IsEnabled, ct)
+            ?? throw new InvalidOperationException("The selected Product Type is disabled or does not exist.");
+        var sectionIds = await db.ValidationProductTypeSectionMappings.AsNoTracking()
+            .Where(x => x.ProductTypeId == product.Id && x.SectionDefinition.TemplateVersionId == version.Id)
+            .Select(x => x.SectionDefinitionId).ToListAsync(ct);
+        var categoryIds = await db.ValidationProductTypeTestCategoryMappings.AsNoTracking()
+            .Where(x => x.ProductTypeId == product.Id && x.TestItemCategory.TemplateVersionId == version.Id)
+            .Select(x => x.TestItemCategoryId).ToListAsync(ct);
+        var sections = (await LoadSections(db, version.Id, ct))
+            .Where(x => x.AlwaysVisible || sectionIds.Contains(x.Id)).ToList();
+        var categories = (await LoadCategories(db, version.Id, ct))
+            .Where(x => x.AlwaysVisible || categoryIds.Contains(x.Id)).ToList();
+        return new(version.Template.Code, version.Id, version.VersionNumber, product.Code, product.DisplayLabel, sections, categories);
     }
 
     public async Task<Guid> SaveProductTypeAsync(Guid? id, SaveValidationProductTypeRequest request, CancellationToken ct = default)

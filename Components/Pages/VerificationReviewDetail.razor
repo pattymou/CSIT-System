@@ -3,90 +3,265 @@
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
+@using SIT.DepartmentSystem.Web.Entities
+@using SIT.DepartmentSystem.Web.Services.ValidationRequests
 @inject IVerificationApplicationService Applications
+@inject IValidationRequestConfigurationService ValidationService
+@inject ISystemOptionService SystemOptions
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject NavigationManager Nav
 
-<h3 class="page-title">Verification Review Detail</h3>
+<h3 class="page-title">驗證申請審核明細</h3>
 
-@if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
+@if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card @(_error ? "error-text" : "review-success")">@_message</div> }
 @if (_loading) { <div class="surface-card">載入中...</div> }
 else if (_item is not null)
 {
     <div class="surface-card">
         <div class="detail-grid">
             <div><span>申請編號</span><strong>@_item.ApplicationNo</strong></div>
-            <div><span>部門</span><strong>@(_item.RoutingDepartmentName ?? _item.RoutingDepartmentCode ?? "-")</strong></div>
-            <div><span>Team</span><strong>@_item.TeamName</strong></div>
+            <div><span>狀態</span><strong>待審核</strong></div>
+            <div><span>Department</span><strong>@Display(_item.RoutingDepartmentName ?? _item.RoutingDepartmentCode)</strong></div>
+            <div><span>Team</span><strong>@Display(_item.TeamName)</strong></div>
             <div><span>申請人</span><strong>@_item.ApplicantName (@_item.ApplicantAccount)</strong></div>
-            <div><span>申請人部門 / Email</span><strong>@_item.Department / @_item.ApplicantEmail</strong></div>
-            <div><span>專案</span><strong>@_item.ProjectName</strong></div>
-            <div><span>產品</span><strong>@_item.Customer / @_item.ProductModel</strong></div>
-            <div class="full"><span>驗證需求</span><div>@_item.ValidationRequirement</div></div>
+            <div><span>申請人部門／Email</span><strong>@_item.Department／@_item.ApplicantEmail</strong></div>
+            <div><span>Model Name</span><strong>@Display(_item.ProjectName)</strong></div>
+            <div><span>Product Type</span><strong>@Display(_item.ValidationRequest?.FormSnapshot?.ProductTypeLabel ?? _item.ValidationRequest?.ProductTypeCode)</strong></div>
+            <div><span>送出時間</span><strong>@FormatDate(_item.SubmittedAt)</strong></div>
+            <div class="full"><span>驗證需求摘要</span><div>@Display(_item.ValidationRequirement)</div></div>
         </div>
-        @if (_item.ValidationRequest is not null)
+
+        @if (_editing && _editPreview is not null)
         {
-            <ValidationRequestSubmissionView Submission="_item.ValidationRequest" />
+            <div class="review-edit-heading">
+                <strong>編輯申請內容</strong>
+                <span>沿用原始表單版本 @_editPreview.TemplateVersion；儲存後會留下完整修改紀錄。</span>
+            </div>
+            <ValidationRequestPreview Preview="_editPreview" ProductTypes="_productTypes"
+                                      SelectedProductCode="_selectedProduct" SelectedProductCodeChanged="ChangeProductAsync"
+                                      Values="_values" SelectedTestItemCodes="_selectedTests"
+                                      TestParameterValues="_testParameters" DepartmentOptions="_departments" />
+            <div class="form-actions">
+                <button type="button" class="btn-primary" disabled="@_working" @onclick="SaveEditAsync">儲存修改</button>
+                <button type="button" class="btn-secondary" disabled="@_working" @onclick="CancelEdit">取消編輯</button>
+            </div>
         }
-        <div class="form-row full-width review-expected-date"><label>預計結束日期（核准必填）</label><input type="date" value="@DateText(_expectedEndDate)" @onchange="e => _expectedEndDate = ParseDate(e.Value)" /></div>
-        <div class="form-row full-width review-note"><label>處理說明（Return / Reject 必填）</label><textarea @bind="_note"></textarea></div>
-        <div class="form-actions">
-            <button type="button" class="btn-secondary" disabled="@_working" @onclick="ReturnAsync">Return</button>
-            <button type="button" class="btn-secondary" disabled="@_working" @onclick="RejectAsync">Reject</button>
-            <button type="button" class="btn-primary" disabled="@_working" @onclick="AcceptAsync">Accept</button>
-            <button type="button" class="btn-secondary" @onclick="Back">返回 Queue</button>
-        </div>
+        else
+        {
+            @if (_item.ValidationRequest is not null)
+            {
+                <ValidationRequestSubmissionView Submission="_item.ValidationRequest" />
+            }
+            else
+            {
+                <div class="workflow-note">此為舊版驗證申請，請依上方既有欄位審核。</div>
+            }
+
+            <div class="form-row full-width review-expected-date">
+                <label>預計結束日期（同意必填）</label>
+                <input type="date" value="@DateText(_expectedEndDate)" @onchange="e => _expectedEndDate = ParseDate(e.Value)" />
+            </div>
+            <div class="form-row full-width review-note">
+                <label>處理說明（退回／拒絕必填）</label>
+                <textarea @bind="_note"></textarea>
+            </div>
+            <div class="form-actions">
+                @if (_item.ValidationRequest?.FormSnapshot is not null)
+                {
+                    <button type="button" class="btn-secondary" disabled="@_working" @onclick="BeginEdit">編輯</button>
+                }
+                <button type="button" class="btn-secondary" disabled="@_working" @onclick="ReturnAsync">退回</button>
+                <button type="button" class="btn-secondary" disabled="@_working" @onclick="RejectAsync">拒絕</button>
+                <button type="button" class="btn-primary" disabled="@_working" @onclick="AcceptAsync">同意</button>
+                <button type="button" class="btn-secondary" disabled="@_working" @onclick="Back">返回主管審核中心</button>
+            </div>
+        }
     </div>
 }
 
 <style>
     .detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
-    .detail-grid span { display:block; color:#94a3b8; font-size:.85rem; margin-bottom:4px; }
+    .detail-grid span { display:block; color:#64748b; font-size:.85rem; margin-bottom:4px; }
     .detail-grid .full { grid-column:1/-1; }
-    .review-note { margin-top:22px; }
+    .review-note, .review-expected-date { margin-top:22px; }
+    .review-edit-heading { margin:24px 0 12px; display:flex; flex-direction:column; gap:4px; }
+    .review-edit-heading span { color:#64748b; }
+    .review-success { color:#047857; }
+    .workflow-note { margin-top:20px; padding:14px; border-radius:10px; background:rgba(14,165,164,.12); }
+    @@media(max-width:700px){ .detail-grid { grid-template-columns:1fr; } .detail-grid .full { grid-column:auto; } }
 </style>
 
 @code {
     [Parameter] public Guid Id { get; set; }
     private VerificationApplicationDto? _item;
+    private ValidationRequestConfigurationDto? _configuration;
+    private ValidationRequestPreviewDto? _editPreview;
+    private IReadOnlyList<ValidationProductTypeDto> _productTypes = [];
+    private List<SystemOptionDto> _departments = [];
+    private Dictionary<string, List<string>> _values = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> _selectedTests = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, Dictionary<string, List<string>>> _testParameters = new(StringComparer.OrdinalIgnoreCase);
+    private string _selectedProduct = string.Empty;
     private string? _note;
     private DateOnly? _expectedEndDate;
     private string? _message;
+    private bool _error;
     private bool _loading = true;
     private bool _working;
+    private bool _editing;
+
     protected override async Task OnParametersSetAsync() => await LoadAsync();
+
     private async Task LoadAsync()
     {
-        _loading = true; _message = null;
+        _loading = true; _message = null; _error = false;
         try
         {
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
             _item = await Applications.GetForLeaderReviewAsync(Id, user);
-            if (_item is null) _message = "找不到待審核申請，或此申請未指派給您。";
+            if (_item is null)
+            {
+                _error = true;
+                _message = "找不到待審核申請，或您沒有此申請的審核權限。";
+                return;
+            }
+            if (_item.ValidationRequest?.FormSnapshot is not null)
+            {
+                _configuration = await ValidationService.GetConfigurationAsync();
+                _productTypes = _configuration.ProductTypes;
+                _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department))
+                    .Where(x => DepartmentFamilyMatcher.IsDa40Family(x.Value)).ToList();
+                InitializeEditor(_item.ValidationRequest);
+            }
         }
-        catch (Exception ex) { _message = ex.Message; }
+        catch (Exception ex) { _error = true; _message = ex.Message; }
         finally { _loading = false; }
     }
-    private async Task ReturnAsync() => await ExecuteAsync((user) => Applications.ReturnAsync(Id, user, _note));
-    private async Task RejectAsync() => await ExecuteAsync((user) => Applications.RejectAsync(Id, user, _note));
+
+    private void InitializeEditor(ValidationRequestSubmissionDto request)
+    {
+        _selectedProduct = request.ProductTypeCode;
+        _editPreview = request.FormSnapshot;
+        _values = request.FieldValues.ToDictionary(x => x.Key, x => x.Value.ToList(), StringComparer.OrdinalIgnoreCase);
+        _selectedTests = new(request.SelectedTestItemCodes, StringComparer.OrdinalIgnoreCase);
+        _testParameters = request.TestParameterValues.ToDictionary(
+            x => x.Key,
+            x => x.Value.ToDictionary(y => y.Key, y => y.Value.ToList(), StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void BeginEdit()
+    {
+        if (_item?.ValidationRequest is null) return;
+        InitializeEditor(_item.ValidationRequest);
+        _editing = true; _message = null; _error = false;
+    }
+
+    private void CancelEdit()
+    {
+        _editing = false; _message = null; _error = false;
+        if (_item?.ValidationRequest is not null) InitializeEditor(_item.ValidationRequest);
+    }
+
+    private async Task ChangeProductAsync(string code)
+    {
+        if (_item?.ValidationRequest is null || string.IsNullOrWhiteSpace(code) || code == _selectedProduct) return;
+        _working = true; _message = null; _error = false;
+        try
+        {
+            _editPreview = await ValidationService.GetPreviewAsync(_item.ValidationRequest.TemplateVersionId, code);
+            _selectedProduct = code;
+            var fieldCodes = _editPreview.Sections.SelectMany(x => x.Fields).SelectMany(FlattenFields)
+                .Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _values = _values.Where(x => fieldCodes.Contains(x.Key))
+                .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
+            _values["PRODUCT_TYPE"] = [code];
+            var testCodes = _editPreview.TestCategories.SelectMany(x => x.TestItems)
+                .Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _selectedTests.RemoveWhere(x => !testCodes.Contains(x));
+            _testParameters = _testParameters.Where(x => testCodes.Contains(x.Key))
+                .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) { _error = true; _message = ex.Message; }
+        finally { _working = false; }
+    }
+
+    private async Task SaveEditAsync()
+    {
+        if (_editPreview is null) return;
+        _working = true; _message = null; _error = false;
+        try
+        {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            var request = new UpdateVerificationApplicationRequest
+            {
+                ValidationRequest = new ValidationRequestSubmissionDto
+                {
+                    TemplateVersionId = _editPreview.TemplateVersionId,
+                    TemplateVersion = _editPreview.TemplateVersion,
+                    ProductTypeCode = _editPreview.ProductTypeCode,
+                    FieldValues = _values,
+                    SelectedTestItemCodes = _selectedTests,
+                    TestParameterValues = _testParameters,
+                    FormSnapshot = _editPreview
+                }
+            };
+            await Applications.UpdateForLeaderReviewAsync(Id, user, request);
+            _item = await Applications.GetForLeaderReviewAsync(Id, user);
+            _editing = false;
+            if (_item is null)
+            {
+                _error = false;
+                _message = "修改已儲存；Team 派送已變更，此申請已轉交新的主管。";
+                return;
+            }
+            InitializeEditor(_item.ValidationRequest!);
+            _message = "申請內容已儲存，修改者、時間及修改前後內容已記錄。";
+        }
+        catch (Exception ex) { _error = true; _message = ex.Message; }
+        finally { _working = false; }
+    }
+
+    private async Task ReturnAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_note)) { _error = true; _message = "退回原因不可空白。"; return; }
+        await ExecuteAsync(user => Applications.ReturnAsync(Id, user, _note));
+    }
+
+    private async Task RejectAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_note)) { _error = true; _message = "拒絕原因不可空白。"; return; }
+        await ExecuteAsync(user => Applications.RejectAsync(Id, user, _note));
+    }
+
     private async Task AcceptAsync()
     {
-        if (!_expectedEndDate.HasValue) { _message = "核准前請填寫預計結束日期。"; return; }
-        await ExecuteAsync((user) => Applications.AcceptAsync(Id, user, _expectedEndDate.Value));
+        if (!_expectedEndDate.HasValue) { _error = true; _message = "同意前請填寫預計結束日期。"; return; }
+        await ExecuteAsync(user => Applications.AcceptAsync(Id, user, _expectedEndDate.Value));
     }
-    private void Back() => Nav.NavigateTo("/supervisor-review");
+
     private async Task ExecuteAsync(Func<global::System.Security.Claims.ClaimsPrincipal, Task<VerificationApplicationDto>> action)
     {
-        _working = true; _message = null;
+        _working = true; _message = null; _error = false;
         try
         {
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
             await action(user);
             Nav.NavigateTo("/supervisor-review");
         }
-        catch (Exception ex) { _message = ex.Message; }
+        catch (Exception ex) { _error = true; _message = ex.Message; }
         finally { _working = false; }
     }
+
+    private static IEnumerable<ValidationFieldDto> FlattenFields(ValidationFieldDto field)
+    {
+        yield return field;
+        foreach (var child in field.Children.SelectMany(FlattenFields)) yield return child;
+    }
+
+    private void Back() => Nav.NavigateTo("/supervisor-review");
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private static string FormatDate(DateTime? value) => value?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "—";
     private static string DateText(DateOnly? value) => value?.ToString("yyyy-MM-dd") ?? string.Empty;
     private static DateOnly? ParseDate(object? value) => DateOnly.TryParse(value?.ToString(), out var date) ? date : null;
 }

@@ -33,6 +33,16 @@ else
                               Values="_values" SelectedTestItemCodes="_selectedTests" TestParameterValues="_testParameters"
                               DepartmentOptions="_departments" />
 
+    @if (_directApproval)
+    {
+        <div class="surface-card direct-approval-date">
+            <strong>主管自行送單免審</strong>
+            <p>正式送出後將直接核准並建立 Record，請先填寫預計結束日期。</p>
+            <label>預計結束日期（必填）</label>
+            <input type="date" value="@DateText(_expectedEndDate)" @onchange="e => _expectedEndDate = ParseDate(e.Value)" />
+        </div>
+    }
+
     <div class="surface-card form-actions validation-save-actions">
         <button type="button" class="btn-primary" disabled="@_saving" @onclick="() => SaveAsync(false)">儲存草稿</button>
         <button type="button" class="btn-primary" disabled="@_saving" @onclick="() => SaveAsync(true)">正式送出</button>
@@ -43,6 +53,9 @@ else
 <style>
     .workflow-summary { display:flex; justify-content:space-between; margin-bottom:16px; }
     .validation-save-actions { margin-top:18px; }
+    .direct-approval-date { margin-top:18px; display:grid; gap:8px; }
+    .direct-approval-date p { margin:0; color:#64748b; }
+    .direct-approval-date input { max-width:240px; }
 </style>
 
 @code {
@@ -59,17 +72,20 @@ else
     private string? _error;
     private bool _loading = true;
     private bool _saving;
+    private bool _directApproval;
+    private DateOnly? _expectedEndDate;
 
     protected override async Task OnParametersSetAsync()
     {
         _loading = true; _error = null;
         try
         {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            _directApproval = await Applications.IsDirectApprovalApplicantAsync(user);
             _configuration = await ValidationService.GetConfigurationAsync();
             _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department)).Where(x => DepartmentFamilyMatcher.IsDa40Family(x.Value)).ToList();
             if (Id.HasValue)
             {
-                var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
                 _existing = await Applications.GetForApplicantAsync(Id.Value, user) ?? throw new InvalidOperationException("找不到申請，或您無權存取。");
                 if (_existing.Status is not (VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned)) throw new InvalidOperationException("此申請目前不可修改。");
                 if (_existing.ValidationRequest?.FormSnapshot is null) throw new InvalidOperationException("舊版申請請使用原有編輯畫面。");
@@ -122,7 +138,7 @@ else
             VerificationApplicationDto saved = Id.HasValue
                 ? await Applications.UpdateDraftAsync(Id.Value, user, _form)
                 : await Applications.CreateDraftAsync(user, ToCreate());
-            if (submit) saved = await Applications.SubmitAsync(saved.Id, user);
+            if (submit) saved = await Applications.SubmitAsync(saved.Id, user, _expectedEndDate);
             Nav.NavigateTo($"/verification-applications/{saved.Id}");
         }
         catch (Exception ex) { _error = ex.Message; }
@@ -136,4 +152,6 @@ else
     private static string StatusText(VerificationApplicationStatus status) => status switch { VerificationApplicationStatus.Draft => "草稿", VerificationApplicationStatus.Returned => "已退回", _ => status.ToString() };
     private void Cancel() => Nav.NavigateTo("/verification-applications");
     private void OpenMyApplications() => Nav.NavigateTo("/verification-applications");
+    private static string DateText(DateOnly? value) => value?.ToString("yyyy-MM-dd") ?? string.Empty;
+    private static DateOnly? ParseDate(object? value) => DateOnly.TryParse(value?.ToString(), out var date) ? date : null;
 }

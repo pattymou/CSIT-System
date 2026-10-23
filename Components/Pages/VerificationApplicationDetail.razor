@@ -55,6 +55,13 @@ else if (_item is not null)
         <div class="form-actions">
             @if (_item.Status is VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned)
             {
+                @if (_directApproval)
+                {
+                    <div class="form-row full-width direct-approval-date">
+                        <label>預計結束日期（主管自行送單直接核准必填）</label>
+                        <input type="date" value="@DateText(_expectedEndDate)" @onchange="e => _expectedEndDate = ParseDate(e.Value)" />
+                    </div>
+                }
                 <button type="button" class="btn-secondary" @onclick="Edit">修改</button>
                 <button type="button" class="btn-primary" disabled="@_working" @onclick="SubmitAsync">送出申請</button>
             }
@@ -68,6 +75,7 @@ else if (_item is not null)
     .detail-grid .label { display:block; color:#94a3b8; font-size:.85rem; margin-bottom:4px; }
     .detail-grid .full { grid-column:1/-1; }
     .workflow-note { margin-top:20px; padding:14px; border-radius:10px; background:rgba(14,165,164,.12); }
+    .direct-approval-date { width:100%; margin-bottom:12px; }
     @@media(max-width:700px){ .detail-grid { grid-template-columns:1fr; } .detail-grid .full { grid-column:auto; } }
 </style>
 
@@ -77,6 +85,8 @@ else if (_item is not null)
     private bool _loading = true;
     private bool _working;
     private string? _message;
+    private bool _directApproval;
+    private DateOnly? _expectedEndDate;
 
     protected override async Task OnParametersSetAsync() => await LoadAsync();
     private async Task LoadAsync()
@@ -85,6 +95,7 @@ else if (_item is not null)
         try
         {
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            _directApproval = await Applications.IsDirectApprovalApplicantAsync(user);
             _item = await Applications.GetForApplicantAsync(Id, user);
             if (_item is null) _message = "找不到申請，或您無權存取。";
         }
@@ -98,7 +109,7 @@ else if (_item is not null)
         try
         {
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
-            _item = await Applications.SubmitAsync(Id, user);
+            _item = await Applications.SubmitAsync(Id, user, _expectedEndDate);
         }
         catch (Exception ex) { _message = ex.Message; }
         finally { _working = false; }
@@ -114,4 +125,6 @@ else if (_item is not null)
         VerificationApplicationStatus.Returned => "已退回", VerificationApplicationStatus.Rejected => "已拒絕",
         VerificationApplicationStatus.Accepted => "已接受", _ => status.ToString()
     };
+    private static string DateText(DateOnly? value) => value?.ToString("yyyy-MM-dd") ?? string.Empty;
+    private static DateOnly? ParseDate(object? value) => DateOnly.TryParse(value?.ToString(), out var date) ? date : null;
 }

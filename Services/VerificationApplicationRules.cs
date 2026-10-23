@@ -41,4 +41,19 @@ public static class VerificationApplicationSecurity
         if (!user.IsInRole("Admin"))
             EnsureLeaderOwnership(entity, account);
     }
+
+    public static bool CanBypassReview(ClaimsPrincipal user, bool isActiveTeamLeader)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+        if (user.Identity?.IsAuthenticated != true)
+            throw new UnauthorizedAccessException("Authentication is required.");
+        return user.IsInRole("Admin") || isActiveTeamLeader;
+    }
+
+    public static DateOnly RequireDirectApprovalDate(DateOnly? expectedEndDate)
+    {
+        if (!expectedEndDate.HasValue || expectedEndDate.Value == default)
+            throw new InvalidOperationException("Expected end date is required for direct approval.");
+        return expectedEndDate.Value;
+    }
 }

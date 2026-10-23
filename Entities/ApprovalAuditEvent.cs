@@ -13,6 +13,7 @@ public static class ApprovalAuditActions
     public const string Withdrawn = "Withdrawn";
     public const string Resubmitted = "Resubmitted";
     public const string SubmitterDismissed = "SubmitterDismissed";
+    public const string VerificationContentEdited = "VerificationContentEdited";
 }
 
 public sealed class ApprovalAuditEvent
