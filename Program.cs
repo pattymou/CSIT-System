@@ -47,10 +47,12 @@ if (builder.Environment.IsDevelopment())
             using var certificateStore = new X509Store(StoreName.My, StoreLocation.LocalMachine);
             certificateStore.Open(OpenFlags.ReadOnly);
             localCertificate = certificateStore.Certificates
-                .Find(X509FindType.FindByThumbprint, localThumbprint, validOnly: true)
+                .Find(X509FindType.FindByThumbprint, localThumbprint, validOnly: false)
                 .OfType<X509Certificate2>()
                 .SingleOrDefault();
             if (localCertificate is null || !localCertificate.HasPrivateKey ||
+                DateTimeOffset.UtcNow < localCertificate.NotBefore ||
+                DateTimeOffset.UtcNow >= localCertificate.NotAfter ||
                 !string.Equals(localCertificate.Subject, "CN=localhost", StringComparison.OrdinalIgnoreCase) ||
                 !localCertificate.MatchesHostname("localhost", allowWildcards: false, allowCommonName: true))
                 throw new InvalidOperationException("CSIT DEV localhost TLS certificate is unavailable or invalid.");
