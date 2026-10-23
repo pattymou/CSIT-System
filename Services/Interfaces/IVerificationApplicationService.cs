@@ -14,7 +14,7 @@ public interface IVerificationApplicationService
     Task<VerificationApplicationDto> SubmitAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default);
     Task<VerificationApplicationDto> ReturnAsync(Guid id, ClaimsPrincipal user, string? note, CancellationToken cancellationToken = default);
     Task<VerificationApplicationDto> RejectAsync(Guid id, ClaimsPrincipal user, string? note, CancellationToken cancellationToken = default);
-    Task<VerificationApplicationDto> AcceptAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default);
+    Task<VerificationApplicationDto> AcceptAsync(Guid id, ClaimsPrincipal user, DateOnly expectedEndDate, CancellationToken cancellationToken = default);
     Task<VerificationApplicationDto?> GetForApplicantAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default);
     Task<VerificationApplicationDto?> GetForLeaderReviewAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default);
     Task<ListResponseDto<VerificationApplicationDto>> ListForApplicantAsync(ClaimsPrincipal user, int page, int pageSize, CancellationToken cancellationToken = default);

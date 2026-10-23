@@ -37,6 +37,10 @@ public sealed class ValidationRequestConfigurationService(IDbContextFactory<AppD
         var version = versions.FirstOrDefault(x => x.Status == ValidationTemplateStatuses.Draft) ??
                       versions.First(x => x.Status == ValidationTemplateStatuses.Published);
         var products = await db.ValidationProductTypes.AsNoTracking().OrderBy(x => x.DisplayOrder).ToListAsync(ct);
+        var teamIds = products.Where(x => x.TeamOptionId.HasValue).Select(x => x.TeamOptionId!.Value).Distinct().ToList();
+        var teams = await db.SystemOptions.AsNoTracking()
+            .Where(x => teamIds.Contains(x.Id) && x.Category == SystemOptionCategories.Team)
+            .ToDictionaryAsync(x => x.Id, ct);
         var sectionMappings = await db.ValidationProductTypeSectionMappings.AsNoTracking()
             .Where(x => x.SectionDefinition.TemplateVersionId == version.Id).ToListAsync(ct);
         var categoryMappings = await db.ValidationProductTypeTestCategoryMappings.AsNoTracking()
@@ -45,6 +49,9 @@ public sealed class ValidationRequestConfigurationService(IDbContextFactory<AppD
         var categories = await LoadCategories(db, version.Id, ct);
         return new(template.Code, template.DisplayName, Version(version), versions.Select(Version).ToList(),
             products.Select(p => new ValidationProductTypeDto(p.Id, p.Code, p.DisplayLabel, p.IsEnabled, p.DisplayOrder,
+                p.TeamOptionId,
+                teams.GetValueOrDefault(p.TeamOptionId ?? Guid.Empty)?.Value,
+                teams.GetValueOrDefault(p.TeamOptionId ?? Guid.Empty) is { } team ? DepartmentTeamRules.DisplayName(team.Name, team.Value) : null,
                 sectionMappings.Where(x => x.ProductTypeId == p.Id).Select(x => x.SectionDefinitionId).ToList(),
                 categoryMappings.Where(x => x.ProductTypeId == p.Id).Select(x => x.TestItemCategoryId).ToList())).ToList(),
             sections, categories, ValidationFieldTypes.All);
@@ -74,7 +81,10 @@ public sealed class ValidationRequestConfigurationService(IDbContextFactory<AppD
         var item = id.HasValue ? await db.ValidationProductTypes.SingleAsync(x => x.Id == id, ct) : new ValidationProductType { Id = Guid.NewGuid(), CreatedAt = DateTime.UtcNow };
         if (!id.HasValue) db.ValidationProductTypes.Add(item);
         item.Code = request.Code.Trim().ToUpperInvariant(); item.DisplayLabel = request.DisplayLabel.Trim();
-        item.IsEnabled = request.IsEnabled; item.DisplayOrder = request.DisplayOrder; item.UpdatedAt = DateTime.UtcNow;
+        if (request.TeamOptionId.HasValue && !await db.SystemOptions.AnyAsync(x => x.Id == request.TeamOptionId.Value &&
+                x.Category == SystemOptionCategories.Team && x.IsEnabled, ct))
+            throw new InvalidOperationException("對應 Team 必須是參數管理中已啟用的 Team。");
+        item.IsEnabled = request.IsEnabled; item.DisplayOrder = request.DisplayOrder; item.TeamOptionId = request.TeamOptionId; item.UpdatedAt = DateTime.UtcNow;
         await db.SaveChangesAsync(ct); return item.Id;
     }
 

@@ -26,6 +26,8 @@ else if (_item is not null)
             <div><span class="label">客戶</span><strong>@Display(_item.Customer)</strong></div>
             <div><span class="label">產品型號</span><strong>@Display(_item.ProductModel)</strong></div>
             <div><span class="label">要求完成日期</span><strong>@_item.RequestedFinishDate?.ToString("yyyy-MM-dd")</strong></div>
+            @if (_item.ExpectedEndDate.HasValue)
+            { <div><span class="label">主管預計結束日期</span><strong>@_item.ExpectedEndDate.Value.ToString("yyyy-MM-dd")</strong></div> }
             <div><span class="label">Sample Ready</span><strong>@_item.SampleReadyDate?.ToString("yyyy-MM-dd")</strong></div>
             <div class="full"><span class="label">驗證需求</span><div>@Display(_item.ValidationRequirement)</div></div>
             <div><span class="label">Hardware</span><strong>@Display(_item.HardwareVersion)</strong></div>

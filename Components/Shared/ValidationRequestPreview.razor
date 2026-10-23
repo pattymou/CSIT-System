@@ -40,7 +40,7 @@
                             @foreach (var field in group.Fields)
                             {
                                 <ValidationRequestFieldPreview Field="field" Values="Values" ValuesChanged="StateHasChanged"
-                                                               ProductTypes="ProductTypes" ProductTypeChanged="HandleProductTypeChanged" ReadOnly="ReadOnly" />
+                                                               ProductTypes="ProductTypes" ProductTypeChanged="HandleProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" />
                             }
                         </div>
                     </section>
@@ -87,6 +87,7 @@
     private const string TestItemsTab = "__TEST_ITEMS";
     [Parameter] public ValidationRequestPreviewDto? Preview { get; set; }
     [Parameter] public IReadOnlyList<ValidationProductTypeDto> ProductTypes { get; set; } = [];
+    [Parameter] public IReadOnlyList<SystemOptionDto> DepartmentOptions { get; set; } = [];
     [Parameter] public string SelectedProductCode { get; set; } = "";
     [Parameter] public EventCallback<string> SelectedProductCodeChanged { get; set; }
     [Parameter] public bool ShowPreviewBadge { get; set; }

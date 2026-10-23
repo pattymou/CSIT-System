@@ -66,6 +66,7 @@ public class VerificationApplication
     public string? Customer { get; private set; }
     public string? ProductModel { get; private set; }
     public DateOnly? RequestedFinishDate { get; private set; }
+    public DateOnly? ExpectedEndDate { get; private set; }
     public string? ValidationRequirement { get; private set; }
     public string? HardwareVersion { get; private set; }
     public string? FirmwareVersion { get; private set; }
@@ -102,8 +103,8 @@ public class VerificationApplication
     public static VerificationApplication CreateDraft(
         Guid id,
         string applicationNo,
-        Guid routingDepartmentOptionId,
-        Guid teamOptionId,
+        Guid? routingDepartmentOptionId,
+        Guid? teamOptionId,
         string applicantAccount,
         string applicantName,
         string applicantEmail,
@@ -130,12 +131,20 @@ public class VerificationApplication
         return entity;
     }
 
-    public void UpdateContent(Guid routingDepartmentOptionId, Guid teamOptionId, VerificationApplicationContent content, DateTime now)
+    public void UpdateContent(Guid? routingDepartmentOptionId, Guid? teamOptionId, VerificationApplicationContent content, DateTime now)
     {
         EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
         RoutingDepartmentOptionId = routingDepartmentOptionId;
         TeamOptionId = teamOptionId;
         ApplyContent(content);
+        UpdatedAt = now;
+    }
+
+    public void UpdateDraftRouting(Guid routingDepartmentOptionId, Guid teamOptionId, DateTime now)
+    {
+        EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
+        RoutingDepartmentOptionId = routingDepartmentOptionId;
+        TeamOptionId = teamOptionId;
         UpdatedAt = now;
     }
 
@@ -197,7 +206,7 @@ public class VerificationApplication
         SetProcessing(processedBy, note, now);
     }
 
-    public void Accept(Guid moduleRecordId, string processedBy, DateTime now)
+    public void Accept(Guid moduleRecordId, DateOnly expectedEndDate, string processedBy, DateTime now)
     {
         EnsureStatus(VerificationApplicationStatus.Submitted);
         if (ModuleRecordId.HasValue)
@@ -207,6 +216,7 @@ public class VerificationApplication
 
         EnsureProcessedBy(processedBy);
         ModuleRecordId = moduleRecordId;
+        ExpectedEndDate = expectedEndDate;
         Status = VerificationApplicationStatus.Accepted;
         AcceptedAt = now;
         SetProcessing(processedBy, null, now);
@@ -222,8 +232,11 @@ public class VerificationApplication
         AddIfMissing(missing, ProjectName, nameof(ProjectName));
         AddIfMissing(missing, Customer, nameof(Customer));
         AddIfMissing(missing, ProductModel, nameof(ProductModel));
-        AddIfMissing(missing, ValidationRequirement, nameof(ValidationRequirement));
-        if (!RequestedFinishDate.HasValue) missing.Add(nameof(RequestedFinishDate));
+        if (string.IsNullOrWhiteSpace(ValidationFormPayloadJson))
+        {
+            AddIfMissing(missing, ValidationRequirement, nameof(ValidationRequirement));
+            if (!RequestedFinishDate.HasValue) missing.Add(nameof(RequestedFinishDate));
+        }
         if (!RoutingDepartmentOptionId.HasValue) missing.Add(nameof(RoutingDepartmentOptionId));
         AddIfMissing(missing, RoutingDepartmentCode, nameof(RoutingDepartmentCode));
         AddIfMissing(missing, RoutingDepartmentName, nameof(RoutingDepartmentName));

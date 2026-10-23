@@ -28,21 +28,10 @@ else
     {
         <div class="surface-card workflow-summary"><strong>@_existing.ApplicationNo</strong><span>狀態：@StatusText(_existing.Status)</span></div>
     }
-    <section class="surface-card workflow-fields">
-        <h2>申請與派送資料</h2>
-        <div class="edit-grid">
-            <div class="form-row full-width"><label>部門 *</label><select @bind="_form.RoutingDepartmentOptionId" @bind:after="OnDepartmentChanged"><option value="@Guid.Empty">請選擇</option>@foreach (var option in _departments) { <option value="@option.Id">@DepartmentTeamRules.DisplayName(option.Name, option.Value)</option> }</select></div>
-            <div class="form-row full-width"><label>Team *</label><select @bind="_form.TeamOptionId"><option value="@Guid.Empty">請選擇</option>@foreach (var option in AllowedTeams) { <option value="@option.Id">@DepartmentTeamRules.DisplayName(option.Name, option.Value)</option> }</select></div>
-            <div class="form-row full-width"><label>專案名稱 *</label><input @bind="_form.ProjectName" /></div>
-            <div class="form-row"><label>客戶 *</label><input @bind="_form.Customer" /></div>
-            <div class="form-row"><label>要求完成日期 *</label><input type="date" value="@DateText(_form.RequestedFinishDate)" @onchange="e => _form.RequestedFinishDate = ParseDate(e.Value)" /></div>
-            <div class="form-row full-width"><label>驗證需求 *</label><textarea @bind="_form.ValidationRequirement"></textarea></div>
-        </div>
-    </section>
-
     <ValidationRequestPreview Preview="_preview" ProductTypes="_configuration.ProductTypes"
                               SelectedProductCode="_selectedProduct" SelectedProductCodeChanged="ChangeProduct"
-                              Values="_values" SelectedTestItemCodes="_selectedTests" TestParameterValues="_testParameters" />
+                              Values="_values" SelectedTestItemCodes="_selectedTests" TestParameterValues="_testParameters"
+                              DepartmentOptions="_departments" />
 
     <div class="surface-card form-actions validation-save-actions">
         <button type="button" class="btn-primary" disabled="@_saving" @onclick="() => SaveAsync(false)">儲存草稿</button>
@@ -52,8 +41,6 @@ else
 }
 
 <style>
-    .workflow-fields { margin-bottom:18px; }
-    .workflow-fields h2 { margin-top:0; }
     .workflow-summary { display:flex; justify-content:space-between; margin-bottom:16px; }
     .validation-save-actions { margin-top:18px; }
 </style>
@@ -68,14 +55,10 @@ else
     private HashSet<string> _selectedTests = new(StringComparer.OrdinalIgnoreCase);
     private Dictionary<string, Dictionary<string, List<string>>> _testParameters = new(StringComparer.OrdinalIgnoreCase);
     private List<SystemOptionDto> _departments = [];
-    private List<SystemOptionDto> _teams = [];
     private string _selectedProduct = "";
     private string? _error;
     private bool _loading = true;
     private bool _saving;
-    private IReadOnlyList<SystemOptionDto> AllowedTeams => _form.RoutingDepartmentOptionId == Guid.Empty ? [] :
-        DepartmentTeamRules.GetAllowedTeamsForDepartment(_departments.FirstOrDefault(x => x.Id == _form.RoutingDepartmentOptionId)?.Value,
-            _teams, x => x.Name, x => x.Value);
 
     protected override async Task OnParametersSetAsync()
     {
@@ -84,7 +67,6 @@ else
         {
             _configuration = await ValidationService.GetConfigurationAsync();
             _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department)).Where(x => DepartmentFamilyMatcher.IsDa40Family(x.Value)).ToList();
-            _teams = await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Team);
             if (Id.HasValue)
             {
                 var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
@@ -105,8 +87,7 @@ else
 
     private void CopyExisting(VerificationApplicationDto item)
     {
-        _form.RoutingDepartmentOptionId = item.RoutingDepartmentOptionId ?? Guid.Empty; _form.TeamOptionId = item.TeamOptionId ?? Guid.Empty;
-        _form.ProjectName = item.ProjectName; _form.Customer = item.Customer; _form.RequestedFinishDate = item.RequestedFinishDate; _form.ValidationRequirement = item.ValidationRequirement;
+        _form.ProjectName = item.ProjectName; _form.Customer = item.Customer; _form.ValidationRequirement = item.ValidationRequirement;
         var request = item.ValidationRequest!;
         _selectedProduct = request.ProductTypeCode; _preview = request.FormSnapshot;
         _values = new(request.FieldValues, StringComparer.OrdinalIgnoreCase);
@@ -125,23 +106,12 @@ else
         if (!string.IsNullOrWhiteSpace(_selectedProduct)) _preview = await ValidationService.GetPreviewAsync(_selectedProduct);
     }
 
-    private void OnDepartmentChanged()
-    {
-        if (AllowedTeams.All(x => x.Id != _form.TeamOptionId)) _form.TeamOptionId = Guid.Empty;
-    }
-
     private async Task SaveAsync(bool submit)
     {
         _saving = true; _error = null;
         try
         {
             if (_preview is null) throw new InvalidOperationException("申請表尚未載入。");
-            _form.ProductModel = Value("MODEL_NAME");
-            if (!_values.TryGetValue("CUSTOMER", out var customerValues) || customerValues.All(string.IsNullOrWhiteSpace))
-                _values["CUSTOMER"] = [_form.Customer ?? ""];
-            _form.SubPu = Value("PU_CODE"); _form.Location = Value("LOCATION"); _form.Npi = Value("NPI_PHASE");
-            _form.HardwareVersion = Value("HW_VERSION"); _form.FirmwareVersion = Value("FW_SW_VERSION"); _form.SoftwareVersion = Value("FW_SW_VERSION");
-            _form.WirelessDrive = Value("WIFI_DRIVER_VERSION"); _form.Chipset = Value("CPU_MODEL");
             _form.ValidationRequest = new ValidationRequestSubmissionDto
             {
                 TemplateVersionId = _preview.TemplateVersionId, TemplateVersion = _preview.TemplateVersion,
@@ -161,16 +131,8 @@ else
 
     private CreateVerificationApplicationRequest ToCreate() => new()
     {
-        RoutingDepartmentOptionId = _form.RoutingDepartmentOptionId, TeamOptionId = _form.TeamOptionId,
-        ProjectName = _form.ProjectName, Customer = _form.Customer, ProductModel = _form.ProductModel,
-        RequestedFinishDate = _form.RequestedFinishDate, ValidationRequirement = _form.ValidationRequirement,
-        SubPu = _form.SubPu, Location = _form.Location, Npi = _form.Npi, HardwareVersion = _form.HardwareVersion,
-        FirmwareVersion = _form.FirmwareVersion, SoftwareVersion = _form.SoftwareVersion, WirelessDrive = _form.WirelessDrive,
-        Chipset = _form.Chipset, ValidationRequest = _form.ValidationRequest
+        ValidationRequest = _form.ValidationRequest
     };
-    private string? Value(string code) => _values.TryGetValue(code, out var values) ? values.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) : null;
-    private static string DateText(DateOnly? value) => value?.ToString("yyyy-MM-dd") ?? string.Empty;
-    private static DateOnly? ParseDate(object? value) => DateOnly.TryParse(value?.ToString(), out var date) ? date : null;
     private static string StatusText(VerificationApplicationStatus status) => status switch { VerificationApplicationStatus.Draft => "草稿", VerificationApplicationStatus.Returned => "已退回", _ => status.ToString() };
     private void Cancel() => Nav.NavigateTo("/verification-applications");
     private void OpenMyApplications() => Nav.NavigateTo("/verification-applications");

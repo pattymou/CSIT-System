@@ -58,6 +58,7 @@ public sealed class ValidationProductType
     public string DisplayLabel { get; set; } = string.Empty;
     public bool IsEnabled { get; set; } = true;
     public int DisplayOrder { get; set; }
+    public Guid? TeamOptionId { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
 }

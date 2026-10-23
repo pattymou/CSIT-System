@@ -17,5 +17,5 @@
 @code {
     [Parameter, EditorRequired] public ValidationRequestSubmissionDto Submission { get; set; } = null!;
     private static IReadOnlyList<ValidationProductTypeDto> ProductTypes(ValidationRequestPreviewDto snapshot) =>
-        [new(Guid.Empty, snapshot.ProductTypeCode, snapshot.ProductTypeLabel, true, 0, [], [])];
+        [new(Guid.Empty, snapshot.ProductTypeCode, snapshot.ProductTypeLabel, true, 0, null, null, null, [], [])];
 }

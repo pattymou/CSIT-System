@@ -36,10 +36,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     {
         await _businessWrite.DemandAsync(cancellationToken);
         ArgumentNullException.ThrowIfNull(request);
-        if (request.TeamOptionId == Guid.Empty)
-            throw new ArgumentException("TeamOptionId is required.", nameof(request));
         var applicant = await ResolveApplicantAsync(user, cancellationToken);
-        await EnsureTeamAllowedAsync(request.TeamOptionId, request.RoutingDepartmentOptionId, cancellationToken);
+        var prepared = await PrepareDraftAsync(request, cancellationToken);
 
         var now = DateTime.UtcNow;
         var sequence = await _db.Database
@@ -49,14 +47,14 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         var entity = VerificationApplication.CreateDraft(
             Guid.NewGuid(),
             $"VA-{now:yyyyMMdd}-{sequence:D6}",
-            request.RoutingDepartmentOptionId,
-            request.TeamOptionId,
+            prepared.DepartmentOptionId,
+            prepared.TeamOptionId,
             NormalizeAccount(applicant.ApplicantAccount),
             Normalize(applicant.ApplicantName),
             Normalize(applicant.ApplicantEmail),
             Normalize(applicant.Department),
             Clean(applicant.ApplicantExtension),
-            MapContent(request),
+            prepared.Content,
             now);
 
         SaveValidationRequest(entity, request.ValidationRequest, now);
@@ -74,13 +72,11 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     {
         await _businessWrite.DemandAsync(cancellationToken);
         ArgumentNullException.ThrowIfNull(request);
-        if (request.TeamOptionId == Guid.Empty)
-            throw new ArgumentException("TeamOptionId is required.", nameof(request));
         var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await FindApplicantApplicationRequiredAsync(id, account, cancellationToken);
-        await EnsureTeamAllowedAsync(request.TeamOptionId, request.RoutingDepartmentOptionId, cancellationToken);
+        var prepared = await PrepareDraftAsync(request, cancellationToken);
         var now = DateTime.UtcNow;
-        entity.UpdateContent(request.RoutingDepartmentOptionId, request.TeamOptionId, MapContent(request), now);
+        entity.UpdateContent(prepared.DepartmentOptionId, prepared.TeamOptionId, prepared.Content, now);
         SaveValidationRequest(entity, request.ValidationRequest, now);
         await _db.SaveChangesAsync(cancellationToken);
         return await MapWithDraftOptionsAsync(entity, cancellationToken);
@@ -92,6 +88,11 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         var account = VerificationApplicationSecurity.GetAccount(user);
         var entity = await FindApplicantApplicationRequiredAsync(id, account, cancellationToken);
         ValidateValidationRequestForSubmit(entity);
+        if (!string.IsNullOrWhiteSpace(entity.ValidationFormPayloadJson))
+        {
+            var selection = await ResolveDynamicRoutingAsync(entity.ValidationFormPayloadJson, true, cancellationToken);
+            entity.UpdateDraftRouting(selection.DepartmentOptionId!.Value, selection.TeamOptionId, DateTime.UtcNow);
+        }
         var routing = await ResolveRoutingAsync(entity.RoutingDepartmentOptionId, entity.TeamOptionId, cancellationToken);
         entity.Submit(routing, DateTime.UtcNow);
         await _db.SaveChangesAsync(cancellationToken);
@@ -129,6 +130,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     public async Task<VerificationApplicationDto> AcceptAsync(
         Guid id,
         ClaimsPrincipal user,
+        DateOnly expectedEndDate,
         CancellationToken cancellationToken = default)
     {
         await _businessWrite.DemandAsync(cancellationToken);
@@ -167,7 +169,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                 Customer = entity.Customer,
                 Status = "Open",
                 Progress = 0,
-                ExpectedEndDate = entity.RequestedFinishDate,
+                ExpectedEndDate = expectedEndDate,
                 SampleReadyDate = entity.SampleReadyDate,
                 ApplicantNote = entity.ValidationRequirement,
                 Npi = entity.Npi,
@@ -189,7 +191,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                 JiraLink = entity.JiraLink
             }, cancellationToken);
 
-            entity.Accept(moduleRecord.Id, account, DateTime.UtcNow);
+            entity.Accept(moduleRecord.Id, expectedEndDate, account, DateTime.UtcNow);
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
             return await MapWithDraftOptionsAsync(entity, cancellationToken);
@@ -349,32 +351,152 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         return entity;
     }
 
-    private static VerificationApplicationContent MapContent(VerificationApplicationContentRequest request) => new()
+    private async Task<PreparedDraft> PrepareDraftAsync(
+        VerificationApplicationContentRequest request,
+        CancellationToken cancellationToken)
     {
-        ProjectName = request.ProjectName,
-        SubPu = request.SubPu,
-        Customer = request.Customer,
-        ProductModel = FieldValue(request.ValidationRequest, "MODEL_NAME") ?? request.ProductModel,
-        RequestedFinishDate = request.RequestedFinishDate,
-        ValidationRequirement = request.ValidationRequirement,
-        HardwareVersion = request.HardwareVersion,
-        FirmwareVersion = request.FirmwareVersion,
-        SoftwareVersion = request.SoftwareVersion,
-        SampleReadyDate = request.SampleReadyDate,
-        JiraLink = request.JiraLink,
-        Location = request.Location,
-        Npi = request.Npi,
-        WirelessDrive = request.WirelessDrive,
-        Chipset = request.Chipset,
-        SampleMacAddress = request.SampleMacAddress,
-        UtilityVersion = request.UtilityVersion,
-        DspModel = request.DspModel
-    };
+        if (request.ValidationRequest is null)
+        {
+            if (request.RoutingDepartmentOptionId == Guid.Empty)
+                throw new ArgumentException("RoutingDepartmentOptionId is required.", nameof(request));
+            if (request.TeamOptionId == Guid.Empty)
+                throw new ArgumentException("TeamOptionId is required.", nameof(request));
+            await EnsureTeamAllowedAsync(request.TeamOptionId, request.RoutingDepartmentOptionId, cancellationToken);
+            return new(request.RoutingDepartmentOptionId, request.TeamOptionId, MapContent(request));
+        }
+
+        var routing = await ResolveDynamicRoutingAsync(request.ValidationRequest, false, cancellationToken);
+        return new(routing.DepartmentOptionId, routing.TeamOptionId, MapContent(request));
+    }
+
+    private async Task<DynamicRoutingSelection> ResolveDynamicRoutingAsync(
+        string payloadJson,
+        bool requireDepartment,
+        CancellationToken cancellationToken)
+    {
+        var request = JsonSerializer.Deserialize<ValidationRequestSubmissionDto>(payloadJson, PayloadJsonOptions)
+            ?? throw new InvalidOperationException("新版驗證申請資料無效。");
+        return await ResolveDynamicRoutingAsync(request, requireDepartment, cancellationToken);
+    }
+
+    private async Task<DynamicRoutingSelection> ResolveDynamicRoutingAsync(
+        ValidationRequestSubmissionDto request,
+        bool requireDepartment,
+        CancellationToken cancellationToken)
+    {
+        var departmentCode = FieldValue(request, "DEPARTMENT_CODE");
+        SystemOption? department = null;
+        if (!string.IsNullOrWhiteSpace(departmentCode))
+        {
+            department = (await _db.SystemOptions.AsNoTracking()
+                    .Where(x => x.Category == SystemOptionCategories.Department && x.IsEnabled)
+                    .ToListAsync(cancellationToken))
+                .SingleOrDefault(x => DepartmentFamilyMatcher.IsDa40Family(x.Value) &&
+                                      string.Equals(x.Value.Trim(), departmentCode.Trim(), StringComparison.OrdinalIgnoreCase))
+                ?? throw new InvalidOperationException("Department Code 不是目前可用的 Department 選項。");
+        }
+        else if (requireDepartment)
+        {
+            throw new InvalidOperationException("請選擇 Department Code。");
+        }
+
+        var product = await _db.ValidationProductTypes.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Code == request.ProductTypeCode && x.IsEnabled, cancellationToken)
+            ?? throw new InvalidOperationException("所選 Product Type 已停用或不存在。");
+        if (!product.TeamOptionId.HasValue)
+            throw new InvalidOperationException($"Product Type「{product.DisplayLabel}」尚未設定對應 Team。");
+
+        var team = await _db.SystemOptions.AsNoTracking().SingleOrDefaultAsync(
+            x => x.Id == product.TeamOptionId.Value && x.Category == SystemOptionCategories.Team && x.IsEnabled,
+            cancellationToken);
+        if (team is null)
+            throw new InvalidOperationException($"Product Type「{product.DisplayLabel}」對應的 Team 已停用或不存在。");
+
+        if (department is not null)
+        {
+            var enabledTeams = await _systemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Team);
+            var allowedTeams = DepartmentTeamRules.GetAllowedTeamsForDepartment(
+                department.Value, enabledTeams, x => x.Name, x => x.Value);
+            if (allowedTeams.All(x => x.Id != team.Id))
+                throw new InvalidOperationException($"Team「{DepartmentTeamRules.DisplayName(team.Name, team.Value)}」不適用於所選 Department。");
+        }
+
+        return new(department?.Id, team.Id);
+    }
+
+    private static VerificationApplicationContent MapContent(VerificationApplicationContentRequest request)
+    {
+        var dynamic = request.ValidationRequest;
+        if (dynamic is null)
+        {
+            return new VerificationApplicationContent
+            {
+                ProjectName = request.ProjectName,
+                SubPu = request.SubPu,
+                Customer = request.Customer,
+                ProductModel = request.ProductModel,
+                RequestedFinishDate = request.RequestedFinishDate,
+                ValidationRequirement = request.ValidationRequirement,
+                HardwareVersion = request.HardwareVersion,
+                FirmwareVersion = request.FirmwareVersion,
+                SoftwareVersion = request.SoftwareVersion,
+                SampleReadyDate = request.SampleReadyDate,
+                JiraLink = request.JiraLink,
+                Location = request.Location,
+                Npi = request.Npi,
+                WirelessDrive = request.WirelessDrive,
+                Chipset = request.Chipset,
+                SampleMacAddress = request.SampleMacAddress,
+                UtilityVersion = request.UtilityVersion,
+                DspModel = request.DspModel
+            };
+        }
+
+        var modelName = FieldValue(dynamic, "MODEL_NAME");
+        return new VerificationApplicationContent
+        {
+            ProjectName = modelName ?? string.Empty,
+            Customer = FieldValue(dynamic, "CUSTOMER"),
+            ProductModel = modelName,
+            RequestedFinishDate = null,
+            ValidationRequirement = BuildValidationRequirement(dynamic),
+            SubPu = FieldValue(dynamic, "PU_CODE"),
+            Location = FieldValue(dynamic, "LOCATION"),
+            Npi = FieldValue(dynamic, "NPI_PHASE"),
+            HardwareVersion = FieldValue(dynamic, "HW_VERSION"),
+            FirmwareVersion = FieldValue(dynamic, "FW_SW_VERSION"),
+            SoftwareVersion = FieldValue(dynamic, "FW_SW_VERSION"),
+            WirelessDrive = FieldValue(dynamic, "WIFI_DRIVER_VERSION"),
+            Chipset = FieldValue(dynamic, "CPU_MODEL")
+        };
+    }
+
+    private static string? BuildValidationRequirement(ValidationRequestSubmissionDto request)
+    {
+        var snapshot = request.FormSnapshot;
+        if (snapshot is null || request.SelectedTestItemCodes.Count == 0) return null;
+        var selected = snapshot.TestCategories.SelectMany(x => x.TestItems)
+            .Where(x => request.SelectedTestItemCodes.Contains(x.Code))
+            .Select(item =>
+            {
+                if (!request.TestParameterValues.TryGetValue(item.Code, out var values)) return item.DisplayLabel;
+                var labels = item.Parameters.SelectMany(FlattenParameters).ToDictionary(x => x.Code, x => x.DisplayLabel, StringComparer.OrdinalIgnoreCase);
+                var parameters = values.Where(x => x.Value.Any(v => !string.IsNullOrWhiteSpace(v)))
+                    .Select(x => $"{labels.GetValueOrDefault(x.Key, x.Key)}={string.Join(", ", x.Value.Where(v => !string.IsNullOrWhiteSpace(v)))}")
+                    .ToList();
+                return parameters.Count == 0 ? item.DisplayLabel : $"{item.DisplayLabel} ({string.Join("; ", parameters)})";
+            })
+            .ToList();
+        return selected.Count == 0 ? null : string.Join("; ", selected);
+    }
 
     private static string? FieldValue(ValidationRequestSubmissionDto? request, string code) =>
         request?.FieldValues.TryGetValue(code, out var values) == true
             ? values.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x))?.Trim()
             : null;
+
+    private sealed record PreparedDraft(Guid? DepartmentOptionId, Guid? TeamOptionId, VerificationApplicationContent Content);
+    private sealed record DynamicRoutingSelection(Guid? DepartmentOptionId, Guid TeamOptionId);
 
     private static void SaveValidationRequest(VerificationApplication entity, ValidationRequestSubmissionDto? request, DateTime now)
     {
@@ -498,6 +620,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         Customer = entity.Customer,
         ProductModel = entity.ProductModel,
         RequestedFinishDate = entity.RequestedFinishDate,
+        ExpectedEndDate = entity.ExpectedEndDate,
         ValidationRequirement = entity.ValidationRequirement,
         HardwareVersion = entity.HardwareVersion,
         FirmwareVersion = entity.FirmwareVersion,

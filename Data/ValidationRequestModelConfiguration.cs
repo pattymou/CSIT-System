@@ -41,6 +41,10 @@ public static class ValidationRequestModelConfiguration
             entity.Property(x => x.DisplayLabel).HasColumnName("display_label").HasMaxLength(200).IsRequired();
             entity.Property(x => x.IsEnabled).HasColumnName("is_enabled");
             entity.Property(x => x.DisplayOrder).HasColumnName("display_order");
+            entity.Property(x => x.TeamOptionId).HasColumnName("team_option_id");
+            entity.HasIndex(x => x.TeamOptionId);
+            entity.HasOne<SystemOption>().WithMany().HasForeignKey(x => x.TeamOptionId)
+                .OnDelete(DeleteBehavior.Restrict);
             entity.HasIndex(x => x.Code).IsUnique();
         });
 

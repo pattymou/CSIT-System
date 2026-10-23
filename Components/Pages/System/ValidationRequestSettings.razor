@@ -2,7 +2,9 @@
 @attribute [Authorize(Policy = SystemAuthorization.Policies.Administration)]
 @rendermode InteractiveServer
 @using SIT.DepartmentSystem.Web.Services.ValidationRequests
+@using SIT.DepartmentSystem.Web.Entities
 @inject IValidationRequestConfigurationService ValidationService
+@inject ISystemOptionService SystemOptions
 @inject AuthenticationStateProvider AuthProvider
 @inject IAuthorizationService AuthorizationService
 @inject IBusinessWriteAuthorizationGuard WriteGuard
@@ -39,10 +41,10 @@ else
             case "產品類型":
                 <section class="settings-panel">
                     <div class="panel-heading"><div><h2>產品類型</h2><p>設定每種產品適用的表單區塊與測試項目類別。</p></div><button class="primary-btn" disabled="@(!_canWrite)" @onclick="OpenNewProduct">＋ 新增產品類型</button></div>
-                    <div class="responsive-table"><table class="product-type-table"><thead><tr><th>產品類型</th><th>顯示表單區塊</th><th>測試項目類別</th><th>狀態</th><th>操作</th></tr></thead><tbody>
+                    <div class="responsive-table"><table class="product-type-table"><thead><tr><th>產品類型</th><th>對應 Team</th><th>顯示表單區塊</th><th>測試項目類別</th><th>狀態</th><th>操作</th></tr></thead><tbody>
                     @foreach (var p in _configuration.ProductTypes.OrderBy(x => x.DisplayOrder))
                     {
-                        <tr><td><strong>@p.DisplayLabel</strong><small class="table-code">@p.Code</small></td><td><div class="tag-list">@foreach (var label in SectionLabels(p)) { <span class="mapping-tag">@label</span> }</div></td><td><div class="tag-list">@foreach (var label in CategoryLabels(p)) { <span class="mapping-tag category">@label</span> }</div></td><td><span class="status-pill @(p.IsEnabled ? "enabled" : "disabled")">@ValidationRequestPresentation.Enabled(p.IsEnabled)</span></td><td><button class="text-btn table-action" data-testid="edit-product-@p.Code" aria-label="編輯 @p.DisplayLabel" disabled="@(!_canWrite)" @onclick="() => OpenProduct(p)">編輯</button></td></tr>
+                        <tr><td><strong>@p.DisplayLabel</strong><small class="table-code">@p.Code</small></td><td>@(p.TeamName ?? "尚未設定")</td><td><div class="tag-list">@foreach (var label in SectionLabels(p)) { <span class="mapping-tag">@label</span> }</div></td><td><div class="tag-list">@foreach (var label in CategoryLabels(p)) { <span class="mapping-tag category">@label</span> }</div></td><td><span class="status-pill @(p.IsEnabled ? "enabled" : "disabled")">@ValidationRequestPresentation.Enabled(p.IsEnabled)</span></td><td><button class="text-btn table-action" data-testid="edit-product-@p.Code" aria-label="編輯 @p.DisplayLabel" disabled="@(!_canWrite)" @onclick="() => OpenProduct(p)">編輯</button></td></tr>
                     }
                     </tbody></table></div>
                 </section>
@@ -90,7 +92,7 @@ else
                     <div class="panel-heading"><div><h2>表單預覽</h2><p>確認產品類型所對應的申請表單與測試項目。</p></div>
                         <label class="compact-control"><span>產品類型</span><select @bind="_previewProduct" @bind:after="LoadPreview">@foreach (var p in _configuration.ProductTypes.Where(x => x.IsEnabled).OrderBy(x => x.DisplayOrder)) { <option value="@p.Code">@p.DisplayLabel</option> }</select></label>
                     </div>
-                    <ValidationRequestPreview Preview="_preview" ProductTypes="_configuration.ProductTypes" ShowPreviewBadge="true" />
+                    <ValidationRequestPreview Preview="_preview" ProductTypes="_configuration.ProductTypes" DepartmentOptions="_departments" ShowPreviewBadge="true" />
                 </section>
                 break;
         }
@@ -101,7 +103,7 @@ else
 {
     <div class="editor-backdrop" @onclick="CloseEditors"><aside class="editor-drawer" role="dialog" aria-modal="true" aria-label="編輯產品類型" @onclick:stopPropagation>
         <div class="drawer-heading"><div><span>產品類型</span><h2>@(_editingProductId is null ? "新增產品類型" : "編輯產品類型")</h2></div><button class="icon-btn" @onclick="CloseEditors" aria-label="關閉">×</button></div>
-        <div class="editor-section"><h3>基本設定</h3><label>名稱<input @bind="_productLabel" /></label><div class="editor-grid"><label class="toggle-label"><input type="checkbox" @bind="_productEnabled" /> 啟用</label><label>顯示順序<input type="number" @bind="_productOrder" /></label></div></div>
+        <div class="editor-section"><h3>基本設定</h3><label>名稱<input @bind="_productLabel" /></label><label>對應 Team<select @bind="_productTeamOptionId"><option value="">請選擇</option>@foreach (var team in _teams) { <option value="@team.Id">@DepartmentTeamRules.DisplayName(team.Name, team.Value)</option> }</select></label><div class="editor-grid"><label class="toggle-label"><input type="checkbox" @bind="_productEnabled" /> 啟用</label><label>顯示順序<input type="number" @bind="_productOrder" /></label></div></div>
         <div class="editor-section"><h3>適用表單區塊</h3><div class="check-list">@foreach (var s in _configuration!.Sections.OrderBy(x => x.DisplayOrder)) { <label><input type="checkbox" checked="@(_productSections.Contains(s.Id) || s.AlwaysVisible)" disabled="@s.AlwaysVisible" @onchange="e => SetSelection(_productSections, s.Id, e)" /><span>@s.DisplayLabel @if (s.AlwaysVisible) { <small>所有產品類型固定顯示</small> }</span></label> }</div></div>
         <div class="editor-section"><h3>適用測試項目類別</h3><div class="check-list">@foreach (var c in _configuration!.TestCategories.OrderBy(x => x.DisplayOrder)) { <label><input type="checkbox" checked="@(_productCategories.Contains(c.Id) || c.AlwaysVisible)" disabled="@c.AlwaysVisible" @onchange="e => SetSelection(_productCategories, c.Id, e)" /><span>@ValidationRequestPresentation.CategoryLabel(c) @if (c.AlwaysVisible) { <small>所有產品類型固定顯示</small> }</span></label> }</div></div>
         <div class="drawer-actions"><button class="secondary-btn" @onclick="CloseEditors">取消</button><button class="primary-btn" @onclick="SaveProduct">儲存</button></div>
@@ -154,7 +156,7 @@ else
     private string _tab = Tabs[0]; private bool _canWrite; private string? _error; private string? _message;
     private Guid _sectionId; private Guid _categoryId; private string _previewProduct = "";
 
-    private bool _productEditor; private Guid? _editingProductId; private string _productCode = ""; private string _productLabel = ""; private bool _productEnabled = true; private int _productOrder = 100; private HashSet<Guid> _productSections = []; private HashSet<Guid> _productCategories = [];
+    private bool _productEditor; private Guid? _editingProductId; private string _productCode = ""; private string _productLabel = ""; private bool _productEnabled = true; private int _productOrder = 100; private Guid? _productTeamOptionId; private List<SystemOptionDto> _teams = []; private List<SystemOptionDto> _departments = []; private HashSet<Guid> _productSections = []; private HashSet<Guid> _productCategories = [];
     private bool _fieldEditor; private Guid? _editingFieldId; private string _fieldCode = ""; private Guid _fieldSectionId; private string _fieldLabel = ""; private string _fieldType = "Text"; private int _fieldOrder = 100; private bool _fieldRequired; private bool _fieldEnabled = true; private string? _fieldHelp; private string? _fieldDataSource;
     private Guid? _editingOptionId; private string _optionLabel = ""; private bool _optionEnabled = true; private int _optionOrder = 100;
     private string _conditionSource = ""; private string _conditionOperator = "Equals"; private string _conditionValue = ""; private bool _conditionVisible = true; private bool _conditionRequired;
@@ -175,6 +177,9 @@ else
     {
         var auth = await AuthProvider.GetAuthenticationStateAsync();
         _canWrite = (await AuthorizationService.AuthorizeAsync(auth.User, SystemAuthorization.Policies.BusinessWrite)).Succeeded;
+        _teams = await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Team);
+        _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department))
+            .Where(x => DepartmentFamilyMatcher.IsDa40Family(x.Value)).ToList();
         await Reload();
     }
 
@@ -195,9 +200,9 @@ else
 
     private IEnumerable<string> SectionLabels(ValidationProductTypeDto p) => _configuration!.Sections.Where(x => x.AlwaysVisible || p.SectionIds.Contains(x.Id)).OrderBy(x => x.DisplayOrder).Select(ValidationRequestPresentation.SectionLabel);
     private IEnumerable<string> CategoryLabels(ValidationProductTypeDto p) => _configuration!.TestCategories.Where(x => x.AlwaysVisible || p.TestCategoryIds.Contains(x.Id)).OrderBy(x => x.DisplayOrder).Select(ValidationRequestPresentation.CategoryLabel);
-    private void OpenNewProduct() { _editingProductId = null; _productCode = AutoCode("PRODUCT"); _productLabel = ""; _productEnabled = true; _productOrder = (_configuration?.ProductTypes.Max(x => x.DisplayOrder) ?? 90) + 10; _productSections = _configuration!.Sections.Where(x => x.AlwaysVisible).Select(x => x.Id).ToHashSet(); _productCategories = _configuration.TestCategories.Where(x => x.AlwaysVisible).Select(x => x.Id).ToHashSet(); _productEditor = true; }
-    private void OpenProduct(ValidationProductTypeDto p) { _editingProductId = p.Id; _productCode = p.Code; _productLabel = p.DisplayLabel; _productEnabled = p.IsEnabled; _productOrder = p.DisplayOrder; _productSections = p.SectionIds.Concat(_configuration!.Sections.Where(x => x.AlwaysVisible).Select(x => x.Id)).ToHashSet(); _productCategories = p.TestCategoryIds.Concat(_configuration.TestCategories.Where(x => x.AlwaysVisible).Select(x => x.Id)).ToHashSet(); _productEditor = true; }
-    private Task SaveProduct() => Run(async () => { var id = await ValidationService.SaveProductTypeAsync(_editingProductId, new(_productCode, _productLabel, _productEnabled, _productOrder)); await ValidationService.SetSectionMappingsAsync(id, _productSections.Where(id => !_configuration!.Sections.Single(x => x.Id == id).AlwaysVisible).ToList()); await ValidationService.SetCategoryMappingsAsync(id, _productCategories.Where(id => !_configuration!.TestCategories.Single(x => x.Id == id).AlwaysVisible).ToList()); _productEditor = false; }, "產品類型已儲存");
+    private void OpenNewProduct() { _editingProductId = null; _productCode = AutoCode("PRODUCT"); _productLabel = ""; _productEnabled = true; _productOrder = (_configuration?.ProductTypes.Max(x => x.DisplayOrder) ?? 90) + 10; _productTeamOptionId = null; _productSections = _configuration!.Sections.Where(x => x.AlwaysVisible).Select(x => x.Id).ToHashSet(); _productCategories = _configuration.TestCategories.Where(x => x.AlwaysVisible).Select(x => x.Id).ToHashSet(); _productEditor = true; }
+    private void OpenProduct(ValidationProductTypeDto p) { _editingProductId = p.Id; _productCode = p.Code; _productLabel = p.DisplayLabel; _productEnabled = p.IsEnabled; _productOrder = p.DisplayOrder; _productTeamOptionId = p.TeamOptionId; _productSections = p.SectionIds.Concat(_configuration!.Sections.Where(x => x.AlwaysVisible).Select(x => x.Id)).ToHashSet(); _productCategories = p.TestCategoryIds.Concat(_configuration.TestCategories.Where(x => x.AlwaysVisible).Select(x => x.Id)).ToHashSet(); _productEditor = true; }
+    private Task SaveProduct() => Run(async () => { var id = await ValidationService.SaveProductTypeAsync(_editingProductId, new(_productCode, _productLabel, _productEnabled, _productOrder, _productTeamOptionId)); await ValidationService.SetSectionMappingsAsync(id, _productSections.Where(id => !_configuration!.Sections.Single(x => x.Id == id).AlwaysVisible).ToList()); await ValidationService.SetCategoryMappingsAsync(id, _productCategories.Where(id => !_configuration!.TestCategories.Single(x => x.Id == id).AlwaysVisible).ToList()); _productEditor = false; }, "產品類型已儲存");
 
     private void OpenNewField(ValidationSectionDto section, ValidationFieldGroup group) { _editingFieldId = null; _fieldCode = AutoCode("FIELD"); _fieldSectionId = section.Id; _fieldLabel = ""; _fieldType = "Text"; _fieldOrder = SuggestedOrder(section, group); _fieldRequired = false; _fieldEnabled = true; _fieldHelp = null; _fieldDataSource = null; ResetOption(); ResetCondition(); _fieldEditor = true; }
     private void OpenField(ValidationFieldDto f) { _editingFieldId = f.Id; _fieldCode = f.Code; _fieldSectionId = f.SectionId; _fieldLabel = f.DisplayLabel; _fieldType = f.FieldType; _fieldOrder = f.DisplayOrder; _fieldRequired = f.IsRequired; _fieldEnabled = f.IsEnabled; _fieldHelp = f.HelpText; _fieldDataSource = f.DataSource; ResetOption(); ResetCondition(); _fieldEditor = true; }

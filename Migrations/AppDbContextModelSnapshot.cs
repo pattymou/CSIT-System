@@ -5606,6 +5606,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("is_enabled");
 
+                    b.Property<Guid?>("TeamOptionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("team_option_id");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("updated_at");
@@ -5614,6 +5618,8 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.HasIndex("Code")
                         .IsUnique();
+
+                    b.HasIndex("TeamOptionId");
 
                     b.ToTable("validation_product_types", (string)null);
 
@@ -7094,6 +7100,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("dsp_model");
 
+                    b.Property<DateOnly?>("ExpectedEndDate")
+                        .HasColumnType("date")
+                        .HasColumnName("expected_end_date");
+
                     b.Property<string>("FirmwareVersion")
                         .HasMaxLength(200)
                         .HasColumnType("character varying(200)")
@@ -7851,6 +7861,14 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .IsRequired();
 
                     b.Navigation("Template");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ValidationProductType", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.SystemOption", null)
+                        .WithMany()
+                        .HasForeignKey("TeamOptionId")
+                        .OnDelete(DeleteBehavior.Restrict);
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ValidationProductTypeSectionMapping", b =>

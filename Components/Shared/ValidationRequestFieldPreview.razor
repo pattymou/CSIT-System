@@ -5,7 +5,18 @@
     <div class="validation-field @WidthClass @(Field.FieldType is "Group" or "RepeatableGroup" ? "validation-group" : "")" data-field-code="@Field.Code">
         <label class="validation-field-label">@Field.DisplayLabel @if (IsRequired) { <span class="required-mark">*</span> }</label>
         @if (!string.IsNullOrWhiteSpace(Field.HelpText)) { <div class="validation-help">@Field.HelpText</div> }
-        @switch (Field.FieldType)
+        @if (string.Equals(Field.Code, "DEPARTMENT_CODE", StringComparison.OrdinalIgnoreCase))
+        {
+            @if (ReadOnly)
+            {
+                <div class="validation-readonly-value">@TextValue</div>
+            }
+            else
+            {
+                <select value="@TextValue" @onchange="SetText"><option value="">請選擇</option>@foreach (var option in DepartmentOptions) { <option value="@option.Value">@DepartmentTeamRules.DisplayName(option.Name, option.Value)</option> }</select>
+            }
+        }
+        else @switch (Field.FieldType)
         {
             case "TextArea":
                 <textarea value="@TextValue" @oninput="SetText" disabled="@ReadOnly"></textarea>
@@ -53,13 +64,13 @@
                 @for (var index = 0; index < RepeatableGroupCount; index++)
                 {
                     var row = index;
-                    <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" ReadOnly="ReadOnly" ValueIndex="row" /> }</div>
+                    <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" ValueIndex="row" /> }</div>
                     @if (!ReadOnly && RepeatableGroupCount > 1) { <button type="button" class="validation-add-row" @onclick="() => RemoveGroupRow(row)">移除此組</button> }
                 }
                 @if (!ReadOnly) { <button type="button" class="validation-add-row" @onclick="AddGroupRow">＋ 新增一組</button> }
                 break;
             case "Group":
-                <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" ReadOnly="ReadOnly" /> }</div>
+                <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" /> }</div>
                 break;
             default:
                 <input value="@TextValue" @oninput="SetText" disabled="@ReadOnly" />
@@ -73,6 +84,7 @@
     [Parameter, EditorRequired] public Dictionary<string, List<string>> Values { get; set; } = null!;
     [Parameter] public EventCallback ValuesChanged { get; set; }
     [Parameter] public IReadOnlyList<ValidationProductTypeDto> ProductTypes { get; set; } = [];
+    [Parameter] public IReadOnlyList<SystemOptionDto> DepartmentOptions { get; set; } = [];
     [Parameter] public EventCallback<string> ProductTypeChanged { get; set; }
     [Parameter] public bool ReadOnly { get; set; }
     [Parameter] public int? ValueIndex { get; set; }

@@ -2,6 +2,7 @@ namespace SIT.DepartmentSystem.Web.Models.Api;
 
 public sealed record ValidationTemplateVersionDto(Guid Id, int VersionNumber, string Status, DateTime? PublishedAt);
 public sealed record ValidationProductTypeDto(Guid Id, string Code, string DisplayLabel, bool IsEnabled, int DisplayOrder,
+    Guid? TeamOptionId, string? TeamCode, string? TeamName,
     IReadOnlyList<Guid> SectionIds, IReadOnlyList<Guid> TestCategoryIds);
 public sealed record ValidationOptionDto(Guid Id, string ValueCode, string DisplayLabel, bool IsEnabled, int DisplayOrder);
 public sealed record ValidationConditionDto(Guid Id, string SourceFieldCode, string Operator, string? ExpectedValue, string Action);
@@ -38,7 +39,7 @@ public sealed class ValidationRequestSubmissionDto
     public ValidationRequestPreviewDto? FormSnapshot { get; set; }
 }
 
-public sealed record SaveValidationProductTypeRequest(string Code, string DisplayLabel, bool IsEnabled, int DisplayOrder);
+public sealed record SaveValidationProductTypeRequest(string Code, string DisplayLabel, bool IsEnabled, int DisplayOrder, Guid? TeamOptionId = null);
 public sealed record SaveValidationFieldRequest(Guid SectionId, Guid? ParentFieldId, string Code, string DisplayLabel,
     string? HelpText, string? DesignNote, string FieldType, bool IsRequired, bool IsEnabled, int DisplayOrder,
     bool IsSensitive, string? DataSource, string? ValidationJson);

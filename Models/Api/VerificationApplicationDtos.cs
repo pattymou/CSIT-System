@@ -51,6 +51,7 @@ public class VerificationApplicationDto
     public string? Customer { get; set; }
     public string? ProductModel { get; set; }
     public DateOnly? RequestedFinishDate { get; set; }
+    public DateOnly? ExpectedEndDate { get; set; }
     public string? ValidationRequirement { get; set; }
     public string? HardwareVersion { get; set; }
     public string? FirmwareVersion { get; set; }

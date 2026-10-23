@@ -261,6 +261,7 @@ public class AppDbContext : DbContext
             entity.Property(x => x.Customer).HasColumnName("customer").HasMaxLength(200);
             entity.Property(x => x.ProductModel).HasColumnName("product_model").HasMaxLength(300);
             entity.Property(x => x.RequestedFinishDate).HasColumnName("requested_finish_date");
+            entity.Property(x => x.ExpectedEndDate).HasColumnName("expected_end_date");
             entity.Property(x => x.ValidationRequirement).HasColumnName("validation_requirement");
             entity.Property(x => x.HardwareVersion).HasColumnName("hardware_version").HasMaxLength(200);
             entity.Property(x => x.FirmwareVersion).HasColumnName("firmware_version").HasMaxLength(200);

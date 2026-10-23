@@ -28,6 +28,7 @@ else if (_item is not null)
         {
             <ValidationRequestSubmissionView Submission="_item.ValidationRequest" />
         }
+        <div class="form-row full-width review-expected-date"><label>預計結束日期（核准必填）</label><input type="date" value="@DateText(_expectedEndDate)" @onchange="e => _expectedEndDate = ParseDate(e.Value)" /></div>
         <div class="form-row full-width review-note"><label>處理說明（Return / Reject 必填）</label><textarea @bind="_note"></textarea></div>
         <div class="form-actions">
             <button type="button" class="btn-secondary" disabled="@_working" @onclick="ReturnAsync">Return</button>
@@ -49,6 +50,7 @@ else if (_item is not null)
     [Parameter] public Guid Id { get; set; }
     private VerificationApplicationDto? _item;
     private string? _note;
+    private DateOnly? _expectedEndDate;
     private string? _message;
     private bool _loading = true;
     private bool _working;
@@ -67,7 +69,11 @@ else if (_item is not null)
     }
     private async Task ReturnAsync() => await ExecuteAsync((user) => Applications.ReturnAsync(Id, user, _note));
     private async Task RejectAsync() => await ExecuteAsync((user) => Applications.RejectAsync(Id, user, _note));
-    private async Task AcceptAsync() => await ExecuteAsync((user) => Applications.AcceptAsync(Id, user));
+    private async Task AcceptAsync()
+    {
+        if (!_expectedEndDate.HasValue) { _message = "核准前請填寫預計結束日期。"; return; }
+        await ExecuteAsync((user) => Applications.AcceptAsync(Id, user, _expectedEndDate.Value));
+    }
     private void Back() => Nav.NavigateTo("/verification-reviews");
     private async Task ExecuteAsync(Func<global::System.Security.Claims.ClaimsPrincipal, Task<VerificationApplicationDto>> action)
     {
@@ -81,4 +87,6 @@ else if (_item is not null)
         catch (Exception ex) { _message = ex.Message; }
         finally { _working = false; }
     }
+    private static string DateText(DateOnly? value) => value?.ToString("yyyy-MM-dd") ?? string.Empty;
+    private static DateOnly? ParseDate(object? value) => DateOnly.TryParse(value?.ToString(), out var date) ? date : null;
 }
