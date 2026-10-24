@@ -162,6 +162,12 @@ public class VerificationApplication
         UpdatedAt = now;
     }
 
+    public void RecordAttachmentChange(DateTime now)
+    {
+        EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
+        UpdatedAt = now;
+    }
+
     public void UpdateSubmittedContent(
         VerificationApplicationRouting routing,
         VerificationApplicationContent content,

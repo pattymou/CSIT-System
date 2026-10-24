@@ -106,6 +106,7 @@ public sealed class VerificationApplicationFileService(
                 CreatedAt = now
             };
             db.VerificationApplicationFiles.Add(entity);
+            application.RecordAttachmentChange(now);
             try
             {
                 await db.SaveChangesAsync(cancellationToken);
@@ -151,6 +152,7 @@ public sealed class VerificationApplicationFileService(
         var absolutePath = ResolvePath(storageArea, relativePath);
         if (file.DocumentLibraryFile is not null) db.DocumentLibraryFiles.Remove(file.DocumentLibraryFile);
         db.VerificationApplicationFiles.Remove(file);
+        application.RecordAttachmentChange(DateTime.UtcNow);
         await db.SaveChangesAsync(cancellationToken);
         if (File.Exists(absolutePath)) File.Delete(absolutePath);
         DeleteEmptyApplicationDirectory(absolutePath);

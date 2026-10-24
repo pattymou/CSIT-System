@@ -121,22 +121,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             if (entity.Status != VerificationApplicationStatus.Draft)
                 throw new InvalidOperationException("只有草稿可以放棄。");
 
-            var candidatePaths = entity.Files
-                .Where(x => !x.DocumentLibraryFileId.HasValue)
-                .Select(x => x.FilePath)
-                .Where(x => !string.IsNullOrWhiteSpace(x))
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .ToList();
-            var referencedPaths = candidatePaths.Count == 0
-                ? []
-                : await _db.DocumentLibraryFiles.AsNoTracking()
-                    .Where(x => x.StorageArea == DocumentStorageAreas.Staging &&
-                                candidatePaths.Contains(x.RelativePath))
-                    .Select(x => x.RelativePath)
-                    .ToListAsync(cancellationToken);
-            exclusivePaths = candidatePaths
-                .Except(referencedPaths, StringComparer.OrdinalIgnoreCase)
-                .ToList();
+            exclusivePaths = await VerificationDraftAttachmentSafety.GetExclusivePathsAsync(
+                _db, entity.Files, cancellationToken);
 
             _db.VerificationApplications.Remove(entity);
             await _db.SaveChangesAsync(cancellationToken);
@@ -155,34 +141,12 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
 
         foreach (var relativePath in exclusivePaths)
         {
-            var absolutePath = ResolveDraftAttachmentPath(relativePath);
+            var absolutePath = VerificationDraftAttachmentSafety.ResolveStagingPath(
+                _stagingOptions.RootPath, relativePath);
             if (File.Exists(absolutePath)) File.Delete(absolutePath);
-            DeleteEmptyDraftAttachmentDirectory(absolutePath);
+            VerificationDraftAttachmentSafety.DeleteEmptyApplicationDirectory(
+                _stagingOptions.RootPath, absolutePath);
         }
-    }
-
-    private string ResolveDraftAttachmentPath(string relativePath)
-    {
-        if (string.IsNullOrWhiteSpace(_stagingOptions.RootPath))
-            throw new InvalidOperationException("尚未設定 DocumentStaging:RootPath。");
-        var root = Path.GetFullPath(_stagingOptions.RootPath.Trim());
-        var fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
-        var rootPrefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            + Path.DirectorySeparatorChar;
-        if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("附件儲存路徑無效。");
-        return fullPath;
-    }
-
-    private void DeleteEmptyDraftAttachmentDirectory(string absolutePath)
-    {
-        var directory = Path.GetDirectoryName(absolutePath);
-        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory) ||
-            Directory.EnumerateFileSystemEntries(directory).Any()) return;
-        var root = Path.GetFullPath(_stagingOptions.RootPath).TrimEnd(
-            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (directory.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
-            Directory.Delete(directory);
     }
 
     public async Task<bool> IsDirectApprovalApplicantAsync(

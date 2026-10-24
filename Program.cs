@@ -368,6 +368,12 @@ builder.Services.Configure<DocumentStorageOptions>(
     builder.Configuration.GetSection(DocumentStorageOptions.SectionName));
 builder.Services.Configure<DocumentStagingOptions>(
     builder.Configuration.GetSection(DocumentStagingOptions.SectionName));
+builder.Services.Configure<VerificationDraftCleanupOptions>(
+    builder.Configuration.GetSection(VerificationDraftCleanupOptions.SectionName));
+builder.Services.AddSingleton<IVerificationDraftFileSystem, VerificationDraftFileSystem>();
+builder.Services.AddSingleton<VerificationDraftCleanupJournal>();
+builder.Services.AddScoped<VerificationDraftCleanupWorker>();
+builder.Services.AddHostedService<VerificationDraftCleanupBackgroundService>();
 builder.Services.AddScoped<IDocumentLibraryService, DocumentLibraryService>();
 
 builder.Services.AddScoped(sp =>
