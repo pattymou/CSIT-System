@@ -1,0 +1,31 @@
+@inject ReservationApiClient ReservationApi
+
+<div class="app-date-picker">
+    <input @ref="_input"
+           class="app-date-picker-input"
+           type="date"
+           value="@DateText(Value)"
+           @onchange="HandleChangeAsync" />
+    <button type="button"
+            class="app-date-picker-button"
+            title="@PickerLabel"
+            aria-label="@PickerLabel"
+            @onclick="OpenPickerAsync"><span aria-hidden="true">📅</span></button>
+</div>
+
+@code {
+    [Parameter] public DateOnly? Value { get; set; }
+    [Parameter] public EventCallback<DateOnly?> ValueChanged { get; set; }
+    [Parameter] public string PickerLabel { get; set; } = "選擇日期";
+
+    private ElementReference _input;
+
+    private async Task HandleChangeAsync(ChangeEventArgs args)
+    {
+        DateOnly? value = DateOnly.TryParse(args.Value?.ToString(), out var date) ? date : null;
+        await ValueChanged.InvokeAsync(value);
+    }
+
+    private Task OpenPickerAsync() => ReservationApi.ShowDateTimePickerAsync(_input);
+    private static string DateText(DateOnly? value) => value?.ToString("yyyy-MM-dd") ?? string.Empty;
+}

@@ -60,7 +60,7 @@ else if (_item is not null)
 
             <div class="form-row full-width review-expected-date">
                 <label>預計結束日期（同意必填）</label>
-                <input type="date" value="@DateText(_expectedEndDate)" @onchange="e => _expectedEndDate = ParseDate(e.Value)" />
+                <DatePickerInput @bind-Value="_expectedEndDate" PickerLabel="選擇預計結束日期" />
             </div>
             <div class="form-row full-width review-note">
                 <label>處理說明（退回／拒絕必填）</label>
@@ -130,8 +130,7 @@ else if (_item is not null)
             {
                 _configuration = await ValidationService.GetConfigurationAsync();
                 _productTypes = _configuration.ProductTypes;
-                _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department))
-                    .Where(x => DepartmentFamilyMatcher.IsDa40Family(x.Value)).ToList();
+                _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department)).ToList();
                 InitializeEditor(_item.ValidationRequest);
             }
         }
@@ -263,6 +262,4 @@ else if (_item is not null)
     private void Back() => Nav.NavigateTo("/supervisor-review");
     private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
     private static string FormatDate(DateTime? value) => value?.ToLocalTime().ToString("yyyy-MM-dd HH:mm") ?? "—";
-    private static string DateText(DateOnly? value) => value?.ToString("yyyy-MM-dd") ?? string.Empty;
-    private static DateOnly? ParseDate(object? value) => DateOnly.TryParse(value?.ToString(), out var date) ? date : null;
 }

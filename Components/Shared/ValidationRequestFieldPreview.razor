@@ -22,7 +22,7 @@
                 <textarea value="@TextValue" @oninput="SetText" disabled="@ReadOnly"></textarea>
                 break;
             case "SensitiveText":
-                <input type="password" value="@TextValue" @oninput="SetText" disabled="@ReadOnly" autocomplete="new-password" placeholder="••••••••" />
+                <input type="text" value="@TextValue" @oninput="SetText" disabled="@ReadOnly" autocomplete="off" />
                 break;
             case "Number":
                 <input type="number" value="@TextValue" @oninput="SetText" disabled="@ReadOnly" />
@@ -35,7 +35,7 @@
                 }
                 else
                 {
-                    <select value="@TextValue" @onchange="SetText" disabled="@ReadOnly"><option value="">請選擇</option>@foreach (var option in Field.Options.Where(x => x.IsEnabled)) { <option value="@option.ValueCode">@option.DisplayLabel</option> }</select>
+                    <select value="@TextValue" @onchange="SetText" disabled="@ReadOnly"><option value="">請選擇</option>@foreach (var option in Field.Options.Where(x => x.IsEnabled)) { <option value="@option.ValueCode" disabled="@IsUnavailableLocation(option.ValueCode)">@option.DisplayLabel</option> }</select>
                 }
                 break;
             case "MultiSelect":
@@ -91,6 +91,9 @@
     private string TextValue => TextAt(ValueIndex ?? 0);
     private bool BoolValue => string.Equals(TextValue, "true", StringComparison.OrdinalIgnoreCase);
     private bool Contains(string value) => Values.TryGetValue(Field.Code, out var v) && v.Contains(value, StringComparer.OrdinalIgnoreCase);
+    private bool IsUnavailableLocation(string value) =>
+        string.Equals(Field.Code, "LOCATION", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(value, "WUJIANG", StringComparison.OrdinalIgnoreCase);
     private bool IsVisible => Field.Conditions.Where(x => x.Action == "Visible").All(Evaluate);
     private bool IsRequired => Field.IsRequired || Field.Conditions.Where(x => x.Action == "Required").Any(Evaluate);
     private string WidthClass => Field.FieldType is "TextArea" or "Attachment" or "Group" or "RepeatableGroup" or "RepeatableText" || Field.DisplayLabel.Length > 42 ? "validation-field-wide" : "";

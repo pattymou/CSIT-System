@@ -7,6 +7,8 @@ public static class DepartmentFamilyMatcher
     public static bool IsDa40Family(string? department) => TryParseDa40Family(department, out _);
 
     public static bool IsRecognizedLocation(string? location) =>
+        string.Equals(location?.Trim(), "TAIPEI", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(location?.Trim(), "WUJIANG", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(location?.Trim(), "台北", StringComparison.OrdinalIgnoreCase) ||
         string.Equals(location?.Trim(), "吳江", StringComparison.OrdinalIgnoreCase);
 
@@ -16,10 +18,12 @@ public static class DepartmentFamilyMatcher
             return false;
 
         var normalizedLocation = location?.Trim();
-        if (string.Equals(normalizedLocation, "台北", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalizedLocation, "TAIPEI", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalizedLocation, "台北", StringComparison.OrdinalIgnoreCase))
             return !isWujiang;
 
-        if (string.Equals(normalizedLocation, "吳江", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(normalizedLocation, "WUJIANG", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(normalizedLocation, "吳江", StringComparison.OrdinalIgnoreCase))
             return isWujiang;
 
         return false;

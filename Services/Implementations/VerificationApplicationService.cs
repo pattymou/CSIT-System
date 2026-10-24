@@ -128,7 +128,11 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                 var selection = await ResolveDynamicRoutingAsync(entity.ValidationFormPayloadJson, true, cancellationToken);
                 entity.UpdateDraftRouting(selection.DepartmentOptionId!.Value, selection.TeamOptionId, now);
             }
-            var routing = await ResolveRoutingAsync(entity.RoutingDepartmentOptionId, entity.TeamOptionId, cancellationToken);
+            var routing = await ResolveRoutingAsync(
+                entity.RoutingDepartmentOptionId,
+                entity.TeamOptionId,
+                enforceDepartmentTeamRule: string.IsNullOrWhiteSpace(entity.ValidationFormPayloadJson),
+                cancellationToken);
             entity.Submit(routing, now);
 
             if (directApproval)
@@ -197,7 +201,11 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             ValidateSubmissionSnapshot(edited);
             var prepared = await PrepareDraftAsync(request, cancellationToken);
             var selection = await ResolveDynamicRoutingAsync(edited, true, cancellationToken);
-            var routing = await ResolveRoutingAsync(selection.DepartmentOptionId, selection.TeamOptionId, cancellationToken);
+            var routing = await ResolveRoutingAsync(
+                selection.DepartmentOptionId,
+                selection.TeamOptionId,
+                enforceDepartmentTeamRule: false,
+                cancellationToken);
             var before = AuditContent(entity.RoutingDepartmentOptionId, entity.TeamOptionId, original);
             var now = DateTime.UtcNow;
             var payloadJson = JsonSerializer.Serialize(edited, PayloadJsonOptions);
@@ -403,10 +411,16 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         return department;
     }
 
-    private async Task<VerificationApplicationRouting> ResolveRoutingAsync(Guid? departmentOptionId, Guid? teamOptionId, CancellationToken cancellationToken)
+    private async Task<VerificationApplicationRouting> ResolveRoutingAsync(
+        Guid? departmentOptionId,
+        Guid? teamOptionId,
+        bool enforceDepartmentTeamRule,
+        CancellationToken cancellationToken)
     {
         if (!teamOptionId.HasValue) throw new InvalidOperationException("Team is required before submit.");
-        var department = await EnsureTeamAllowedAsync(teamOptionId.Value, departmentOptionId, cancellationToken);
+        var department = enforceDepartmentTeamRule
+            ? await EnsureTeamAllowedAsync(teamOptionId.Value, departmentOptionId, cancellationToken)
+            : await RoutingDepartmentOptions.RequireAsync(_db, departmentOptionId, cancellationToken);
         var teamLeader = await _systemOptions.GetActiveTeamLeaderAsync(teamOptionId.Value, cancellationToken);
         var moduleCode = await _db.Modules.AsNoTracking()
             .Where(x => x.Code == VerificationApplicationWorkflow.ModuleCode && x.IsEnabled)
@@ -476,21 +490,26 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         bool requireDepartment,
         CancellationToken cancellationToken)
     {
+        var location = FieldValue(request, "LOCATION");
+        if (!string.Equals(location, "TAIPEI", StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("New validation applications currently support Taipei (TAIPEI) only.");
+
         var departmentCode = FieldValue(request, "DEPARTMENT_CODE");
-        SystemOption? department = null;
         if (!string.IsNullOrWhiteSpace(departmentCode))
         {
-            department = (await _db.SystemOptions.AsNoTracking()
+            var externalDepartmentExists = (await _db.SystemOptions.AsNoTracking()
                     .Where(x => x.Category == SystemOptionCategories.Department && x.IsEnabled)
                     .ToListAsync(cancellationToken))
-                .SingleOrDefault(x => DepartmentFamilyMatcher.IsDa40Family(x.Value) &&
-                                      string.Equals(x.Value.Trim(), departmentCode.Trim(), StringComparison.OrdinalIgnoreCase))
-                ?? throw new InvalidOperationException("Department Code 不是目前可用的 Department 選項。");
+                .Any(x => string.Equals(x.Value.Trim(), departmentCode.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (!externalDepartmentExists)
+                throw new InvalidOperationException("Department Code 不是目前可用的 Department 選項。");
         }
         else if (requireDepartment)
         {
             throw new InvalidOperationException("請選擇 Department Code。");
         }
+
+        var routingDepartment = await ResolveInternalRoutingDepartmentAsync("TAIPEI", cancellationToken);
 
         var product = await _db.ValidationProductTypes.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Code == request.ProductTypeCode && x.IsEnabled, cancellationToken)
@@ -504,16 +523,24 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         if (team is null)
             throw new InvalidOperationException($"Product Type「{product.DisplayLabel}」對應的 Team 已停用或不存在。");
 
-        if (department is not null)
-        {
-            var enabledTeams = await _systemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Team);
-            var allowedTeams = DepartmentTeamRules.GetAllowedTeamsForDepartment(
-                department.Value, enabledTeams, x => x.Name, x => x.Value);
-            if (allowedTeams.All(x => x.Id != team.Id))
-                throw new InvalidOperationException($"Team「{DepartmentTeamRules.DisplayName(team.Name, team.Value)}」不適用於所選 Department。");
-        }
+        return new(routingDepartment.Id, team.Id);
+    }
 
-        return new(department?.Id, team.Id);
+    private async Task<SystemOption> ResolveInternalRoutingDepartmentAsync(
+        string location,
+        CancellationToken cancellationToken)
+    {
+        var candidates = (await _db.SystemOptions.AsNoTracking()
+                .Where(x => x.Category == SystemOptionCategories.Department && x.IsEnabled)
+                .ToListAsync(cancellationToken))
+            .Where(x => DepartmentFamilyMatcher.MatchesLocation(x.Value, location))
+            .ToList();
+
+        if (candidates.Count == 0)
+            throw new InvalidOperationException("No enabled internal routing Department is configured for Taipei.");
+        if (candidates.Count > 1)
+            throw new InvalidOperationException("Multiple enabled internal routing Departments are configured for Taipei; routing is ambiguous.");
+        return candidates[0];
     }
 
     private static VerificationApplicationContent MapContent(VerificationApplicationContentRequest request)
@@ -722,17 +749,56 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     private static object AuditContent(
         Guid? departmentOptionId,
         Guid? teamOptionId,
-        ValidationRequestSubmissionDto request) => new
+        ValidationRequestSubmissionDto request)
     {
-        DepartmentOptionId = departmentOptionId,
-        TeamOptionId = teamOptionId,
-        request.TemplateVersionId,
-        request.TemplateVersion,
-        request.ProductTypeCode,
-        request.FieldValues,
-        SelectedTestItemCodes = request.SelectedTestItemCodes.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
-        request.TestParameterValues
-    };
+        var sensitiveFieldCodes = request.FormSnapshot?.Sections
+            .SelectMany(x => x.Fields)
+            .SelectMany(Flatten)
+            .Where(x => x.IsSensitive || string.Equals(x.FieldType, "SensitiveText", StringComparison.OrdinalIgnoreCase))
+            .Select(x => x.Code)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase) ?? [];
+        var sensitiveParameters = request.FormSnapshot?.TestCategories
+            .SelectMany(x => x.TestItems)
+            .ToDictionary(
+                x => x.Code,
+                x => x.Parameters.SelectMany(FlattenParameters)
+                    .Where(parameter => string.Equals(parameter.FieldType, "SensitiveText", StringComparison.OrdinalIgnoreCase))
+                    .Select(parameter => parameter.Code)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase),
+                StringComparer.OrdinalIgnoreCase)
+            ?? new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+
+        var fieldValues = request.FieldValues.ToDictionary(
+            x => x.Key,
+            x => RedactSensitiveValues(x.Value, sensitiveFieldCodes.Contains(x.Key)),
+            StringComparer.OrdinalIgnoreCase);
+        var testParameterValues = request.TestParameterValues.ToDictionary(
+            test => test.Key,
+            test => test.Value.ToDictionary(
+                parameter => parameter.Key,
+                parameter => RedactSensitiveValues(
+                    parameter.Value,
+                    sensitiveParameters.TryGetValue(test.Key, out var codes) && codes.Contains(parameter.Key)),
+                StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+
+        return new
+        {
+            DepartmentOptionId = departmentOptionId,
+            TeamOptionId = teamOptionId,
+            request.TemplateVersionId,
+            request.TemplateVersion,
+            request.ProductTypeCode,
+            FieldValues = fieldValues,
+            SelectedTestItemCodes = request.SelectedTestItemCodes.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+            TestParameterValues = testParameterValues
+        };
+    }
+
+    private static List<string> RedactSensitiveValues(IReadOnlyList<string> values, bool sensitive) =>
+        sensitive
+            ? values.Select(value => string.IsNullOrWhiteSpace(value) ? string.Empty : "[REDACTED]").ToList()
+            : values.ToList();
 
     private void AddEditAudit(
         VerificationApplication entity,

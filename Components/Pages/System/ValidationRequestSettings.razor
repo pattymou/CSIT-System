@@ -178,8 +178,7 @@ else
         var auth = await AuthProvider.GetAuthenticationStateAsync();
         _canWrite = (await AuthorizationService.AuthorizeAsync(auth.User, SystemAuthorization.Policies.BusinessWrite)).Succeeded;
         _teams = await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Team);
-        _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department))
-            .Where(x => DepartmentFamilyMatcher.IsDa40Family(x.Value)).ToList();
+        _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department)).ToList();
         await Reload();
     }
 

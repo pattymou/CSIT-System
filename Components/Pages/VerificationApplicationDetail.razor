@@ -59,7 +59,7 @@ else if (_item is not null)
                 {
                     <div class="form-row full-width direct-approval-date">
                         <label>預計結束日期（主管自行送單直接核准必填）</label>
-                        <input type="date" value="@DateText(_expectedEndDate)" @onchange="e => _expectedEndDate = ParseDate(e.Value)" />
+                        <DatePickerInput @bind-Value="_expectedEndDate" PickerLabel="選擇預計結束日期" />
                     </div>
                 }
                 <button type="button" class="btn-secondary" @onclick="Edit">修改</button>
@@ -125,6 +125,4 @@ else if (_item is not null)
         VerificationApplicationStatus.Returned => "已退回", VerificationApplicationStatus.Rejected => "已拒絕",
         VerificationApplicationStatus.Accepted => "已接受", _ => status.ToString()
     };
-    private static string DateText(DateOnly? value) => value?.ToString("yyyy-MM-dd") ?? string.Empty;
-    private static DateOnly? ParseDate(object? value) => DateOnly.TryParse(value?.ToString(), out var date) ? date : null;
 }

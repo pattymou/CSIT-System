@@ -39,7 +39,7 @@ else
             <strong>主管自行送單免審</strong>
             <p>正式送出後將直接核准並建立 Record，請先填寫預計結束日期。</p>
             <label>預計結束日期（必填）</label>
-            <input type="date" value="@DateText(_expectedEndDate)" @onchange="e => _expectedEndDate = ParseDate(e.Value)" />
+            <DatePickerInput @bind-Value="_expectedEndDate" PickerLabel="選擇預計結束日期" />
         </div>
     }
 
@@ -83,7 +83,7 @@ else
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
             _directApproval = await Applications.IsDirectApprovalApplicantAsync(user);
             _configuration = await ValidationService.GetConfigurationAsync();
-            _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department)).Where(x => DepartmentFamilyMatcher.IsDa40Family(x.Value)).ToList();
+            _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department)).ToList();
             if (Id.HasValue)
             {
                 _existing = await Applications.GetForApplicantAsync(Id.Value, user) ?? throw new InvalidOperationException("找不到申請，或您無權存取。");
@@ -120,6 +120,7 @@ else
     private async Task LoadPreview()
     {
         if (!string.IsNullOrWhiteSpace(_selectedProduct)) _preview = await ValidationService.GetPreviewAsync(_selectedProduct);
+        if (!Id.HasValue && !_values.ContainsKey("LOCATION")) _values["LOCATION"] = ["TAIPEI"];
     }
 
     private async Task SaveAsync(bool submit)
@@ -152,6 +153,4 @@ else
     private static string StatusText(VerificationApplicationStatus status) => status switch { VerificationApplicationStatus.Draft => "草稿", VerificationApplicationStatus.Returned => "已退回", _ => status.ToString() };
     private void Cancel() => Nav.NavigateTo("/verification-applications");
     private void OpenMyApplications() => Nav.NavigateTo("/verification-applications");
-    private static string DateText(DateOnly? value) => value?.ToString("yyyy-MM-dd") ?? string.Empty;
-    private static DateOnly? ParseDate(object? value) => DateOnly.TryParse(value?.ToString(), out var date) ? date : null;
 }

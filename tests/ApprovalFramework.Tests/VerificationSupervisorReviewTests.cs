@@ -155,7 +155,8 @@ public sealed class VerificationSupervisorReviewTests
         Assert.Contains("UpdateForLeaderReviewAsync", review);
         Assert.Contains("original.FormSnapshot", service);
         Assert.Contains("GetPreviewAsync(original.TemplateVersionId", service);
-        Assert.Contains("ResolveRoutingAsync(selection.DepartmentOptionId", service);
+        Assert.Contains("selection.DepartmentOptionId", service);
+        Assert.Contains("enforceDepartmentTeamRule: false", service);
     }
 
     [Fact]

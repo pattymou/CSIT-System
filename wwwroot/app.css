@@ -201,6 +201,44 @@ input[type="date"]::-webkit-calendar-picker-indicator{
   filter:invert(0.9) brightness(1.2);
 }
 
+.app-date-picker{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) 42px;
+  gap:8px;
+  width:min(100%,280px);
+  align-items:stretch;
+}
+
+.app-date-picker > input.app-date-picker-input{
+  min-width:0;
+  cursor:text;
+  color-scheme:dark;
+}
+
+.app-date-picker > input.app-date-picker-input::-webkit-calendar-picker-indicator{
+  opacity:1;
+  cursor:pointer;
+  filter:invert(85%) sepia(30%) saturate(490%) hue-rotate(122deg) brightness(98%);
+}
+
+.app-date-picker > button.app-date-picker-button{
+  width:42px;
+  min-width:42px;
+  padding:0;
+  border:1px solid rgba(45,212,191,.48);
+  border-radius:12px;
+  background:rgba(13,148,136,.24);
+  color:#ccfbf1;
+  box-shadow:none;
+}
+
+.app-date-picker > button.app-date-picker-button:hover,
+.app-date-picker > button.app-date-picker-button:focus-visible{
+  background:rgba(13,148,136,.4);
+  outline:2px solid rgba(45,212,191,.42);
+  outline-offset:1px;
+}
+
 .date-input-wrap{
   position:relative;
 }
