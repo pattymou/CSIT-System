@@ -19,6 +19,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     private const int AuditDetailsChunkSize = 900;
     private static readonly JsonSerializerOptions PayloadJsonOptions = new(JsonSerializerDefaults.Web);
     private readonly AppDbContext _db;
+    private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly IModuleRecordCreationService _moduleRecordCreation;
     private readonly ISystemOptionService _systemOptions;
     private readonly IBusinessWriteAuthorizationGuard _businessWrite;
@@ -31,9 +32,11 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         ISystemOptionService systemOptions,
         IBusinessWriteAuthorizationGuard businessWrite,
         IValidationRequestConfigurationService validationRequests,
-        IOptions<DocumentStagingOptions> stagingOptions)
+        IOptions<DocumentStagingOptions> stagingOptions,
+        IDbContextFactory<AppDbContext> dbFactory)
     {
         _db = db;
+        _dbFactory = dbFactory;
         _moduleRecordCreation = moduleRecordCreation;
         _systemOptions = systemOptions;
         _businessWrite = businessWrite;
@@ -187,7 +190,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         CancellationToken cancellationToken = default)
     {
         var account = VerificationApplicationSecurity.GetAccount(user);
-        var isActiveTeamLeader = await _db.TeamRoutings.AsNoTracking().AnyAsync(x =>
+        await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
+        var isActiveTeamLeader = await db.TeamRoutings.AsNoTracking().AnyAsync(x =>
             x.IsEnabled && x.LeaderAccount.ToLower() == account, cancellationToken);
         return VerificationApplicationSecurity.CanBypassReview(user, isActiveTeamLeader);
     }
@@ -419,12 +423,13 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     public async Task<VerificationApplicationDto?> GetForApplicantAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
     {
         var account = VerificationApplicationSecurity.GetAccount(user);
-        var entity = await _db.VerificationApplications
+        await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
+        var entity = await db.VerificationApplications
             .AsNoTracking()
             .Include(x => x.Files)
             .Include(x => x.ModuleRecord)
             .SingleOrDefaultAsync(x => x.Id == id && x.ApplicantAccount == account, cancellationToken);
-        return entity is null ? null : await MapWithDraftOptionsAsync(entity, cancellationToken);
+        return entity is null ? null : await MapWithDraftOptionsAsync(entity, cancellationToken, db);
     }
 
     public async Task<VerificationApplicationDto?> GetForLeaderReviewAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
@@ -516,7 +521,11 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         CancellationToken cancellationToken)
     {
         var department = await RoutingDepartmentOptions.RequireAsync(_db, departmentOptionId, cancellationToken);
-        var enabledTeams = await _systemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Team);
+        var enabledTeams = await _db.SystemOptions.AsNoTracking()
+            .Where(x => x.Category == SystemOptionCategories.Team && x.IsEnabled)
+            .OrderBy(x => x.Sort)
+            .ThenBy(x => x.Name)
+            .ToListAsync(cancellationToken);
         var allowedTeams = DepartmentTeamRules.GetAllowedTeamsForDepartment(
             department.Value,
             enabledTeams,
@@ -957,12 +966,15 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     private static string Normalize(string? value) => value?.Trim() ?? string.Empty;
     private static string NormalizeAccount(string value) => value.Trim().ToLowerInvariant();
 
-    private async Task<VerificationApplicationDto> MapWithDraftOptionsAsync(VerificationApplication entity, CancellationToken cancellationToken)
+    private async Task<VerificationApplicationDto> MapWithDraftOptionsAsync(
+        VerificationApplication entity,
+        CancellationToken cancellationToken,
+        AppDbContext? db = null)
     {
         var dto = Map(entity);
         if (entity.Status is VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned)
         {
-            var options = await _db.SystemOptions.AsNoTracking()
+            var options = await (db ?? _db).SystemOptions.AsNoTracking()
                 .Where(x => x.Id == entity.RoutingDepartmentOptionId || x.Id == entity.TeamOptionId)
                 .ToListAsync(cancellationToken);
             var department = options.FirstOrDefault(x => x.Id == entity.RoutingDepartmentOptionId);

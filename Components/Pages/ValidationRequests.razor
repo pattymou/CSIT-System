@@ -122,14 +122,19 @@ else
         _loading = true; _error = null; _validationGuidance = null; _operationError = null;
         _operationSuccess = DraftSaved ? "草稿已成功儲存。" : null;
         _scrollToValidationField = false;
+        var loadStep = "取得使用者資料";
         try
         {
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            loadStep = "確認主管自行送單權限";
             _directApproval = await Applications.IsDirectApprovalApplicantAsync(user);
+            loadStep = "載入驗證申請單設定";
             _configuration = await ValidationService.GetConfigurationAsync();
+            loadStep = "載入部門選項";
             _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department)).ToList();
             if (Id.HasValue)
             {
+                loadStep = "載入申請草稿";
                 _draftId = Id.Value;
                 _existing = await Applications.GetForApplicantAsync(Id.Value, user) ?? throw new InvalidOperationException("找不到申請，或您無權存取。");
                 if (_existing.Status is not (VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned)) throw new InvalidOperationException("此申請目前不可修改。");
@@ -150,10 +155,15 @@ else
             {
                 _draftId = null;
                 _selectedProduct = _configuration.ProductTypes.Where(x => x.IsEnabled).OrderBy(x => x.DisplayOrder).FirstOrDefault()?.Code ?? "";
+                loadStep = "載入申請表預覽";
                 await LoadPreview();
             }
         }
-        catch (Exception ex) { _error = ex.Message; }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "載入驗證測試申請單失敗。Step: {LoadStep}; ApplicationId: {ApplicationId}", loadStep, Id);
+            _error = "驗證測試申請單載入失敗，請重新整理後再試；若問題持續請聯絡系統管理員。";
+        }
         finally { _loading = false; }
     }
 

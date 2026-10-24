@@ -10,11 +10,16 @@ namespace SIT.DepartmentSystem.Web.Services.Implementations;
 public class SystemOptionService : ISystemOptionService
 {
     private readonly AppDbContext _db;
+    private readonly IDbContextFactory<AppDbContext> _dbFactory;
     private readonly IBusinessWriteAuthorizationGuard _businessWrite;
 
-    public SystemOptionService(AppDbContext db, IBusinessWriteAuthorizationGuard businessWrite)
+    public SystemOptionService(
+        AppDbContext db,
+        IDbContextFactory<AppDbContext> dbFactory,
+        IBusinessWriteAuthorizationGuard businessWrite)
     {
         _db = db;
+        _dbFactory = dbFactory;
         _businessWrite = businessWrite;
     }
 
@@ -48,7 +53,8 @@ public class SystemOptionService : ISystemOptionService
         if (string.IsNullOrWhiteSpace(category))
             throw new InvalidOperationException("Category 不可空白");
 
-        var result = await _db.SystemOptions
+        await using var db = await _dbFactory.CreateDbContextAsync();
+        var result = await db.SystemOptions
             .Where(x => x.Category == category && x.IsEnabled)
             .OrderBy(x => x.Sort)
             .ThenBy(x => x.Name)

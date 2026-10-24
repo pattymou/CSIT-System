@@ -2,12 +2,16 @@ using System.Reflection;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using SIT.DepartmentSystem.Web.Components.Pages;
+using SIT.DepartmentSystem.Web.Data;
+using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Implementations;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using Microsoft.Extensions.Options;
 
 namespace ApprovalFramework.Tests;
 
@@ -58,6 +62,52 @@ public sealed class VerificationDraftSaveAndGuidanceTests
     }
 
     [Fact]
+    public async Task ValidationFailureThenPageReloadUsesIndependentEfContexts()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+        var factory = new TrackingDbContextFactory(options);
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            seed.SystemOptions.Add(new SystemOption
+            {
+                Id = Guid.NewGuid(),
+                Category = SystemOptionCategories.Department,
+                Name = "RD",
+                Value = "RD",
+                IsEnabled = true,
+                CreatedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow
+            });
+            await seed.SaveChangesAsync();
+        }
+        factory.ContextIds.Clear();
+
+        var retainedCircuitContext = new AppDbContext(options);
+        await retainedCircuitContext.DisposeAsync();
+        var applications = new VerificationApplicationService(
+            retainedCircuitContext,
+            null!,
+            null!,
+            null!,
+            null!,
+            Options.Create(new SIT.DepartmentSystem.Web.Models.Config.DocumentStagingOptions()),
+            factory);
+        var systemOptions = new SystemOptionService(retainedCircuitContext, factory, null!);
+        var user = new ClaimsPrincipal(new ClaimsIdentity([new Claim("account", "applicant")], "test"));
+
+        Assert.Throws<TargetInvocationException>(() =>
+            ValidateDirectApprovalDate(directApproval: true, expectedEndDate: null));
+        Assert.False(await applications.IsDirectApprovalApplicantAsync(user));
+        Assert.Null(await applications.GetForApplicantAsync(Guid.NewGuid(), user));
+        Assert.Single(await systemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department));
+
+        Assert.Equal(3, factory.ContextIds.Count);
+        Assert.Equal(3, factory.ContextIds.Distinct().Count());
+    }
+
+    [Fact]
     public void EditorKeepsFormVisibleAndTargetsExpectedEndDateWhileLoggingTechnicalFailures()
     {
         var source = Read("Components", "Pages", "ValidationRequests.razor");
@@ -68,6 +118,9 @@ public sealed class VerificationDraftSaveAndGuidanceTests
         Assert.Contains("Logger.LogError(ex", source);
         Assert.Contains("草稿儲存失敗，請稍後再試", source);
         Assert.Contains("@if (!string.IsNullOrWhiteSpace(_operationError))", source);
+        Assert.Contains("載入驗證測試申請單失敗。Step: {LoadStep}", source);
+        Assert.Contains("驗證測試申請單載入失敗，請重新整理後再試", source);
+        Assert.DoesNotContain("catch (Exception ex) { _error = ex.Message; }", source);
     }
 
     [Fact]
@@ -80,6 +133,17 @@ public sealed class VerificationDraftSaveAndGuidanceTests
         Assert.Contains("FocusFieldCode=\"ValidationField\"", editor);
         Assert.Contains("_activeTab = RequestedActiveTab", preview);
         Assert.Contains("csitScrollIntoView", editor);
+    }
+
+    [Fact]
+    public void SubmitTransactionAndAttachmentLinkingRemainOnOneContext()
+    {
+        var service = Read("Services", "Implementations", "VerificationApplicationService.cs");
+
+        Assert.Contains("await using var transaction = await _db.Database.BeginTransactionAsync", service);
+        Assert.Contains("VerificationApplicationAttachmentLinker.LinkAsync(_db, entity", service);
+        Assert.Contains("await _db.SaveChangesAsync(cancellationToken);", service);
+        Assert.Contains("await transaction.CommitAsync(cancellationToken);", service);
     }
 
     private static DateOnly ValidateDirectApprovalDate(bool directApproval, DateOnly? expectedEndDate)
@@ -166,5 +230,24 @@ public sealed class VerificationDraftSaveAndGuidanceTests
         public Task<ListResponseDto<VerificationApplicationDto>> ListForLeaderReviewAsync(ClaimsPrincipal user, int page, int pageSize, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<VerificationApplicationDto?> GetForCsitAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<ListResponseDto<VerificationApplicationDto>> ListForCsitAsync(ClaimsPrincipal user, int page, int pageSize, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+    }
+
+    private sealed class TrackingDbContextFactory(DbContextOptions<AppDbContext> options)
+        : IDbContextFactory<AppDbContext>
+    {
+        public List<Guid> ContextIds { get; } = [];
+
+        public AppDbContext CreateDbContext()
+        {
+            var db = new AppDbContext(options);
+            ContextIds.Add(db.ContextId.InstanceId);
+            return db;
+        }
+
+        public Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult(CreateDbContext());
+        }
     }
 }
