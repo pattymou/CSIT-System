@@ -20,6 +20,7 @@ $stateRoot = Join-Path $root 'state'
 $releaseRoot = Join-Path $root 'releases'
 $workRoot = Join-Path $root 'work'
 $secretRoot = Join-Path $root 'secrets'
+$reviewRoot = Join-Path $root 'migration-reviews'
 $secretFile = Join-Path $secretRoot 'runtime.json'
 $baseSettings = Join-Path $secretRoot 'base-appsettings.json'
 $currentFile = Join-Path $stateRoot 'current.json'
@@ -27,6 +28,9 @@ $localhostCert = '46BFDA36B073576B3116CB5E52D7ABE1FC595F2D'
 $publicCert = 'D4E5BA5E6D6252575BB8D0ADD3F2A98B279C503B'
 $productionBefore = $null
 $lock = $null
+$devRuntimeConnection = $null
+
+. (Join-Path $PSScriptRoot 'DevMigrationReview.ps1')
 
 function Assert-Within([string] $Path, [string] $Parent) {
     $parentPath = [IO.Path]::GetFullPath($Parent).TrimEnd('\') + '\'
@@ -79,6 +83,7 @@ function Assert-DevRuntimeConfig {
         -not $connection.ContainsKey('Password')) {
         throw 'The runtime database is not the authorized DEV role and database.'
     }
+    $script:devRuntimeConnection = $connection
     $base = Get-Content -LiteralPath $baseSettings -Raw | ConvertFrom-Json
     $baseConnection = [string] $base.ConnectionStrings.Postgres
     if ($baseConnection -match 'sit_department_system(?!_dev)' -or $baseConnection -match '[dD]:\\CSIT_Publish') {
@@ -93,6 +98,34 @@ function Assert-DevRuntimeConfig {
         if ($LASTEXITCODE -ne 0 -or ($result -join '').Trim() -ne 'sit_department_system_dev,csit_runtime_dev') {
             throw 'The DEV runtime database connectivity guard failed.'
         }
+    } finally {
+        Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
+    }
+}
+
+function Get-AppliedDevMigrations([string[]] $MigrationIds) {
+    if ($null -eq $devRuntimeConnection -or $MigrationIds.Count -eq 0) {
+        throw 'DEV_MIGRATION_REVIEW_INVALID: DEV migration verification is unavailable.'
+    }
+    foreach ($migrationId in $MigrationIds) {
+        if ($migrationId -notmatch '^[0-9]{14}_[A-Za-z0-9_]+$') {
+            throw 'DEV_MIGRATION_REVIEW_INVALID: a Migration ID is malformed.'
+        }
+    }
+    $quoted = @($MigrationIds | ForEach-Object { "'$_'" }) -join ','
+    $query = 'SELECT "MigrationId" FROM "__EFMigrationsHistory" WHERE "MigrationId" IN (' +
+        $quoted + ') ORDER BY "MigrationId";'
+    $env:PGPASSWORD = [string] $devRuntimeConnection['Password']
+    try {
+        $result = @($query | & 'C:\Program Files\PostgreSQL\16\bin\psql.exe' -X -w -t -A `
+            -v ON_ERROR_STOP=1 -h ([string] $devRuntimeConnection['Host']) `
+            -p ([string] $devRuntimeConnection['Port']) -U ([string] $devRuntimeConnection['Username']) `
+            -d ([string] $devRuntimeConnection['Database']) | ForEach-Object { $_.Trim() } |
+            Where-Object { $_ })
+        if ($LASTEXITCODE -ne 0) {
+            throw 'DEV_MIGRATION_REVIEW_INVALID: DEV migration history query failed.'
+        }
+        return $result
     } finally {
         Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue
     }
@@ -202,6 +235,7 @@ if (-not $Tag.EndsWith($Sha.Substring(0, 8))) { throw 'The DEV ready tag does no
 Assert-Within $stateRoot $root
 Assert-Within $releaseRoot $root
 Assert-Within $workRoot $root
+Assert-Within $reviewRoot $root
 $productionBefore = Get-ProductionPid
 Assert-ProductionUnchanged
 Assert-DevRuntimeConfig
@@ -234,7 +268,8 @@ try {
     Assert-Within $releasePath $releaseRoot
     $work = Join-Path $workRoot $Sha
     Assert-Within $work $workRoot
-    if (-not (Test-Path -LiteralPath (Join-Path $releasePath 'release.json'))) {
+    $releaseExists = Test-Path -LiteralPath (Join-Path $releasePath 'release.json')
+    if (-not $releaseExists -or $previousSha -ne $Sha) {
         if (Test-Path -LiteralPath $work) { Remove-Item -LiteralPath $work -Recurse -Force }
         & $gitExe clone --quiet --branch $branch --single-branch --depth 100 $remote $work
         if ($LASTEXITCODE -ne 0 -or (& $gitExe -C $work rev-parse HEAD).Trim() -ne $Sha) {
@@ -248,10 +283,23 @@ try {
             }
             $changed = @(& $gitExe -C $work diff --name-only $previousSha $Sha)
             if ($LASTEXITCODE -ne 0) { throw 'Cannot compare release source changes.' }
-            if (@($changed | Where-Object { $_ -match '(^|/)(Migrations|migrations)(/|$)|migration|\.sql$' }).Count -gt 0) {
-                throw 'DEV_MIGRATION_REVIEW_REQUIRED: no automatic schema change or rollback was attempted.'
+            if (Test-DevMigrationChanges -ChangedPaths $changed) {
+                $requiredMigrations = @(Get-RequiredDevMigrationIds -ChangedPaths $changed)
+                if ($requiredMigrations.Count -eq 0) {
+                    throw 'DEV_MIGRATION_REVIEW_REQUIRED: changed schema files have no reviewable Migration ID.'
+                }
+                $markerPath = Get-DevMigrationReviewMarkerPath -ReviewRoot $reviewRoot -Sha $Sha
+                Assert-DevMigrationReviewMarkerAcl -MarkerPath $markerPath
+                $appliedMigrations = @(Get-AppliedDevMigrations -MigrationIds $requiredMigrations)
+                $null = Assert-DevMigrationReviewMarkerContent -MarkerPath $markerPath -Sha $Sha `
+                    -Database 'sit_department_system_dev' -RequiredMigrationIds $requiredMigrations `
+                    -AppliedMigrationIds $appliedMigrations
+                Write-Output ('DEV_MIGRATION_REVIEW_VALID ' + $Sha + ' ' +
+                    ($requiredMigrations -join ','))
             }
         }
+    }
+    if (-not $releaseExists) {
         Copy-Item -LiteralPath $baseSettings -Destination (Join-Path $work 'appsettings.json')
         $testProject = Join-Path $work 'tests\ApprovalFramework.Tests\ApprovalFramework.Tests.csproj'
         $webProject = Join-Path $work 'SIT.DepartmentSystem.Web.csproj'

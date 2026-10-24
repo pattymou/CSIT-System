@@ -11,12 +11,12 @@ if ($baselineSha -notmatch '^[0-9a-f]{40}$') { throw 'Cannot record the current 
 
 $directories = @($root, (Join-Path $root 'automation'), (Join-Path $root 'secrets'),
     (Join-Path $root 'releases'), (Join-Path $root 'work'), (Join-Path $root 'logs'),
-    (Join-Path $root 'state'))
+    (Join-Path $root 'state'), (Join-Path $root 'migration-reviews'))
 foreach ($path in $directories) { New-Item -ItemType Directory -Path $path -Force | Out-Null }
 & icacls.exe $root /inheritance:r /grant:r '*S-1-5-18:(OI)(CI)F' `
     '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-19:(OI)(CI)M' | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'DEV deployment root ACL failed.' }
-foreach ($restricted in @('automation', 'secrets')) {
+foreach ($restricted in @('automation', 'secrets', 'migration-reviews')) {
     & icacls.exe (Join-Path $root $restricted) /inheritance:r /grant:r `
         '*S-1-5-18:(OI)(CI)F' '*S-1-5-32-544:(OI)(CI)F' '*S-1-5-19:(OI)(CI)R' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'DEV restricted directory ACL failed.' }
@@ -58,7 +58,8 @@ foreach ($thumbprint in @('46BFDA36B073576B3116CB5E52D7ABE1FC595F2D',
 }
 
 $scriptRoot = $PSScriptRoot
-foreach ($name in @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1')) {
+foreach ($name in @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevMigrationReview.ps1',
+        'Approve-DevMigrationReview.ps1')) {
     $target = Join-Path $root ('automation\' + $name)
     Copy-Item -LiteralPath (Join-Path $scriptRoot $name) -Destination $target -Force
     & icacls.exe $target /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-19:R' | Out-Null

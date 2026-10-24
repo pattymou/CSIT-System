@@ -5,7 +5,10 @@ $logsRoot = Join-Path $root 'logs'
 $remote = 'https://github.com/pattymou/CSIT-System.git'
 $currentFile = Join-Path $stateRoot 'current.json'
 $failedFile = Join-Path $stateRoot 'failed.json'
+$reviewRoot = Join-Path $root 'migration-reviews'
 $lock = $null
+
+. (Join-Path $PSScriptRoot 'DevMigrationReview.ps1')
 
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-19') {
     throw 'The DEV ready watcher must run as LOCAL SERVICE.'
@@ -35,13 +38,21 @@ try {
     }
     if (Test-Path -LiteralPath $failedFile) {
         $failed = Get-Content -LiteralPath $failedFile -Raw | ConvertFrom-Json
-        if ($failed.Tag -eq $ready.Tag) { return }
+        if ($failed.Tag -eq $ready.Tag -and
+            -not (Test-DevMigrationReviewRetryAllowed -Failed $failed -ReviewRoot $reviewRoot)) {
+            return
+        }
     }
     $log = Join-Path $logsRoot ($ready.Tag + '-' + (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss') + '.log')
     Start-Transcript -LiteralPath $log -Force | Out-Null
     try {
         & (Join-Path $root 'automation\Deploy-DevReady.ps1') -Tag $ready.Tag -Sha $ready.Sha
-        if (Test-Path -LiteralPath $failedFile) { Remove-Item -LiteralPath $failedFile -Force }
+        if (Test-Path -LiteralPath $failedFile) {
+            $recordedFailure = Get-Content -LiteralPath $failedFile -Raw | ConvertFrom-Json
+            if ($recordedFailure.Tag -eq $ready.Tag -and $recordedFailure.Sha -eq $ready.Sha) {
+                Remove-Item -LiteralPath $failedFile -Force
+            }
+        }
         Write-Output ('DEV DEPLOY SUCCESS ' + $ready.Sha)
     } catch {
         $message = [string] $_.Exception.Message
