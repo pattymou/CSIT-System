@@ -39,7 +39,7 @@
                         <div class="validation-fields">
                             @foreach (var field in group.Fields)
                             {
-                                <ValidationRequestFieldPreview Field="field" Values="Values" ValuesChanged="StateHasChanged"
+                                <ValidationRequestFieldPreview Field="field" Values="Values" ValuesChanged="StateHasChanged" FocusFieldCode="FocusFieldCode"
                                                                ProductTypes="ProductTypes" ProductTypeChanged="HandleProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly"
                                                                AttachmentApplicationId="AttachmentApplicationId" AttachmentsManageable="AttachmentsManageable"
                                                                EnsureAttachmentApplicationId="EnsureAttachmentApplicationId" AttachmentDraftEnsured="AttachmentDraftEnsured" />
@@ -101,8 +101,12 @@
     [Parameter] public bool AttachmentsManageable { get; set; }
     [Parameter] public Func<Task<Guid>>? EnsureAttachmentApplicationId { get; set; }
     [Parameter] public EventCallback<Guid> AttachmentDraftEnsured { get; set; }
+    [Parameter] public string? RequestedActiveTab { get; set; }
+    [Parameter] public int ActiveTabRequestVersion { get; set; }
+    [Parameter] public string? FocusFieldCode { get; set; }
     private string? _activeTab;
     private string? _lastProductCode;
+    private int _lastActiveTabRequestVersion = -1;
     private ValidationSectionDto? ActiveSection => Preview?.Sections.FirstOrDefault(x => x.Code == _activeTab);
 
     protected override void OnParametersSet()
@@ -117,6 +121,13 @@
         }
         if (_activeTab is null || (_activeTab != TestItemsTab && Preview.Sections.All(x => x.Code != _activeTab)))
             _activeTab = Preview.Sections.FirstOrDefault()?.Code ?? TestItemsTab;
+        if (!string.IsNullOrWhiteSpace(RequestedActiveTab) &&
+            _lastActiveTabRequestVersion != ActiveTabRequestVersion &&
+            (RequestedActiveTab == TestItemsTab || Preview.Sections.Any(x => x.Code == RequestedActiveTab)))
+        {
+            _activeTab = RequestedActiveTab;
+            _lastActiveTabRequestVersion = ActiveTabRequestVersion;
+        }
     }
 
     private async Task HandleProductTypeChanged(string code)

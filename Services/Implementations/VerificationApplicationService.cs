@@ -731,24 +731,27 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         var request = JsonSerializer.Deserialize<ValidationRequestSubmissionDto>(entity.ValidationFormPayloadJson, PayloadJsonOptions)
             ?? throw new InvalidOperationException("The validation form data is invalid.");
         var snapshot = request.FormSnapshot ?? throw new InvalidOperationException("The validation form snapshot is missing.");
-        var missing = snapshot.Sections.SelectMany(x => x.Fields).SelectMany(Flatten)
-            .Where(x => x.IsEnabled && IsVisible(x, request.FieldValues) && IsRequired(x, request.FieldValues))
-            .Where(x => x.FieldType is not ("Attachment" or "Group" or "RepeatableGroup"))
-            .Where(x => !request.FieldValues.TryGetValue(x.Code, out var values) || values.All(string.IsNullOrWhiteSpace))
-            .Select(x => x.DisplayLabel).ToList();
-        var missingTests = snapshot.TestCategories.SelectMany(x => x.TestItems)
-            .Where(x => x.IsEnabled && x.IsMandatory && !request.SelectedTestItemCodes.Contains(x.Code))
-            .Select(x => x.DisplayLabel).ToList();
-        var missingParameters = snapshot.TestCategories.SelectMany(x => x.TestItems)
-            .Where(x => x.IsEnabled && request.SelectedTestItemCodes.Contains(x.Code))
-            .SelectMany(item => item.Parameters.SelectMany(FlattenParameters)
-                .Where(x => x.IsEnabled && x.IsRequired)
-                .Where(x => !request.TestParameterValues.TryGetValue(item.Code, out var values) ||
-                            !values.TryGetValue(x.Code, out var answers) || answers.All(string.IsNullOrWhiteSpace))
-                .Select(x => $"{item.DisplayLabel}／{x.DisplayLabel}"))
+        var issues = snapshot.Sections.SelectMany(section => section.Fields.SelectMany(Flatten)
+                .Where(field => field.IsEnabled && IsVisible(field, request.FieldValues) && IsRequired(field, request.FieldValues))
+                .Where(field => field.FieldType is not ("Attachment" or "Group" or "RepeatableGroup"))
+                .Where(field => !request.FieldValues.TryGetValue(field.Code, out var values) || values.All(string.IsNullOrWhiteSpace))
+                .Select(field => new VerificationApplicationValidationIssue(
+                    section.Code, section.DisplayLabel, field.Code, field.DisplayLabel)))
+            .Concat(snapshot.TestCategories.SelectMany(category => category.TestItems)
+                .Where(item => item.IsEnabled && item.IsMandatory && !request.SelectedTestItemCodes.Contains(item.Code))
+                .Select(item => new VerificationApplicationValidationIssue(
+                    VerificationApplicationValidationIssue.TestItemsAreaCode, "測試項目", null, item.DisplayLabel)))
+            .Concat(snapshot.TestCategories.SelectMany(category => category.TestItems)
+                .Where(item => item.IsEnabled && request.SelectedTestItemCodes.Contains(item.Code))
+                .SelectMany(item => item.Parameters.SelectMany(FlattenParameters)
+                    .Where(parameter => parameter.IsEnabled && parameter.IsRequired)
+                    .Where(parameter => !request.TestParameterValues.TryGetValue(item.Code, out var values) ||
+                                        !values.TryGetValue(parameter.Code, out var answers) || answers.All(string.IsNullOrWhiteSpace))
+                    .Select(parameter => new VerificationApplicationValidationIssue(
+                        VerificationApplicationValidationIssue.TestItemsAreaCode, "測試項目", null,
+                        $"{item.DisplayLabel}／{parameter.DisplayLabel}"))))
             .ToList();
-        if (missing.Count > 0 || missingTests.Count > 0 || missingParameters.Count > 0)
-            throw new InvalidOperationException($"新版申請單尚未完整填寫：{string.Join("、", missing.Concat(missingTests).Concat(missingParameters))}");
+        if (issues.Count > 0) throw new VerificationApplicationValidationException(issues);
     }
 
     private static IEnumerable<ValidationFieldDto> Flatten(ValidationFieldDto field)

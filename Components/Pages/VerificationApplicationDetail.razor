@@ -85,6 +85,16 @@ else if (_item is not null)
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
             _item = await Applications.SubmitAsync(Id, user, _expectedEndDate);
         }
+        catch (VerificationApplicationValidationException ex)
+        {
+            var issue = ex.Issues[0];
+            var target = $"/validation-requests/{Id}?validationArea={Uri.EscapeDataString(issue.AreaCode)}" +
+                         $"&validationAreaLabel={Uri.EscapeDataString(issue.AreaLabel)}" +
+                         $"&validationMessage={Uri.EscapeDataString(ex.Message)}";
+            if (!string.IsNullOrWhiteSpace(issue.FieldCode))
+                target += $"&validationField={Uri.EscapeDataString(issue.FieldCode)}";
+            Nav.NavigateTo(target);
+        }
         catch (Exception ex) { _message = ex.Message; }
         finally { _working = false; }
     }

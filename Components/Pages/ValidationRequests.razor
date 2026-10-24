@@ -12,6 +12,7 @@
 @inject ISystemOptionService SystemOptions
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject NavigationManager Nav
+@inject IJSRuntime JS
 
 <PageTitle>驗證測試申請單</PageTitle>
 
@@ -31,6 +32,7 @@
     <button type="button" class="btn-secondary" @onclick="OpenMyApplications">我的驗證申請</button>
 </header>
 
+@if (!string.IsNullOrWhiteSpace(_validationGuidance)) { <div class="alert alert-warning validation-guidance">@_validationGuidance</div> }
 @if (_error is not null) { <div class="alert alert-danger">@_error</div> }
 else if (_loading || _configuration is null) { <div class="validation-loading">正在載入申請表…</div> }
 else
@@ -44,7 +46,9 @@ else
                               Values="_values" SelectedTestItemCodes="_selectedTests" TestParameterValues="_testParameters"
                               DepartmentOptions="_departments" AttachmentApplicationId="@(_draftId ?? Id)"
                               AttachmentsManageable="true" EnsureAttachmentApplicationId="EnsureAttachmentDraftAsync"
-                              AttachmentDraftEnsured="AttachmentDraftEnsured" />
+                              AttachmentDraftEnsured="AttachmentDraftEnsured"
+                              RequestedActiveTab="ValidationArea" ActiveTabRequestVersion="_validationFocusRevision"
+                              FocusFieldCode="ValidationField" />
 
     @if (_directApproval)
     {
@@ -69,10 +73,15 @@ else
     .direct-approval-date { margin-top:18px; display:grid; gap:8px; }
     .direct-approval-date p { margin:0; color:#64748b; }
     .direct-approval-date input { max-width:240px; }
+    .validation-guidance { margin-bottom:16px; font-weight:700; }
 </style>
 
 @code {
     [Parameter] public Guid? Id { get; set; }
+    [Parameter, SupplyParameterFromQuery(Name = "validationArea")] public string? ValidationArea { get; set; }
+    [Parameter, SupplyParameterFromQuery(Name = "validationAreaLabel")] public string? ValidationAreaLabel { get; set; }
+    [Parameter, SupplyParameterFromQuery(Name = "validationField")] public string? ValidationField { get; set; }
+    [Parameter, SupplyParameterFromQuery(Name = "validationMessage")] public string? ValidationMessage { get; set; }
     private ValidationRequestConfigurationDto? _configuration;
     private ValidationRequestPreviewDto? _preview;
     private VerificationApplicationDto? _existing;
@@ -83,16 +92,19 @@ else
     private List<SystemOptionDto> _departments = [];
     private string _selectedProduct = "";
     private string? _error;
+    private string? _validationGuidance;
     private bool _loading = true;
     private bool _saving;
     private bool _showAbandonDialog;
     private bool _directApproval;
+    private bool _scrollToValidationField;
+    private int _validationFocusRevision;
     private DateOnly? _expectedEndDate;
     private Guid? _draftId;
 
     protected override async Task OnParametersSetAsync()
     {
-        _loading = true; _error = null;
+        _loading = true; _error = null; _validationGuidance = null; _scrollToValidationField = false;
         try
         {
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
@@ -106,6 +118,13 @@ else
                 if (_existing.Status is not (VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned)) throw new InvalidOperationException("此申請目前不可修改。");
                 if (_existing.ValidationRequest?.FormSnapshot is null) throw new InvalidOperationException("舊版申請請使用原有編輯畫面。");
                 CopyExisting(_existing);
+                if (!string.IsNullOrWhiteSpace(ValidationMessage))
+                {
+                    var area = string.IsNullOrWhiteSpace(ValidationAreaLabel) ? "未完成" : ValidationAreaLabel;
+                    _validationGuidance = $"正式送出未完成，已返回原草稿。請在「{area}」區域補齊資料後重新送出。{ValidationMessage}";
+                    _scrollToValidationField = !string.IsNullOrWhiteSpace(ValidationField);
+                    _validationFocusRevision++;
+                }
             }
             else
             {
@@ -142,7 +161,7 @@ else
 
     private async Task SaveAsync(bool submit)
     {
-        _saving = true; _error = null;
+        _saving = true; _error = null; _validationGuidance = null;
         try
         {
             var saved = await SaveDraftCoreAsync();
@@ -150,8 +169,25 @@ else
             if (submit) saved = await Applications.SubmitAsync(saved.Id, user, _expectedEndDate);
             Nav.NavigateTo($"/verification-applications/{saved.Id}");
         }
+        catch (VerificationApplicationValidationException ex)
+        {
+            var issue = ex.Issues[0];
+            ValidationArea = issue.AreaCode;
+            ValidationAreaLabel = issue.AreaLabel;
+            ValidationField = issue.FieldCode;
+            _validationGuidance = $"正式送出未完成。請在「{issue.AreaLabel}」區域補齊資料後重新送出。{ex.Message}";
+            _scrollToValidationField = !string.IsNullOrWhiteSpace(ValidationField);
+            _validationFocusRevision++;
+        }
         catch (Exception ex) { _error = ex.Message; }
         finally { _saving = false; }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!_scrollToValidationField || string.IsNullOrWhiteSpace(ValidationField)) return;
+        _scrollToValidationField = false;
+        await JS.InvokeVoidAsync("csitScrollIntoView", $"validation-field-{ValidationField}");
     }
 
     private async Task<Guid> EnsureAttachmentDraftAsync()

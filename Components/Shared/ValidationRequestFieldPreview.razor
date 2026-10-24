@@ -2,7 +2,7 @@
 
 @if (Field.IsEnabled && IsVisible)
 {
-    <div class="validation-field @WidthClass @(Field.FieldType is "Group" or "RepeatableGroup" ? "validation-group" : "")" data-field-code="@Field.Code">
+    <div id="validation-field-@Field.Code" class="validation-field @WidthClass @(Field.FieldType is "Group" or "RepeatableGroup" ? "validation-group" : "") @(IsFocusTarget ? "validation-field-focus" : "")" data-field-code="@Field.Code">
         <label class="validation-field-label">@Field.DisplayLabel @if (IsRequired) { <span class="required-mark">*</span> }</label>
         @if (!string.IsNullOrWhiteSpace(Field.HelpText)) { <div class="validation-help">@Field.HelpText</div> }
         @if (string.Equals(Field.Code, "DEPARTMENT_CODE", StringComparison.OrdinalIgnoreCase))
@@ -75,13 +75,13 @@
                 @for (var index = 0; index < RepeatableGroupCount; index++)
                 {
                     var row = index;
-                    <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" ValueIndex="row" AttachmentApplicationId="AttachmentApplicationId" AttachmentsManageable="AttachmentsManageable" EnsureAttachmentApplicationId="EnsureAttachmentApplicationId" AttachmentDraftEnsured="AttachmentDraftEnsured" /> }</div>
+                    <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" ValueIndex="row" AttachmentApplicationId="AttachmentApplicationId" AttachmentsManageable="AttachmentsManageable" EnsureAttachmentApplicationId="EnsureAttachmentApplicationId" AttachmentDraftEnsured="AttachmentDraftEnsured" FocusFieldCode="FocusFieldCode" /> }</div>
                     @if (!ReadOnly && RepeatableGroupCount > 1) { <button type="button" class="validation-add-row" @onclick="() => RemoveGroupRow(row)">移除此組</button> }
                 }
                 @if (!ReadOnly) { <button type="button" class="validation-add-row" @onclick="AddGroupRow">＋ 新增一組</button> }
                 break;
             case "Group":
-                <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" AttachmentApplicationId="AttachmentApplicationId" AttachmentsManageable="AttachmentsManageable" EnsureAttachmentApplicationId="EnsureAttachmentApplicationId" AttachmentDraftEnsured="AttachmentDraftEnsured" /> }</div>
+                <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" AttachmentApplicationId="AttachmentApplicationId" AttachmentsManageable="AttachmentsManageable" EnsureAttachmentApplicationId="EnsureAttachmentApplicationId" AttachmentDraftEnsured="AttachmentDraftEnsured" FocusFieldCode="FocusFieldCode" /> }</div>
                 break;
             default:
                 <input value="@TextValue" @oninput="SetText" disabled="@ReadOnly" />
@@ -103,9 +103,11 @@
     [Parameter] public bool AttachmentsManageable { get; set; }
     [Parameter] public Func<Task<Guid>>? EnsureAttachmentApplicationId { get; set; }
     [Parameter] public EventCallback<Guid> AttachmentDraftEnsured { get; set; }
+    [Parameter] public string? FocusFieldCode { get; set; }
     private string TextValue => TextAt(ValueIndex ?? 0);
     private bool BoolValue => string.Equals(TextValue, "true", StringComparison.OrdinalIgnoreCase);
     private bool Contains(string value) => Values.TryGetValue(Field.Code, out var v) && v.Contains(value, StringComparer.OrdinalIgnoreCase);
+    private bool IsFocusTarget => string.Equals(Field.Code, FocusFieldCode, StringComparison.OrdinalIgnoreCase);
     private bool IsUnavailableLocation(string value) =>
         string.Equals(Field.Code, "LOCATION", StringComparison.OrdinalIgnoreCase) &&
         string.Equals(value, "WUJIANG", StringComparison.OrdinalIgnoreCase);

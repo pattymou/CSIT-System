@@ -25,3 +25,4 @@
 .validation-preview ::deep .required-mark{font-size:15px;font-weight:600;color:#fb7185}
 .validation-preview ::deep .validation-test-item strong{font-size:15px}
 .validation-preview ::deep .validation-test-item small,.validation-preview ::deep .validation-empty{font-size:13px;line-height:1.45}
+.validation-preview ::deep .validation-field-focus{padding:12px;border:2px solid #f59e0b;border-radius:11px;background:rgba(245,158,11,.1);box-shadow:0 0 0 4px rgba(245,158,11,.08)}
