@@ -52,6 +52,12 @@ public sealed class VerificationApplicationFileService(
                 $"檔案大小不可超過 {storageOptions.Value.MaxFileSizeBytes / 1_000_000} MB。");
 
         var originalName = DocumentLibraryRules.NormalizeOriginalFileName(file.FileName);
+        var normalizedName = originalName.ToLowerInvariant();
+        if (await db.VerificationApplicationFiles.AsNoTracking().AnyAsync(
+                x => x.VerificationApplicationId == applicationId &&
+                     x.FileName.ToLower() == normalizedName,
+                cancellationToken))
+            throw DuplicateFileName(originalName);
         var contentType = string.IsNullOrWhiteSpace(file.ContentType) ? null : file.ContentType.Trim();
         if (contentType?.Length > 200) throw new InvalidOperationException("檔案類型資訊過長。");
 
@@ -100,7 +106,20 @@ public sealed class VerificationApplicationFileService(
                 CreatedAt = now
             };
             db.VerificationApplicationFiles.Add(entity);
-            await db.SaveChangesAsync(cancellationToken);
+            try
+            {
+                await db.SaveChangesAsync(cancellationToken);
+            }
+            catch (DbUpdateException)
+            {
+                db.Entry(entity).State = EntityState.Detached;
+                if (await db.VerificationApplicationFiles.AsNoTracking().AnyAsync(
+                        x => x.VerificationApplicationId == applicationId &&
+                             x.FileName.ToLower() == normalizedName,
+                        cancellationToken))
+                    throw DuplicateFileName(originalName);
+                throw;
+            }
             return ToDto(entity, application.ProductModel);
         }
         catch
@@ -220,4 +239,7 @@ public sealed class VerificationApplicationFileService(
         DocumentFolderId = file.DocumentLibraryFile?.FolderId,
         DocumentLibraryFileId = file.DocumentLibraryFileId
     };
+
+    private static InvalidOperationException DuplicateFileName(string fileName) =>
+        new($"檔案已存在：{fileName}，請刪除舊檔或更名後再上傳。");
 }

@@ -1,13 +1,17 @@
 using System.Reflection;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using SIT.DepartmentSystem.Web.Controllers;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
+using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Implementations;
+using SIT.DepartmentSystem.Web.Services.Interfaces;
 
 namespace ApprovalFramework.Tests;
 
@@ -125,6 +129,83 @@ public sealed class VerificationApplicationAttachmentTests
     }
 
     [Fact]
+    public async Task Upload_RejectsSameNormalizedName_WithoutRejectingSameContentOrOtherApplication()
+    {
+        var root = TempRoot();
+        try
+        {
+            await using var db = NewDb();
+            var firstApplication = Draft("VA-DUPLICATE-1", "MODEL-SHARED", "first");
+            var secondApplication = Draft("VA-DUPLICATE-2", "MODEL-SHARED", "second");
+            db.VerificationApplications.AddRange(firstApplication, secondApplication);
+            await db.SaveChangesAsync();
+            var service = Service(db, root);
+
+            await service.UploadAsync(
+                firstApplication.Id, FormFile(" C:\\fakepath\\SPEC.pdf ", "same"), User("first", rd: true));
+
+            var sameContent = await Assert.ThrowsAsync<InvalidOperationException>(() => service.UploadAsync(
+                firstApplication.Id, FormFile("spec.PDF", "same"), User("first", rd: true)));
+            Assert.Equal("檔案已存在：spec.PDF，請刪除舊檔或更名後再上傳。", sameContent.Message);
+
+            var differentContent = await Assert.ThrowsAsync<InvalidOperationException>(() => service.UploadAsync(
+                firstApplication.Id, FormFile("Spec.pdf", "different"), User("first", rd: true)));
+            Assert.Equal("檔案已存在：Spec.pdf，請刪除舊檔或更名後再上傳。", differentContent.Message);
+
+            await service.UploadAsync(
+                firstApplication.Id, FormFile("renamed.pdf", "same"), User("first", rd: true));
+            await service.UploadAsync(
+                secondApplication.Id, FormFile("SPEC.pdf", "same"), User("second", rd: true));
+
+            Assert.Equal(2, await db.VerificationApplicationFiles.CountAsync(
+                x => x.VerificationApplicationId == firstApplication.Id));
+            Assert.Single(await db.VerificationApplicationFiles.Where(
+                x => x.VerificationApplicationId == secondApplication.Id).ToListAsync());
+            Assert.Equal(3, Directory.GetFiles(root, "*", SearchOption.AllDirectories).Length);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void DuplicateNameMigration_UsesApplicationScopedCaseInsensitiveUniqueIndex()
+    {
+        var root = FindRepositoryRoot();
+        var migration = File.ReadAllText(Path.Combine(
+            root, "Migrations", "20261024090000_PreventDuplicateVerificationApplicationFileNames.cs"));
+
+        Assert.Contains("CREATE UNIQUE INDEX", migration);
+        Assert.Contains("verification_application_id, lower(file_name)", migration);
+        Assert.DoesNotContain("sha256", migration, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task BatchUpload_ReportsDuplicateAndContinuesWithRemainingFiles()
+    {
+        var files = new FormFileCollection
+        {
+            FormFile("first.txt", "first"),
+            FormFile("SPEC.pdf", "duplicate"),
+            FormFile("last.txt", "last")
+        };
+        var controller = new VerificationApplicationFilesController(new BatchUploadService())
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext() }
+        };
+        controller.Request.Form = new FormCollection([], files);
+
+        var response = Assert.IsType<OkObjectResult>(
+            await controller.Upload(Guid.NewGuid(), CancellationToken.None));
+        var batch = Assert.IsType<VerificationApplicationFileUploadBatchResultDto>(response.Value);
+
+        Assert.Equal(3, batch.Results.Count);
+        Assert.True(batch.Results[0].Success);
+        Assert.False(batch.Results[1].Success);
+        Assert.Equal("SPEC.pdf", batch.Results[1].FileName);
+        Assert.Equal("檔案已存在：SPEC.pdf，請刪除舊檔或更名後再上傳。", batch.Results[1].Message);
+        Assert.True(batch.Results[2].Success);
+    }
+
+    [Fact]
     public void DynamicAttachmentUi_UsesPersistentApplicationEndpoints()
     {
         var root = FindRepositoryRoot();
@@ -201,6 +282,34 @@ public sealed class VerificationApplicationAttachmentTests
     private sealed class AllowWrite : IBusinessWriteAuthorizationGuard
     {
         public Task DemandAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class BatchUploadService : IVerificationApplicationFileService
+    {
+        public Task<VerificationApplicationFileDto> UploadAsync(
+            Guid applicationId,
+            IFormFile file,
+            ClaimsPrincipal user,
+            CancellationToken cancellationToken = default)
+        {
+            var name = Path.GetFileName(file.FileName);
+            if (name == "SPEC.pdf")
+                throw new InvalidOperationException(
+                    "檔案已存在：SPEC.pdf，請刪除舊檔或更名後再上傳。");
+            return Task.FromResult(new VerificationApplicationFileDto { Id = Guid.NewGuid(), FileName = name });
+        }
+
+        public Task<IReadOnlyList<VerificationApplicationFileDto>> GetAsync(
+            Guid applicationId, ClaimsPrincipal user, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<bool> DeleteAsync(
+            Guid applicationId, Guid fileId, ClaimsPrincipal user, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
+        public Task<DocumentDownload?> OpenDownloadAsync(
+            Guid fileId, ClaimsPrincipal user, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private static string FindRepositoryRoot()
