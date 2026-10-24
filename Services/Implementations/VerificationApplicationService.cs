@@ -25,6 +25,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     private readonly IBusinessWriteAuthorizationGuard _businessWrite;
     private readonly IValidationRequestConfigurationService _validationRequests;
     private readonly DocumentStagingOptions _stagingOptions;
+    private readonly VerificationAttachmentArchiveProcessor _attachmentArchive;
 
     public VerificationApplicationService(
         AppDbContext db,
@@ -33,7 +34,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         IBusinessWriteAuthorizationGuard businessWrite,
         IValidationRequestConfigurationService validationRequests,
         IOptions<DocumentStagingOptions> stagingOptions,
-        IDbContextFactory<AppDbContext> dbFactory)
+        IDbContextFactory<AppDbContext> dbFactory,
+        VerificationAttachmentArchiveProcessor attachmentArchive)
     {
         _db = db;
         _dbFactory = dbFactory;
@@ -42,6 +44,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         _businessWrite = businessWrite;
         _validationRequests = validationRequests;
         _stagingOptions = stagingOptions.Value;
+        _attachmentArchive = attachmentArchive;
     }
 
     public async Task<VerificationApplicationDto> CreateDraftAsync(
@@ -174,9 +177,11 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             IsolationLevel.ReadCommitted,
             cancellationToken);
 
+        VerificationApplication entity;
+        var archiveQueued = false;
         try
         {
-            var entity = await _db.VerificationApplications
+            entity = await _db.VerificationApplications
                 .FromSqlInterpolated($"SELECT * FROM verification_applications WHERE id = {id} FOR UPDATE")
                 .Include(x => x.Files)
                 .ThenInclude(x => x.DocumentLibraryFile)
@@ -196,7 +201,6 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                 enforceDepartmentTeamRule: string.IsNullOrWhiteSpace(entity.ValidationFormPayloadJson),
                 cancellationToken);
             entity.Submit(routing, now);
-            await VerificationApplicationAttachmentLinker.LinkAsync(_db, entity, now, cancellationToken);
 
             if (directApproval)
             {
@@ -214,18 +218,23 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                     null,
                     null,
                     details: reason));
+                await _attachmentArchive.EnqueueApprovedApplicationAsync(entity, now, cancellationToken);
+                archiveQueued = true;
             }
 
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return await MapWithDraftOptionsAsync(entity, cancellationToken);
         }
         catch
         {
             await transaction.RollbackAsync(CancellationToken.None);
+            if (archiveQueued) await _attachmentArchive.RemoveApplicationAsync(id);
             _db.ChangeTracker.Clear();
             throw;
         }
+        if (archiveQueued)
+            await _attachmentArchive.ProcessApplicationAsync(id, cancellationToken);
+        return await MapWithDraftOptionsAsync(entity, cancellationToken);
     }
 
     public async Task<VerificationApplicationDto> UpdateForLeaderReviewAsync(
@@ -283,7 +292,6 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                 payloadJson,
                 now);
             ValidateValidationRequestForSubmit(entity);
-            await VerificationApplicationAttachmentLinker.LinkAsync(_db, entity, now, cancellationToken);
             AddEditAudit(entity, account, now, before,
                 AuditContent(routing.RoutingDepartmentOptionId, routing.TeamOptionId, edited));
             await _db.SaveChangesAsync(cancellationToken);
@@ -339,10 +347,14 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             IsolationLevel.ReadCommitted,
             cancellationToken);
 
+        VerificationApplication entity;
+        var archiveQueued = false;
         try
         {
-            var entity = await _db.VerificationApplications
+            entity = await _db.VerificationApplications
                 .FromSqlInterpolated($"SELECT * FROM verification_applications WHERE id = {id} FOR UPDATE")
+                .Include(x => x.Files)
+                .ThenInclude(x => x.DocumentLibraryFile)
                 .SingleOrDefaultAsync(cancellationToken)
                 ?? throw new KeyNotFoundException($"Verification application {id} was not found.");
 
@@ -353,17 +365,26 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
 
             VerificationApplicationSecurity.EnsureReviewerAccess(entity, user);
 
-            await CreateRecordAndAcceptAsync(entity, expectedEndDate, account, DateTime.UtcNow, null, cancellationToken);
+            var now = DateTime.UtcNow;
+            await CreateRecordAndAcceptAsync(entity, expectedEndDate, account, now, null, cancellationToken);
+            await _attachmentArchive.EnqueueApprovedApplicationAsync(entity, now, cancellationToken);
+            archiveQueued = true;
             await _db.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return await MapWithDraftOptionsAsync(entity, cancellationToken);
         }
         catch
         {
             await transaction.RollbackAsync(CancellationToken.None);
+            if (archiveQueued) await _attachmentArchive.RemoveApplicationAsync(id);
             _db.ChangeTracker.Clear();
             throw;
         }
+        await _attachmentArchive.ProcessApplicationAsync(id, cancellationToken);
+        var accepted = await _db.VerificationApplications
+            .Include(x => x.Files).ThenInclude(x => x.DocumentLibraryFile)
+            .Include(x => x.ModuleRecord)
+            .SingleAsync(x => x.Id == id, cancellationToken);
+        return await MapWithDraftOptionsAsync(accepted, cancellationToken);
     }
 
     private static DateOnly ValidateDirectApprovalDate(bool directApproval, DateOnly? expectedEndDate)
@@ -936,6 +957,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         AppDbContext? db = null)
     {
         var dto = Map(entity);
+        await PopulateFormalArchiveStateAsync(dto, entity.Status, db ?? _db, cancellationToken);
         if (entity.Status is VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned)
         {
             var options = await (db ?? _db).SystemOptions.AsNoTracking()
@@ -949,6 +971,58 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             dto.TeamName = team is null ? null : DepartmentTeamRules.DisplayName(team.Name, team.Value);
         }
         return dto;
+    }
+
+    private async Task PopulateFormalArchiveStateAsync(
+        VerificationApplicationDto dto,
+        VerificationApplicationStatus applicationStatus,
+        AppDbContext db,
+        CancellationToken cancellationToken)
+    {
+        if (dto.Files.Count == 0) return;
+        var ids = dto.Files.Select(x => x.Id).ToList();
+        var records = await db.VerificationApplicationFiles.AsNoTracking()
+            .Where(x => ids.Contains(x.Id))
+            .Select(x => new
+            {
+                x.Id,
+                x.DocumentLibraryFileId,
+                FolderId = x.DocumentLibraryFile == null ? (Guid?)null : x.DocumentLibraryFile.FolderId,
+                StorageArea = x.DocumentLibraryFile == null ? null : x.DocumentLibraryFile.StorageArea
+            })
+            .ToListAsync(cancellationToken);
+        var byId = records.ToDictionary(x => x.Id);
+        var pending = (await _attachmentArchive.ReadPendingAsync(cancellationToken))
+            .Where(x => ids.Contains(x.AttachmentId))
+            .ToDictionary(x => x.AttachmentId);
+        foreach (var file in dto.Files)
+        {
+            if (byId.TryGetValue(file.Id, out var record))
+            {
+                file.DocumentLibraryFileId = record.DocumentLibraryFileId;
+                file.DocumentFolderId = record.FolderId;
+            }
+            if (applicationStatus != VerificationApplicationStatus.Accepted)
+            {
+                file.FormalArchiveStatus = VerificationAttachmentArchiveStatuses.NotApplicable;
+                continue;
+            }
+            if (byId.TryGetValue(file.Id, out record) &&
+                record.StorageArea == DocumentStorageAreas.Library)
+            {
+                file.FormalArchiveStatus = VerificationAttachmentArchiveStatuses.Completed;
+                continue;
+            }
+            if (pending.TryGetValue(file.Id, out var entry) && !string.IsNullOrWhiteSpace(entry.LastError))
+            {
+                file.FormalArchiveStatus = VerificationAttachmentArchiveStatuses.Failed;
+                file.FormalArchiveError = entry.LastError;
+            }
+            else
+            {
+                file.FormalArchiveStatus = VerificationAttachmentArchiveStatuses.Processing;
+            }
+        }
     }
 
     private static VerificationApplicationDto Map(VerificationApplication entity) => new()

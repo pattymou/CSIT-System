@@ -189,6 +189,32 @@ public sealed class VerificationDraftCleanupTests
     }
 
     [Fact]
+    public async Task ActualCleanup_DoesNotDeleteAcceptedFormalAttachment()
+    {
+        var now = new DateTime(2026, 10, 24, 8, 0, 0, DateTimeKind.Utc);
+        var fileSystem = new RecordingFileSystem();
+        var fixture = Fixture(dryRun: false, deletionConfirmed: true, fileSystem);
+        await using (var db = fixture.Factory.CreateDbContext())
+        {
+            var accepted = DynamicDraft("FORMAL", now.AddDays(-30));
+            db.Entry(accepted).Property(x => x.Status).CurrentValue = VerificationApplicationStatus.Accepted;
+            var folder = Folder();
+            var document = Document(folder.Id, $"產品驗證資料/MODEL/申請單文件/{accepted.Id:N}.txt");
+            document.StorageArea = DocumentStorageAreas.Library;
+            var attachment = Attachment(accepted.Id, $"verification-applications/{accepted.Id:N}/source.txt", document.Id);
+            db.AddRange(accepted, folder, document, attachment);
+            await db.SaveChangesAsync();
+        }
+
+        await fixture.Worker.RunAsync(now);
+
+        await using var verification = fixture.Factory.CreateDbContext();
+        Assert.Single(await verification.VerificationApplications.ToListAsync());
+        Assert.Single(await verification.DocumentLibraryFiles.ToListAsync());
+        Assert.Equal(0, fileSystem.Attempts);
+    }
+
+    [Fact]
     public async Task AttachmentUploadAndDelete_AdvanceEffectiveDraftUpdatedAt()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()

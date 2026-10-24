@@ -1,4 +1,5 @@
 using SIT.DepartmentSystem.Web.Entities;
+using SIT.DepartmentSystem.Web.Services;
 
 namespace SIT.DepartmentSystem.Web.Models.Api;
 
@@ -90,6 +91,8 @@ public class VerificationApplicationFileDto
     public string? ModelName { get; set; }
     public Guid? DocumentFolderId { get; set; }
     public Guid? DocumentLibraryFileId { get; set; }
+    public string FormalArchiveStatus { get; set; } = VerificationAttachmentArchiveStatuses.NotApplicable;
+    public string? FormalArchiveError { get; set; }
 }
 
 public sealed class VerificationApplicationFileUploadResultDto

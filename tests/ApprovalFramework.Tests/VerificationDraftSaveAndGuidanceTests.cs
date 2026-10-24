@@ -93,7 +93,8 @@ public sealed class VerificationDraftSaveAndGuidanceTests
             null!,
             null!,
             Options.Create(new SIT.DepartmentSystem.Web.Models.Config.DocumentStagingOptions()),
-            factory);
+            factory,
+            null!);
         var systemOptions = new SystemOptionService(retainedCircuitContext, factory, null!);
         var user = new ClaimsPrincipal(new ClaimsIdentity([new Claim("account", "applicant")], "test"));
 
@@ -136,14 +137,17 @@ public sealed class VerificationDraftSaveAndGuidanceTests
     }
 
     [Fact]
-    public void SubmitTransactionAndAttachmentLinkingRemainOnOneContext()
+    public void SubmitDoesNotCreateFormalAttachmentLinks_AndApprovalQueuesArchiveAfterCommit()
     {
         var service = Read("Services", "Implementations", "VerificationApplicationService.cs");
 
         Assert.Contains("await using var transaction = await _db.Database.BeginTransactionAsync", service);
-        Assert.Contains("VerificationApplicationAttachmentLinker.LinkAsync(_db, entity", service);
+        Assert.DoesNotContain("VerificationApplicationAttachmentLinker.LinkAsync", service);
+        Assert.Contains("EnqueueApprovedApplicationAsync(entity", service);
+        Assert.Equal(2, service.Split("EnqueueApprovedApplicationAsync(entity", StringSplitOptions.None).Length - 1);
         Assert.Contains("await _db.SaveChangesAsync(cancellationToken);", service);
         Assert.Contains("await transaction.CommitAsync(cancellationToken);", service);
+        Assert.Contains("ProcessApplicationAsync(id, cancellationToken)", service);
     }
 
     private static DateOnly ValidateDirectApprovalDate(bool directApproval, DateOnly? expectedEndDate)

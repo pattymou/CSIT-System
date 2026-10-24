@@ -1,4 +1,3 @@
-using System.Reflection;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -44,7 +43,7 @@ public sealed class VerificationApplicationAttachmentTests
     }
 
     [Fact]
-    public async Task Submit_LinksOnePhysicalCopyToFixedFolders_WithoutKmQueueOrCrossApplicationMixing()
+    public async Task Submit_KeepsAttachmentsInStaging_WithoutFormalFoldersOrLinks()
     {
         var root = TempRoot();
         try
@@ -59,28 +58,19 @@ public sealed class VerificationApplicationAttachmentTests
             await service.UploadAsync(firstApplication.Id, FormFile("pre-test.xlsx", "report"), User("first", rd: true));
             await service.UploadAsync(secondApplication.Id, FormFile("same-name.docx", "other"), User("second", rd: true));
 
-            await SubmitAndLinkAsync(db, firstApplication.Id);
-            await SubmitAndLinkAsync(db, secondApplication.Id);
+            await SubmitWithoutLinkAsync(db, firstApplication.Id);
+            await SubmitWithoutLinkAsync(db, secondApplication.Id);
 
             var folders = await db.DocumentFolders.AsNoTracking().ToListAsync();
-            Assert.Single(folders, x => x.Level == 1 && x.Name == VerificationApplicationAttachmentFolders.Root);
-            Assert.Single(folders, x => x.Level == 2 && x.Name == "MODEL-SHARED");
-            var applicationFolder = Assert.Single(folders, x =>
-                x.Level == 3 && x.Name == VerificationApplicationAttachmentFolders.ApplicationDocuments);
-            Assert.DoesNotContain(folders, x => x.Level == 3 && x.Name is "產品資訊" or "測試報告");
+            Assert.Empty(folders);
 
             var documents = await db.DocumentLibraryFiles.AsNoTracking().ToListAsync();
             var links = await db.VerificationApplicationFiles.AsNoTracking().ToListAsync();
-            Assert.Equal(3, documents.Count);
-            Assert.All(documents, x => Assert.Equal(applicationFolder.Id, x.FolderId));
-            Assert.All(documents, x => Assert.Equal(DocumentStorageAreas.Staging, x.StorageArea));
+            Assert.Empty(documents);
             Assert.Empty(db.DocumentProcessingJobs);
-            Assert.All(links, x => Assert.NotNull(x.DocumentLibraryFileId));
+            Assert.All(links, x => Assert.Null(x.DocumentLibraryFileId));
             Assert.Equal(2, links.Count(x => x.VerificationApplicationId == firstApplication.Id));
             Assert.Single(links, x => x.VerificationApplicationId == secondApplication.Id);
-            Assert.All(links, link => Assert.Equal(
-                link.FilePath,
-                documents.Single(x => x.Id == link.DocumentLibraryFileId).RelativePath));
             Assert.Equal(3, Directory.GetFiles(root, "*", SearchOption.AllDirectories).Length);
 
             Assert.Equal(2, (await service.GetAsync(firstApplication.Id, User("csit", csit: true))).Count);
@@ -106,7 +96,7 @@ public sealed class VerificationApplicationAttachmentTests
             var service = Service(db, root);
             var original = await service.UploadAsync(
                 application.Id, FormFile("before.txt", "before"), User("owner", rd: true));
-            await SubmitAndLinkAsync(db, application.Id);
+            await SubmitWithoutLinkAsync(db, application.Id);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() => service.UploadAsync(
                 application.Id, FormFile("blocked.txt", "blocked"), User("owner", rd: true)));
@@ -122,8 +112,8 @@ public sealed class VerificationApplicationAttachmentTests
             var remaining = await service.GetAsync(application.Id, User("owner", rd: true));
             Assert.Single(remaining);
             Assert.Equal(added.Id, remaining[0].Id);
-            await SubmitAndLinkAsync(db, application.Id);
-            Assert.Single(await db.DocumentLibraryFiles.AsNoTracking().ToListAsync());
+            await SubmitWithoutLinkAsync(db, application.Id);
+            Assert.Empty(await db.DocumentLibraryFiles.AsNoTracking().ToListAsync());
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
@@ -350,7 +340,7 @@ public sealed class VerificationApplicationAttachmentTests
         Assert.Contains("await Applications.DeleteDraftAsync", page);
     }
 
-    private static async Task SubmitAndLinkAsync(AppDbContext db, Guid applicationId)
+    private static async Task SubmitWithoutLinkAsync(AppDbContext db, Guid applicationId)
     {
         db.ChangeTracker.Clear();
         var application = await db.VerificationApplications.Include(x => x.Files)
@@ -361,10 +351,6 @@ public sealed class VerificationApplicationAttachmentTests
             application.RoutingDepartmentOptionId!.Value, "DA40", "DA40",
             application.TeamOptionId!.Value, "TEAM", "Team",
             "verification", "leader", "Leader"), now);
-        var linker = typeof(VerificationApplicationFileService).Assembly.GetType(
-            "SIT.DepartmentSystem.Web.Services.VerificationApplicationAttachmentLinker")!;
-        var method = linker.GetMethod("LinkAsync", BindingFlags.Public | BindingFlags.Static)!;
-        await (Task)method.Invoke(null, [db, application, now, CancellationToken.None])!;
         await db.SaveChangesAsync();
     }
 
@@ -389,7 +375,7 @@ public sealed class VerificationApplicationAttachmentTests
 
     private static VerificationApplicationService ApplicationService(AppDbContext db, string root) => new(
         db, null!, null!, new AllowWrite(), null!,
-        Options.Create(new DocumentStagingOptions { RootPath = root }), null!);
+        Options.Create(new DocumentStagingOptions { RootPath = root }), null!, null!);
 
     private static IFormFile FormFile(string name, string content)
     {

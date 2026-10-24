@@ -374,6 +374,9 @@ builder.Services.AddSingleton<IVerificationDraftFileSystem, VerificationDraftFil
 builder.Services.AddSingleton<VerificationDraftCleanupJournal>();
 builder.Services.AddScoped<VerificationDraftCleanupWorker>();
 builder.Services.AddHostedService<VerificationDraftCleanupBackgroundService>();
+builder.Services.AddSingleton<VerificationAttachmentArchiveJournal>();
+builder.Services.AddSingleton<VerificationAttachmentArchiveProcessor>();
+builder.Services.AddHostedService<VerificationAttachmentArchiveBackgroundService>();
 builder.Services.AddScoped<IDocumentLibraryService, DocumentLibraryService>();
 
 builder.Services.AddScoped(sp =>

@@ -14,13 +14,15 @@ public static class VerificationApplicationAttachmentFolders
 
 internal static class VerificationApplicationAttachmentLinker
 {
-    public static async Task LinkAsync(
+    public static async Task LinkFormalAsync(
         AppDbContext db,
         VerificationApplication application,
+        VerificationApplicationFile attachment,
+        string standardFileName,
+        string relativePath,
         DateTime now,
         CancellationToken cancellationToken)
     {
-        if (application.Files.Count == 0) return;
         var modelName = application.ProductModel?.Trim();
         if (string.IsNullOrWhiteSpace(modelName))
             throw new InvalidOperationException("Model Name is required before attachments can be classified.");
@@ -35,41 +37,36 @@ internal static class VerificationApplicationAttachmentLinker
             db, model.Id, 3, VerificationApplicationAttachmentFolders.ApplicationDocuments,
             "從驗證申請單 C. 其他資訊上傳的文件。", 10, now, cancellationToken);
 
-        foreach (var attachment in application.Files)
+        DocumentLibraryFile document;
+        if (attachment.DocumentLibraryFileId.HasValue)
         {
-            if (attachment.DocumentLibraryFileId.HasValue)
-            {
-                var linked = await db.DocumentLibraryFiles.SingleOrDefaultAsync(
-                    x => x.Id == attachment.DocumentLibraryFileId.Value, cancellationToken)
-                    ?? throw new InvalidOperationException(
-                        $"Attachment {attachment.Id} has an invalid document library link.");
-                linked.FolderId = target.Id;
-                continue;
-            }
-
-            if (string.IsNullOrWhiteSpace(attachment.Sha256))
-                throw new InvalidOperationException($"Attachment {attachment.Id} is missing its integrity hash.");
-            var standardFileName = Path.GetFileName(attachment.FilePath);
-            if (string.IsNullOrWhiteSpace(standardFileName))
-                throw new InvalidOperationException($"Attachment {attachment.Id} has an invalid storage path.");
-
-            var document = new DocumentLibraryFile
+            document = attachment.DocumentLibraryFile ?? await db.DocumentLibraryFiles.SingleOrDefaultAsync(
+                x => x.Id == attachment.DocumentLibraryFileId.Value, cancellationToken)
+                ?? throw new InvalidOperationException(
+                    $"Attachment {attachment.Id} has an invalid document library link.");
+        }
+        else
+        {
+            document = new DocumentLibraryFile
             {
                 Id = Guid.NewGuid(),
-                FolderId = target.Id,
-                OriginalFileName = attachment.FileName,
-                StandardFileName = standardFileName,
-                ContentType = attachment.ContentType,
-                UploadedBy = attachment.UploadedBy,
-                UploadedAt = attachment.CreatedAt,
-                FileSize = attachment.FileSize,
-                Sha256 = attachment.Sha256,
-                RelativePath = attachment.FilePath,
-                StorageArea = DocumentStorageAreas.Staging
             };
             db.DocumentLibraryFiles.Add(document);
             attachment.DocumentLibraryFileId = document.Id;
+            attachment.DocumentLibraryFile = document;
         }
+
+        document.FolderId = target.Id;
+        document.OriginalFileName = attachment.FileName;
+        document.StandardFileName = standardFileName;
+        document.ContentType = attachment.ContentType;
+        document.UploadedBy = attachment.UploadedBy;
+        document.UploadedAt = attachment.CreatedAt;
+        document.FileSize = attachment.FileSize;
+        document.Sha256 = attachment.Sha256
+            ?? throw new InvalidOperationException($"Attachment {attachment.Id} is missing its integrity hash.");
+        document.RelativePath = relativePath;
+        document.StorageArea = DocumentStorageAreas.Library;
     }
 
     private static async Task<DocumentFolder> GetOrCreateFolderAsync(

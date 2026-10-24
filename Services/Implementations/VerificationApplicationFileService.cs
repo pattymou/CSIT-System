@@ -14,7 +14,8 @@ public sealed class VerificationApplicationFileService(
     AppDbContext db,
     IOptions<DocumentStorageOptions> storageOptions,
     IOptions<DocumentStagingOptions> stagingOptions,
-    IBusinessWriteAuthorizationGuard businessWrite) : IVerificationApplicationFileService
+    IBusinessWriteAuthorizationGuard businessWrite,
+    VerificationAttachmentArchiveProcessor? attachmentArchive = null) : IVerificationApplicationFileService
 {
     public async Task<IReadOnlyList<VerificationApplicationFileDto>> GetAsync(
         Guid applicationId,
@@ -30,7 +31,16 @@ public sealed class VerificationApplicationFileService(
             .Where(x => x.VerificationApplicationId == applicationId)
             .OrderBy(x => x.CreatedAt)
             .ToListAsync(cancellationToken);
-        return files.Select(x => ToDto(x, application.ProductModel)).ToList();
+        var pending = attachmentArchive is null
+            ? new Dictionary<Guid, PendingVerificationAttachmentArchive>()
+            : (await attachmentArchive.ReadPendingAsync(cancellationToken))
+                .Where(x => x.ApplicationId == applicationId)
+                .ToDictionary(x => x.AttachmentId);
+        return files.Select(x => ToDto(
+            x,
+            application.ProductModel,
+            FormalStatus(application.Status, x, pending.GetValueOrDefault(x.Id)),
+            pending.GetValueOrDefault(x.Id)?.LastError)).ToList();
     }
 
     public async Task<VerificationApplicationFileDto> UploadAsync(
@@ -229,7 +239,9 @@ public sealed class VerificationApplicationFileService(
 
     private static VerificationApplicationFileDto ToDto(
         VerificationApplicationFile file,
-        string? modelName) => new()
+        string? modelName,
+        string formalArchiveStatus = VerificationAttachmentArchiveStatuses.NotApplicable,
+        string? formalArchiveError = null) => new()
     {
         Id = file.Id,
         FileName = file.FileName,
@@ -239,8 +251,24 @@ public sealed class VerificationApplicationFileService(
         UploadedAt = file.CreatedAt,
         ModelName = modelName,
         DocumentFolderId = file.DocumentLibraryFile?.FolderId,
-        DocumentLibraryFileId = file.DocumentLibraryFileId
+        DocumentLibraryFileId = file.DocumentLibraryFileId,
+        FormalArchiveStatus = formalArchiveStatus,
+        FormalArchiveError = formalArchiveError
     };
+
+    private static string FormalStatus(
+        VerificationApplicationStatus applicationStatus,
+        VerificationApplicationFile file,
+        PendingVerificationAttachmentArchive? pending)
+    {
+        if (applicationStatus != VerificationApplicationStatus.Accepted)
+            return VerificationAttachmentArchiveStatuses.NotApplicable;
+        if (file.DocumentLibraryFile?.StorageArea == DocumentStorageAreas.Library)
+            return VerificationAttachmentArchiveStatuses.Completed;
+        return string.IsNullOrWhiteSpace(pending?.LastError)
+            ? VerificationAttachmentArchiveStatuses.Processing
+            : VerificationAttachmentArchiveStatuses.Failed;
+    }
 
     private static InvalidOperationException DuplicateFileName(string fileName) =>
         new($"檔案已存在：{fileName}，請刪除舊檔或更名後再上傳。");
