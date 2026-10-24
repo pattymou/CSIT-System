@@ -53,7 +53,7 @@ public static class VerificationApplicationSecurity
     public static DateOnly RequireDirectApprovalDate(DateOnly? expectedEndDate)
     {
         if (!expectedEndDate.HasValue || expectedEndDate.Value == default)
-            throw new InvalidOperationException("Expected end date is required for direct approval.");
+            throw new InvalidOperationException("主管自行送單免審時，預計結束日期為必填。");
         return expectedEndDate.Value;
     }
 }

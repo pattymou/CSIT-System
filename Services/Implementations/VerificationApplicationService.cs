@@ -201,9 +201,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         await _businessWrite.DemandAsync(cancellationToken);
         var account = VerificationApplicationSecurity.GetAccount(user);
         var directApproval = await IsDirectApprovalApplicantAsync(user, cancellationToken);
-        var directApprovalDate = directApproval
-            ? VerificationApplicationSecurity.RequireDirectApprovalDate(expectedEndDate)
-            : default;
+        var directApprovalDate = ValidateDirectApprovalDate(directApproval, expectedEndDate);
         await using var transaction = await _db.Database.BeginTransactionAsync(
             IsolationLevel.ReadCommitted,
             cancellationToken);
@@ -398,6 +396,24 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             _db.ChangeTracker.Clear();
             throw;
         }
+    }
+
+    private static DateOnly ValidateDirectApprovalDate(bool directApproval, DateOnly? expectedEndDate)
+    {
+        if (!directApproval) return default;
+        if (!expectedEndDate.HasValue || expectedEndDate.Value == default)
+        {
+            var issue = new VerificationApplicationValidationIssue(
+                VerificationApplicationValidationIssue.DirectApprovalAreaCode,
+                "主管自行送單免審",
+                VerificationApplicationValidationIssue.ExpectedEndDateFieldCode,
+                "預計結束日期");
+            throw new VerificationApplicationValidationException(
+                [issue],
+                "正式送出未完成，請在『主管自行送單免審』區域填寫『預計結束日期』後重新送出。");
+        }
+
+        return VerificationApplicationSecurity.RequireDirectApprovalDate(expectedEndDate);
     }
 
     public async Task<VerificationApplicationDto?> GetForApplicantAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)

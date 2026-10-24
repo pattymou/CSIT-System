@@ -13,6 +13,7 @@
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject ILogger<ValidationRequests> Logger
 
 <PageTitle>驗證測試申請單</PageTitle>
 
@@ -33,6 +34,8 @@
 </header>
 
 @if (!string.IsNullOrWhiteSpace(_validationGuidance)) { <div class="alert alert-warning validation-guidance">@_validationGuidance</div> }
+@if (!string.IsNullOrWhiteSpace(_operationSuccess)) { <div class="alert alert-success validation-operation-message">@_operationSuccess</div> }
+@if (!string.IsNullOrWhiteSpace(_operationError)) { <div class="alert alert-danger validation-operation-message">@_operationError</div> }
 @if (_error is not null) { <div class="alert alert-danger">@_error</div> }
 else if (_loading || _configuration is null) { <div class="validation-loading">正在載入申請表…</div> }
 else
@@ -52,7 +55,8 @@ else
 
     @if (_directApproval)
     {
-        <div class="surface-card direct-approval-date">
+        <div id="validation-field-@VerificationApplicationValidationIssue.ExpectedEndDateFieldCode"
+             class="surface-card direct-approval-date @(IsExpectedEndDateFocused ? "validation-field-focus" : null)">
             <strong>主管自行送單免審</strong>
             <p>正式送出後將直接核准並建立 Record，請先填寫預計結束日期。</p>
             <label>預計結束日期（必填）</label>
@@ -74,6 +78,8 @@ else
     .direct-approval-date p { margin:0; color:#64748b; }
     .direct-approval-date input { max-width:240px; }
     .validation-guidance { margin-bottom:16px; font-weight:700; }
+    .validation-operation-message { margin-bottom:16px; }
+    .direct-approval-date.validation-field-focus { outline:3px solid #f59e0b; outline-offset:3px; background:#fffbeb; }
 </style>
 
 @code {
@@ -82,6 +88,7 @@ else
     [Parameter, SupplyParameterFromQuery(Name = "validationAreaLabel")] public string? ValidationAreaLabel { get; set; }
     [Parameter, SupplyParameterFromQuery(Name = "validationField")] public string? ValidationField { get; set; }
     [Parameter, SupplyParameterFromQuery(Name = "validationMessage")] public string? ValidationMessage { get; set; }
+    [Parameter, SupplyParameterFromQuery(Name = "draftSaved")] public bool DraftSaved { get; set; }
     private ValidationRequestConfigurationDto? _configuration;
     private ValidationRequestPreviewDto? _preview;
     private VerificationApplicationDto? _existing;
@@ -93,6 +100,8 @@ else
     private string _selectedProduct = "";
     private string? _error;
     private string? _validationGuidance;
+    private string? _operationSuccess;
+    private string? _operationError;
     private bool _loading = true;
     private bool _saving;
     private bool _showAbandonDialog;
@@ -101,10 +110,18 @@ else
     private int _validationFocusRevision;
     private DateOnly? _expectedEndDate;
     private Guid? _draftId;
+    private readonly SemaphoreSlim _draftMutationGate = new(1, 1);
+
+    private bool IsExpectedEndDateFocused => string.Equals(
+        ValidationField,
+        VerificationApplicationValidationIssue.ExpectedEndDateFieldCode,
+        StringComparison.OrdinalIgnoreCase);
 
     protected override async Task OnParametersSetAsync()
     {
-        _loading = true; _error = null; _validationGuidance = null; _scrollToValidationField = false;
+        _loading = true; _error = null; _validationGuidance = null; _operationError = null;
+        _operationSuccess = DraftSaved ? "草稿已成功儲存。" : null;
+        _scrollToValidationField = false;
         try
         {
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
@@ -120,8 +137,11 @@ else
                 CopyExisting(_existing);
                 if (!string.IsNullOrWhiteSpace(ValidationMessage))
                 {
-                    var area = string.IsNullOrWhiteSpace(ValidationAreaLabel) ? "未完成" : ValidationAreaLabel;
-                    _validationGuidance = $"正式送出未完成，已返回原草稿。請在「{area}」區域補齊資料後重新送出。{ValidationMessage}";
+                    _validationGuidance = BuildValidationGuidance(
+                        ValidationArea,
+                        ValidationAreaLabel,
+                        ValidationMessage,
+                        returnedToDraft: true);
                     _scrollToValidationField = !string.IsNullOrWhiteSpace(ValidationField);
                     _validationFocusRevision++;
                 }
@@ -161,13 +181,22 @@ else
 
     private async Task SaveAsync(bool submit)
     {
-        _saving = true; _error = null; _validationGuidance = null;
+        if (!await _draftMutationGate.WaitAsync(0)) return;
+        _saving = true; _error = null; _validationGuidance = null; _operationSuccess = null; _operationError = null;
         try
         {
             var saved = await SaveDraftCoreAsync();
-            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
-            if (submit) saved = await Applications.SubmitAsync(saved.Id, user, _expectedEndDate);
-            Nav.NavigateTo($"/verification-applications/{saved.Id}");
+            if (submit)
+            {
+                var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+                saved = await Applications.SubmitAsync(saved.Id, user, _expectedEndDate);
+                Nav.NavigateTo($"/verification-applications/{saved.Id}");
+                return;
+            }
+
+            _operationSuccess = "草稿已成功儲存。";
+            if (!Id.HasValue)
+                Nav.NavigateTo($"/validation-requests/{saved.Id}?draftSaved=true", replace: true);
         }
         catch (VerificationApplicationValidationException ex)
         {
@@ -175,12 +204,28 @@ else
             ValidationArea = issue.AreaCode;
             ValidationAreaLabel = issue.AreaLabel;
             ValidationField = issue.FieldCode;
-            _validationGuidance = $"正式送出未完成。請在「{issue.AreaLabel}」區域補齊資料後重新送出。{ex.Message}";
+            _validationGuidance = BuildValidationGuidance(
+                issue.AreaCode,
+                issue.AreaLabel,
+                ex.Message,
+                returnedToDraft: false);
             _scrollToValidationField = !string.IsNullOrWhiteSpace(ValidationField);
             _validationFocusRevision++;
         }
-        catch (Exception ex) { _error = ex.Message; }
-        finally { _saving = false; }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, submit
+                ? "正式送出驗證申請失敗。ApplicationId: {ApplicationId}"
+                : "儲存驗證申請草稿失敗。ApplicationId: {ApplicationId}", _draftId);
+            _operationError = submit
+                ? "正式送出失敗，草稿仍保留，請稍後再試；若問題持續請聯絡系統管理員。"
+                : "草稿儲存失敗，請稍後再試；若問題持續請聯絡系統管理員。";
+        }
+        finally
+        {
+            _saving = false;
+            _draftMutationGate.Release();
+        }
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -192,10 +237,21 @@ else
 
     private async Task<Guid> EnsureAttachmentDraftAsync()
     {
-        _saving = true; _error = null;
+        await _draftMutationGate.WaitAsync();
+        _saving = true; _error = null; _operationError = null;
         try { return (await SaveDraftCoreAsync()).Id; }
-        catch (Exception ex) { _error = ex.Message; throw; }
-        finally { _saving = false; }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "建立附件所需的驗證申請草稿失敗。ApplicationId: {ApplicationId}", _draftId);
+            const string message = "無法儲存附件所需的草稿，請稍後再試；若問題持續請聯絡系統管理員。";
+            _operationError = message;
+            throw new InvalidOperationException(message);
+        }
+        finally
+        {
+            _saving = false;
+            _draftMutationGate.Release();
+        }
     }
 
     private async Task<VerificationApplicationDto> SaveDraftCoreAsync()
@@ -220,6 +276,22 @@ else
     {
         _draftId = id;
         if (!Id.HasValue) Nav.NavigateTo($"/validation-requests/{id}", replace: true);
+    }
+
+    private static string BuildValidationGuidance(
+        string? areaCode,
+        string? areaLabel,
+        string message,
+        bool returnedToDraft)
+    {
+        if (string.Equals(
+            areaCode,
+            VerificationApplicationValidationIssue.DirectApprovalAreaCode,
+            StringComparison.OrdinalIgnoreCase)) return message;
+
+        var area = string.IsNullOrWhiteSpace(areaLabel) ? "未完成" : areaLabel;
+        var prefix = returnedToDraft ? "正式送出未完成，已返回原草稿。" : "正式送出未完成。";
+        return $"{prefix}請在「{area}」區域補齊資料後重新送出。{message}";
     }
 
     private CreateVerificationApplicationRequest ToCreate() => new()
