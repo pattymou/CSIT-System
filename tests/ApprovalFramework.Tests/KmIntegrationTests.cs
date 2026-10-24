@@ -295,11 +295,13 @@ public sealed class KmIntegrationTests
     public void BusinessIdempotencyIsUniqueInDatabaseModel()
     {
         using var db = Factory().CreateDbContext();
-        var index = db.Model.FindEntityType(typeof(KmIntegrationOutbox))!.GetIndexes()
+        var entity = db.Model.FindEntityType(typeof(KmIntegrationOutbox))!;
+        var index = entity.GetIndexes()
             .Single(x => x.Properties.Select(p => p.Name).SequenceEqual([
                 nameof(KmIntegrationOutbox.SourceSystem), nameof(KmIntegrationOutbox.DocumentId),
                 nameof(KmIntegrationOutbox.Version)]));
         Assert.True(index.IsUnique);
+        Assert.True(entity.FindProperty(nameof(KmIntegrationOutbox.ProjectId))!.IsNullable);
     }
 
     [Fact]

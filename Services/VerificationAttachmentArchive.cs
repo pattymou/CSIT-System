@@ -400,9 +400,19 @@ public sealed class VerificationAttachmentArchiveProcessor(
             if (lockedApplication.Status != VerificationApplicationStatus.Accepted)
                 throw new InvalidOperationException("The verification application is no longer accepted.");
             var lockedAttachment = lockedApplication.Files.Single(x => x.Id == entry.AttachmentId);
-            await VerificationApplicationAttachmentLinker.LinkFormalAsync(
+            var archivedAt = DateTime.UtcNow;
+            var document = await VerificationApplicationAttachmentLinker.LinkFormalAsync(
                 db, lockedApplication, lockedAttachment, standardFileName, relativePath, DateTime.UtcNow,
                 cancellationToken);
+            var hasKmEvent = await db.KmIntegrationOutbox.AnyAsync(x =>
+                x.SourceSystem == "CSIT" &&
+                x.EventType == KmIntegrationEventTypes.VerificationApplicationAttachmentArchived &&
+                x.SourceEntityType == KmIntegrationSourceEntityTypes.VerificationApplicationFile &&
+                x.SourceEntityId == lockedAttachment.Id && x.DocumentId == document.Id && x.Version == 1,
+                cancellationToken);
+            if (!hasKmEvent)
+                db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForArchivedVerificationAttachment(
+                    lockedApplication, lockedAttachment, archivedAt));
             await db.SaveChangesAsync(cancellationToken);
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         }

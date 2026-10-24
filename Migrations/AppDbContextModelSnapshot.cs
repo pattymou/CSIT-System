@@ -855,7 +855,7 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("next_retry_at");
 
-                    b.Property<Guid>("ProjectId")
+                    b.Property<Guid?>("ProjectId")
                         .HasColumnType("uuid")
                         .HasColumnName("project_id");
 
@@ -927,7 +927,7 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         {
                             t.HasCheckConstraint("ck_km_outbox_sent_job", "status NOT IN ('Sent', 'Processing', 'Completed') OR km_job_id IS NOT NULL");
 
-                            t.HasCheckConstraint("ck_km_outbox_test_report_event", "source_system = 'CSIT' AND event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport'");
+                            t.HasCheckConstraint("ck_km_outbox_supported_event", "source_system = 'CSIT' AND ((event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND project_id IS NOT NULL) OR (event_type = 'VerificationApplicationAttachmentArchived' AND source_entity_type = 'VerificationApplicationFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL))");
 
                             t.HasCheckConstraint("ck_km_outbox_version_size", "version > 0 AND size_bytes > 0");
                         });

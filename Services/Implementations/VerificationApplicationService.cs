@@ -9,6 +9,7 @@ using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 using SIT.DepartmentSystem.Web.Services.ValidationRequests;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
@@ -26,6 +27,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     private readonly IValidationRequestConfigurationService _validationRequests;
     private readonly DocumentStagingOptions _stagingOptions;
     private readonly VerificationAttachmentArchiveProcessor _attachmentArchive;
+    private readonly bool _kmEnabled;
 
     public VerificationApplicationService(
         AppDbContext db,
@@ -35,7 +37,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         IValidationRequestConfigurationService validationRequests,
         IOptions<DocumentStagingOptions> stagingOptions,
         IDbContextFactory<AppDbContext> dbFactory,
-        VerificationAttachmentArchiveProcessor attachmentArchive)
+        VerificationAttachmentArchiveProcessor attachmentArchive,
+        IOptions<KmIntegrationOptions>? kmOptions = null)
     {
         _db = db;
         _dbFactory = dbFactory;
@@ -45,6 +48,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         _validationRequests = validationRequests;
         _stagingOptions = stagingOptions.Value;
         _attachmentArchive = attachmentArchive;
+        _kmEnabled = kmOptions?.Value.Enabled == true;
     }
 
     public async Task<VerificationApplicationDto> CreateDraftAsync(
@@ -992,6 +996,11 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             })
             .ToListAsync(cancellationToken);
         var byId = records.ToDictionary(x => x.Id);
+        var kmRows = await db.KmIntegrationOutbox.AsNoTracking()
+            .Where(x => x.EventType == KmIntegrationEventTypes.VerificationApplicationAttachmentArchived &&
+                        x.SourceEntityType == KmIntegrationSourceEntityTypes.VerificationApplicationFile &&
+                        ids.Contains(x.SourceEntityId))
+            .ToDictionaryAsync(x => x.SourceEntityId, cancellationToken);
         var pending = (await _attachmentArchive.ReadPendingAsync(cancellationToken))
             .Where(x => ids.Contains(x.AttachmentId))
             .ToDictionary(x => x.AttachmentId);
@@ -1005,12 +1014,15 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             if (applicationStatus != VerificationApplicationStatus.Accepted)
             {
                 file.FormalArchiveStatus = VerificationAttachmentArchiveStatuses.NotApplicable;
+                VerificationAttachmentKmState.Apply(file, false, null, _kmEnabled);
                 continue;
             }
             if (byId.TryGetValue(file.Id, out record) &&
                 record.StorageArea == DocumentStorageAreas.Library)
             {
                 file.FormalArchiveStatus = VerificationAttachmentArchiveStatuses.Completed;
+                VerificationAttachmentKmState.Apply(
+                    file, true, kmRows.GetValueOrDefault(file.Id), _kmEnabled);
                 continue;
             }
             if (pending.TryGetValue(file.Id, out var entry) && !string.IsNullOrWhiteSpace(entry.LastError))
@@ -1022,6 +1034,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             {
                 file.FormalArchiveStatus = VerificationAttachmentArchiveStatuses.Processing;
             }
+            VerificationAttachmentKmState.Apply(file, false, null, _kmEnabled);
         }
     }
 

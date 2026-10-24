@@ -5,11 +5,15 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.AspNetCore.Mvc;
+using SIT.DepartmentSystem.Web.Controllers;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
+using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Implementations;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace ApprovalFramework.Tests;
 
@@ -21,6 +25,8 @@ public sealed class VerificationAttachmentArchiveTests
         await using var fixture = await ArchiveFixture.CreateAsync();
         var application = await fixture.AddAcceptedAsync("MODEL-ARCHIVE", "approved-content");
         await fixture.Processor.EnqueueApprovedApplicationAsync(application, DateTime.UtcNow, CancellationToken.None);
+        await using (var beforeArchive = fixture.Factory.CreateDbContext())
+            Assert.Empty(await beforeArchive.KmIntegrationOutbox.ToListAsync());
 
         var result = await fixture.Processor.ProcessApplicationAsync(application.Id);
 
@@ -48,6 +54,16 @@ public sealed class VerificationAttachmentArchiveTests
         var formalPath = Path.Combine(fixture.LibraryRoot, document.RelativePath);
         Assert.True(File.Exists(formalPath));
         Assert.Equal(document.Sha256, await ShaAsync(formalPath));
+        var kmEvent = Assert.Single(await db.KmIntegrationOutbox.ToListAsync());
+        Assert.Equal(KmIntegrationEventTypes.VerificationApplicationAttachmentArchived, kmEvent.EventType);
+        Assert.Equal(KmIntegrationSourceEntityTypes.VerificationApplicationFile, kmEvent.SourceEntityType);
+        Assert.Equal(attachment.Id, kmEvent.SourceEntityId);
+        Assert.Equal(document.Id, kmEvent.DocumentId);
+        Assert.Equal(1, kmEvent.Version);
+        Assert.Null(kmEvent.ProjectId);
+        Assert.Null(kmEvent.CaseId);
+        Assert.Null(kmEvent.TaskId);
+        Assert.Equal(KmIntegrationStatus.Pending, kmEvent.Status);
 
         var files = new VerificationApplicationFileService(
             db,
@@ -60,7 +76,18 @@ public sealed class VerificationAttachmentArchiveTests
         Assert.Equal(document.Sha256, await ShaAsync(download));
         var dto = Assert.Single(await files.GetAsync(application.Id, CsitUser()));
         Assert.Equal(VerificationAttachmentArchiveStatuses.Completed, dto.FormalArchiveStatus);
+        Assert.Equal(VerificationAttachmentKmStatuses.Disabled, dto.KmAnalysisStatus);
+        Assert.Equal("KM 尚未啟用", dto.KmAnalysisStatusDisplay);
         Assert.Null(dto.FormalArchiveError);
+
+        var kmDownload = new KmIntegrationController(
+            fixture.Factory,
+            NullLogger<KmIntegrationController>.Instance,
+            Options.Create(new DocumentStorageOptions { RootPath = fixture.LibraryRoot }));
+        var downloadResult = Assert.IsType<FileStreamResult>(
+            await kmDownload.Download(document.Id, 1, CancellationToken.None));
+        await using var kmStream = downloadResult.FileStream;
+        Assert.Equal(document.Sha256, await ShaAsync(kmStream));
     }
 
     [Fact]
@@ -85,6 +112,7 @@ public sealed class VerificationAttachmentArchiveTests
         await using var verification = fixture.Factory.CreateDbContext();
         Assert.Empty(await verification.DocumentFolders.ToListAsync());
         Assert.Empty(await verification.DocumentLibraryFiles.ToListAsync());
+        Assert.Empty(await verification.KmIntegrationOutbox.ToListAsync());
         var files = await verification.VerificationApplicationFiles.ToListAsync();
         Assert.All(files, x => Assert.Null(x.DocumentLibraryFileId));
         Assert.All(files, x => Assert.True(File.Exists(Path.Combine(fixture.StagingRoot, x.FilePath))));
@@ -103,7 +131,10 @@ public sealed class VerificationAttachmentArchiveTests
 
         Assert.Equal(1, first.Failed);
         await using (var failedDb = fixture.Factory.CreateDbContext())
+        {
             Assert.Empty(await failedDb.DocumentLibraryFiles.ToListAsync());
+            Assert.Empty(await failedDb.KmIntegrationOutbox.ToListAsync());
+        }
         var pending = Assert.Single(await fixture.Journal.ReadAsync());
         Assert.Equal(1, pending.AttemptCount);
         Assert.NotNull(pending.LastError);
@@ -120,6 +151,7 @@ public sealed class VerificationAttachmentArchiveTests
         Assert.Empty(await restartedJournal.ReadAsync());
         await using var db = fixture.Factory.CreateDbContext();
         Assert.Single(await db.DocumentLibraryFiles.ToListAsync());
+        Assert.Single(await db.KmIntegrationOutbox.ToListAsync());
         Assert.Single(Directory.GetFiles(fixture.LibraryRoot, "*", SearchOption.AllDirectories));
     }
 
@@ -138,6 +170,7 @@ public sealed class VerificationAttachmentArchiveTests
         await using (var failedDb = fixture.Factory.CreateDbContext())
         {
             Assert.Empty(await failedDb.DocumentLibraryFiles.ToListAsync());
+            Assert.Empty(await failedDb.KmIntegrationOutbox.ToListAsync());
             var attachment = await failedDb.VerificationApplicationFiles.SingleAsync();
             Assert.True(File.Exists(Path.Combine(fixture.StagingRoot, attachment.FilePath)));
         }
@@ -148,6 +181,7 @@ public sealed class VerificationAttachmentArchiveTests
         Assert.Equal(1, second.Completed);
         await using var db = fixture.Factory.CreateDbContext();
         Assert.Single(await db.DocumentLibraryFiles.ToListAsync());
+        Assert.Single(await db.KmIntegrationOutbox.ToListAsync());
         Assert.Empty(await fixture.Journal.ReadAsync());
     }
 
@@ -164,7 +198,146 @@ public sealed class VerificationAttachmentArchiveTests
 
         await using var db = fixture.Factory.CreateDbContext();
         Assert.Single(await db.DocumentLibraryFiles.ToListAsync());
+        Assert.Single(await db.KmIntegrationOutbox.ToListAsync());
         Assert.Single(Directory.GetFiles(fixture.LibraryRoot, "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task PreparedAttachmentEvent_IsDurableButNeverUsesTestReportV1Dispatch()
+    {
+        await using var fixture = await ArchiveFixture.CreateAsync();
+        var application = await fixture.AddAcceptedAsync("MODEL-KM-PREPARED", "prepared");
+        await fixture.Processor.EnqueueApprovedApplicationAsync(application, DateTime.UtcNow, CancellationToken.None);
+        await fixture.Processor.ProcessPendingAsync();
+        var client = new CountingKmClient();
+        var enabled = new KmIntegrationOptions
+        {
+            Enabled = true, BaseUrl = "https://example.invalid", TimeoutSeconds = 2,
+            MaxRetryCount = 3, RetryScheduleSeconds = [60], PollSeconds = 1, LeaseSeconds = 30
+        };
+
+        var processed = await new KmSyncWorker(
+            fixture.Factory, client, Options.Create(enabled), NullLogger<KmSyncWorker>.Instance)
+            .ProcessBatchAsync();
+
+        Assert.Equal(0, processed);
+        Assert.Equal(0, client.SubmitCount);
+        await using var db = fixture.Factory.CreateDbContext();
+        Assert.Equal(KmIntegrationStatus.Pending, Assert.Single(db.KmIntegrationOutbox).Status);
+    }
+
+    [Fact]
+    public void KmPresentation_DoesNotTreatAcceptedDeliveryAsCompleted()
+    {
+        var departmentId = Guid.NewGuid();
+        var teamId = Guid.NewGuid();
+        var application = VerificationApplication.CreateDraft(
+            Guid.NewGuid(), "VA-KM-STATE", departmentId, teamId,
+            "owner", "Owner", "owner@example.test", "RD", null,
+            new VerificationApplicationContent
+            {
+                ProjectName = "MODEL", ProductModel = "MODEL", Customer = "CUSTOMER",
+                ValidationRequirement = "Requirement",
+                RequestedFinishDate = DateOnly.FromDateTime(DateTime.UtcNow.AddDays(7))
+            }, DateTime.UtcNow);
+        application.Submit(new VerificationApplicationRouting(
+            departmentId, "D", "Department", teamId, "T", "Team", "verification", "leader", "Leader"),
+            DateTime.UtcNow);
+        application.Accept(Guid.NewGuid(), DateOnly.FromDateTime(DateTime.UtcNow), "leader", DateTime.UtcNow);
+        var attachment = new VerificationApplicationFile
+        {
+            Id = Guid.NewGuid(), VerificationApplicationId = application.Id,
+            FileName = "attachment.txt", FileSize = 10, CreatedAt = DateTime.UtcNow,
+            DocumentLibraryFileId = Guid.NewGuid()
+        };
+        attachment.DocumentLibraryFile = new DocumentLibraryFile
+        {
+            Id = attachment.DocumentLibraryFileId.Value, FolderId = Guid.NewGuid(),
+            OriginalFileName = "attachment.txt", StandardFileName = "attachment.txt",
+            FileSize = 10, StorageArea = DocumentStorageAreas.Library
+        };
+        var row = KmIntegrationOutbox.ForArchivedVerificationAttachment(application, attachment, DateTime.UtcNow);
+        var lease = Guid.NewGuid();
+        row.Claim(lease, DateTime.UtcNow, TimeSpan.FromMinutes(1));
+        row.Sent(lease, "km-job-attachment-1", DateTime.UtcNow);
+        var dto = new VerificationApplicationFileDto();
+
+        VerificationAttachmentKmState.Apply(dto, true, row, true);
+
+        Assert.Equal(VerificationAttachmentKmStatuses.WaitingAnalysis, dto.KmAnalysisStatus);
+        Assert.Equal("KM 已接收，等待分析", dto.KmAnalysisStatusDisplay);
+        Assert.NotEqual(VerificationAttachmentKmStatuses.Completed, dto.KmAnalysisStatus);
+    }
+
+    [Fact]
+    public async Task AttachmentCallback_CompletesOnlyForMatchingJobDocumentAndVersion()
+    {
+        await using var fixture = await ArchiveFixture.CreateAsync();
+        var application = await fixture.AddAcceptedAsync("MODEL-KM-CALLBACK", "callback");
+        await fixture.Processor.EnqueueApprovedApplicationAsync(application, DateTime.UtcNow, CancellationToken.None);
+        await fixture.Processor.ProcessPendingAsync();
+        Guid documentId;
+        await using (var db = fixture.Factory.CreateDbContext())
+        {
+            var row = Assert.Single(db.KmIntegrationOutbox);
+            documentId = row.DocumentId;
+            var lease = Guid.NewGuid();
+            row.Claim(lease, DateTime.UtcNow, TimeSpan.FromMinutes(1));
+            row.Sent(lease, "km-attachment-job", DateTime.UtcNow);
+            await db.SaveChangesAsync();
+        }
+        var controller = new KmIntegrationController(
+            fixture.Factory, NullLogger<KmIntegrationController>.Instance);
+        var completedAt = DateTime.UtcNow;
+        var mismatch = new KmStatusCallback(
+            "km-attachment-job", "CSIT", Guid.NewGuid(), 1, "Completed",
+            new KmCallbackTimestamps(null, completedAt, null), null);
+
+        Assert.IsType<ConflictObjectResult>(await controller.Status(mismatch, default));
+        await using (var unchanged = fixture.Factory.CreateDbContext())
+            Assert.Equal(KmIntegrationStatus.Sent, Assert.Single(unchanged.KmIntegrationOutbox).Status);
+
+        var matching = mismatch with { DocumentId = documentId };
+        Assert.IsType<NoContentResult>(await controller.Status(matching, default));
+        await using var verified = fixture.Factory.CreateDbContext();
+        var rowAfterCallback = Assert.Single(verified.KmIntegrationOutbox);
+        Assert.Equal(KmIntegrationStatus.Completed, rowAfterCallback.Status);
+        var dto = new VerificationApplicationFileDto();
+        VerificationAttachmentKmState.Apply(dto, true, rowAfterCallback, true);
+        Assert.Equal(VerificationAttachmentKmStatuses.Completed, dto.KmAnalysisStatus);
+    }
+
+    [Fact]
+    public async Task AttachmentKmFailure_IsShownPerFileWithoutChangingAcceptedApplication()
+    {
+        await using var fixture = await ArchiveFixture.CreateAsync();
+        var application = await fixture.AddAcceptedAsync("MODEL-KM-FAILED", "failed");
+        await fixture.Processor.EnqueueApprovedApplicationAsync(application, DateTime.UtcNow, CancellationToken.None);
+        await fixture.Processor.ProcessPendingAsync();
+        await using (var db = fixture.Factory.CreateDbContext())
+        {
+            var row = Assert.Single(db.KmIntegrationOutbox);
+            var lease = Guid.NewGuid();
+            row.Claim(lease, DateTime.UtcNow, TimeSpan.FromMinutes(1));
+            row.Sent(lease, "km-attachment-failed", DateTime.UtcNow);
+            row.CallbackFailed("KM_ANALYSIS_FAILED", "KM could not analyze the document.", DateTime.UtcNow);
+            await db.SaveChangesAsync();
+        }
+
+        await using var readDb = fixture.Factory.CreateDbContext();
+        var files = new VerificationApplicationFileService(
+            readDb,
+            Options.Create(new DocumentStorageOptions { RootPath = fixture.LibraryRoot }),
+            Options.Create(new DocumentStagingOptions { RootPath = fixture.StagingRoot }),
+            new AllowWrite(),
+            fixture.Processor,
+            Options.Create(new KmIntegrationOptions { Enabled = true }));
+        var file = Assert.Single(await files.GetAsync(application.Id, CsitUser()));
+
+        Assert.Equal(VerificationApplicationStatus.Accepted,
+            (await readDb.VerificationApplications.SingleAsync(x => x.Id == application.Id)).Status);
+        Assert.Equal(VerificationAttachmentKmStatuses.Failed, file.KmAnalysisStatus);
+        Assert.Equal("KM could not analyze the document.", file.KmAnalysisError);
     }
 
     [Theory]
@@ -262,6 +435,19 @@ public sealed class VerificationAttachmentArchiveTests
     private sealed class AllowWrite : IBusinessWriteAuthorizationGuard
     {
         public Task DemandAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class CountingKmClient : IKmIntegrationClient
+    {
+        public int SubmitCount { get; private set; }
+
+        public Task<KmDeliveryResult> SubmitAsync(
+            KmIngestionRequest request,
+            CancellationToken cancellationToken)
+        {
+            SubmitCount++;
+            return Task.FromResult(KmDeliveryResult.Success("unexpected"));
+        }
     }
 
     private sealed class ArchiveFixture : IAsyncDisposable

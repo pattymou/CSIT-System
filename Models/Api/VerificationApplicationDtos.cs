@@ -93,6 +93,20 @@ public class VerificationApplicationFileDto
     public Guid? DocumentLibraryFileId { get; set; }
     public string FormalArchiveStatus { get; set; } = VerificationAttachmentArchiveStatuses.NotApplicable;
     public string? FormalArchiveError { get; set; }
+    public string KmAnalysisStatus { get; set; } = VerificationAttachmentKmStatuses.NotApplicable;
+    public string KmAnalysisStatusDisplay { get; set; } = "尚未正式入庫";
+    public string? KmAnalysisError { get; set; }
+}
+
+public static class VerificationAttachmentKmStatuses
+{
+    public const string NotApplicable = "NotApplicable";
+    public const string Disabled = "Disabled";
+    public const string WaitingNotification = "WaitingNotification";
+    public const string WaitingAnalysis = "WaitingAnalysis";
+    public const string Processing = "Processing";
+    public const string Completed = "Completed";
+    public const string Failed = "Failed";
 }
 
 public sealed class VerificationApplicationFileUploadResultDto

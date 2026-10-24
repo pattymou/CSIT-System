@@ -7,6 +7,7 @@ using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
@@ -15,7 +16,8 @@ public sealed class VerificationApplicationFileService(
     IOptions<DocumentStorageOptions> storageOptions,
     IOptions<DocumentStagingOptions> stagingOptions,
     IBusinessWriteAuthorizationGuard businessWrite,
-    VerificationAttachmentArchiveProcessor? attachmentArchive = null) : IVerificationApplicationFileService
+    VerificationAttachmentArchiveProcessor? attachmentArchive = null,
+    IOptions<KmIntegrationOptions>? kmOptions = null) : IVerificationApplicationFileService
 {
     public async Task<IReadOnlyList<VerificationApplicationFileDto>> GetAsync(
         Guid applicationId,
@@ -36,11 +38,24 @@ public sealed class VerificationApplicationFileService(
             : (await attachmentArchive.ReadPendingAsync(cancellationToken))
                 .Where(x => x.ApplicationId == applicationId)
                 .ToDictionary(x => x.AttachmentId);
-        return files.Select(x => ToDto(
+        var fileIds = files.Select(x => x.Id).ToList();
+        var kmRows = await db.KmIntegrationOutbox.AsNoTracking()
+            .Where(x => x.EventType == KmIntegrationEventTypes.VerificationApplicationAttachmentArchived &&
+                        x.SourceEntityType == KmIntegrationSourceEntityTypes.VerificationApplicationFile &&
+                        fileIds.Contains(x.SourceEntityId))
+            .ToDictionaryAsync(x => x.SourceEntityId, cancellationToken);
+        var result = files.Select(x => ToDto(
             x,
             application.ProductModel,
             FormalStatus(application.Status, x, pending.GetValueOrDefault(x.Id)),
             pending.GetValueOrDefault(x.Id)?.LastError)).ToList();
+        foreach (var file in result)
+            VerificationAttachmentKmState.Apply(
+                file,
+                file.FormalArchiveStatus == VerificationAttachmentArchiveStatuses.Completed,
+                kmRows.GetValueOrDefault(file.Id),
+                kmOptions?.Value.Enabled == true);
+        return result;
     }
 
     public async Task<VerificationApplicationFileDto> UploadAsync(

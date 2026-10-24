@@ -38,13 +38,19 @@
     {
         <div class="attachment-table-wrap">
             <table class="attachment-table">
-                <thead><tr><th>檔案名稱</th><th>大小</th><th>上傳時間</th><th></th></tr></thead>
+                <thead><tr><th>檔案名稱</th><th>大小</th><th>正式入庫</th><th>KM 分析</th><th>上傳時間</th><th></th></tr></thead>
                 <tbody>
                     @foreach (var file in _files)
                     {
                         <tr>
                             <td>@file.FileName</td>
                             <td>@FormatSize(file.FileSize)</td>
+                            <td><span class="attachment-status">@FormalArchiveText(file)</span></td>
+                            <td>
+                                <span class="attachment-status @KmStatusClass(file)" title="@file.KmAnalysisError">
+                                    @file.KmAnalysisStatusDisplay
+                                </span>
+                            </td>
                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
                             <td class="attachment-actions">
                                 <a class="table-link-btn" href="@($"/api/verification-application-files/{file.Id}/download")">下載</a>
@@ -74,6 +80,10 @@
     .attachment-table th,.attachment-table td { padding:9px 8px; text-align:left; border-bottom:1px solid rgba(148,163,184,.15); }
     .attachment-table th { color:#94a3b8; font-weight:700; }
     .attachment-actions { white-space:nowrap; text-align:right!important; }
+    .attachment-status { display:inline-block; white-space:nowrap; padding:3px 7px; border-radius:999px; background:rgba(148,163,184,.14); color:#cbd5e1; }
+    .attachment-status.completed { background:rgba(16,185,129,.16); color:#99f6e4; }
+    .attachment-status.failed { background:rgba(220,38,38,.16); color:#fecaca; }
+    .attachment-status.processing { background:rgba(59,130,246,.16); color:#bfdbfe; }
 </style>
 
 @code {
@@ -204,4 +214,20 @@
     private static string FormatSize(long bytes) => bytes >= 1_000_000
         ? $"{bytes / 1_000_000d:0.##} MB"
         : bytes >= 1_000 ? $"{bytes / 1_000d:0.##} KB" : $"{bytes} B";
+
+    private static string FormalArchiveText(VerificationApplicationFileDto file) => file.FormalArchiveStatus switch
+    {
+        "Completed" => "正式入庫完成",
+        "Processing" => "正式入庫處理中",
+        "Failed" => "正式入庫失敗",
+        _ => "尚未正式入庫"
+    };
+
+    private static string KmStatusClass(VerificationApplicationFileDto file) => file.KmAnalysisStatus switch
+    {
+        "Completed" => "completed",
+        "Failed" => "failed",
+        "Processing" or "WaitingAnalysis" => "processing",
+        _ => string.Empty
+    };
 }

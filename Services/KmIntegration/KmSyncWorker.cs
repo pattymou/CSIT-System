@@ -51,7 +51,8 @@ public sealed class KmSyncWorker(
             command.Transaction = transaction!.GetDbTransaction();
             command.CommandText = """
                 SELECT id FROM km_integration_outbox
-                WHERE (status = 'Pending' OR retry_count < @max) AND
+                WHERE event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND
+                  (status = 'Pending' OR retry_count < @max) AND
                   (status = 'Pending' OR
                    (status = 'Failed' AND next_retry_at <= @now) OR
                    (status = 'Dispatching' AND lease_expires_at <= @now))
@@ -67,7 +68,10 @@ public sealed class KmSyncWorker(
         else
         {
             row = await db.KmIntegrationOutbox.OrderBy(x => x.CreatedAt)
-                .FirstOrDefaultAsync(x => (x.Status == KmIntegrationStatus.Pending ||
+                .FirstOrDefaultAsync(x =>
+                    x.EventType == KmIntegrationEventTypes.TestReportCommitted &&
+                    x.SourceEntityType == KmIntegrationSourceEntityTypes.TestReport &&
+                    (x.Status == KmIntegrationStatus.Pending ||
                     x.RetryCount < options.MaxRetryCount) &&
                     (x.Status == KmIntegrationStatus.Pending ||
                      (x.Status == KmIntegrationStatus.Failed && x.NextRetryAt <= now) ||
@@ -137,6 +141,10 @@ public sealed class KmSyncWorker(
     private static async Task<KmIngestionRequest?> BuildRequestAsync(AppDbContext db,
         KmIntegrationOutbox row, CancellationToken cancellationToken)
     {
+        if (row.EventType != KmIntegrationEventTypes.TestReportCommitted ||
+            row.SourceEntityType != KmIntegrationSourceEntityTypes.TestReport ||
+            !row.ProjectId.HasValue)
+            return null;
         var file = await db.ModuleCaseFiles.AsNoTracking().SingleOrDefaultAsync(x =>
             x.Id == row.SourceEntityId && x.DocumentId == row.DocumentId && x.VersionNo == row.Version &&
             x.FileKind == ModuleCaseFileKinds.TestReport &&
@@ -144,7 +152,8 @@ public sealed class KmSyncWorker(
             cancellationToken);
         if (file is null || await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
             x.Id == file.Id && x.Status != ApprovalStatus.Committed, cancellationToken)) return null;
-        var project = await db.ModuleRecords.AsNoTracking().SingleOrDefaultAsync(x => x.Id == row.ProjectId, cancellationToken);
+        var project = await db.ModuleRecords.AsNoTracking().SingleOrDefaultAsync(
+            x => x.Id == row.ProjectId.Value, cancellationToken);
         var caseEntity = row.CaseId.HasValue
             ? await db.ModuleRecordCases.AsNoTracking().SingleOrDefaultAsync(x => x.Id == row.CaseId.Value, cancellationToken)
             : null;

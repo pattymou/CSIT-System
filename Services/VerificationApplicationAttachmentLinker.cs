@@ -14,7 +14,7 @@ public static class VerificationApplicationAttachmentFolders
 
 internal static class VerificationApplicationAttachmentLinker
 {
-    public static async Task LinkFormalAsync(
+    public static async Task<DocumentLibraryFile> LinkFormalAsync(
         AppDbContext db,
         VerificationApplication application,
         VerificationApplicationFile attachment,
@@ -67,6 +67,7 @@ internal static class VerificationApplicationAttachmentLinker
             ?? throw new InvalidOperationException($"Attachment {attachment.Id} is missing its integrity hash.");
         document.RelativePath = relativePath;
         document.StorageArea = DocumentStorageAreas.Library;
+        return document;
     }
 
     private static async Task<DocumentFolder> GetOrCreateFolderAsync(

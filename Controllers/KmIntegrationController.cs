@@ -2,8 +2,10 @@ using System.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
+using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Controllers;
@@ -13,7 +15,8 @@ namespace SIT.DepartmentSystem.Web.Controllers;
 [Route("api/integrations/km/v1")]
 public sealed class KmIntegrationController(
     IDbContextFactory<AppDbContext> dbFactory,
-    ILogger<KmIntegrationController> logger) : ControllerBase
+    ILogger<KmIntegrationController> logger,
+    IOptions<DocumentStorageOptions>? storageOptions = null) : ControllerBase
 {
     [HttpGet("documents/{documentId:guid}/versions/{version:int}/content")]
     [Authorize(Policy = KmIntegrationAuthorization.DocumentReadPolicy)]
@@ -26,24 +29,49 @@ public sealed class KmIntegrationController(
             x.FileKind == ModuleCaseFileKinds.TestReport &&
             x.ReviewStatus == TestReportReviewStatuses.Approved && x.IsRawDataExported,
             cancellationToken);
-        if (file is null ||
-            !await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
+        if (file is not null &&
+            await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
                 x.SourceSystem == "CSIT" && x.EventType == "TestReportCommitted" &&
                 x.SourceEntityId == file.Id && x.DocumentId == documentId && x.Version == version,
-                cancellationToken) ||
-            await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
+                cancellationToken) &&
+            !await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
                 x.Id == file.Id && x.Status != ApprovalStatus.Committed, cancellationToken))
+        {
+            var path = Path.Combine(file.FilePath, file.FileName);
+            return OpenFile(path, file.ContentType, file.FileName);
+        }
+
+        var attachment = await db.VerificationApplicationFiles.AsNoTracking()
+            .Include(x => x.VerificationApplication)
+            .Include(x => x.DocumentLibraryFile)
+            .SingleOrDefaultAsync(x => x.DocumentLibraryFileId == documentId, cancellationToken);
+        if (attachment?.DocumentLibraryFile is null ||
+            attachment.VerificationApplication.Status != VerificationApplicationStatus.Accepted ||
+            attachment.DocumentLibraryFile.StorageArea != DocumentStorageAreas.Library ||
+            !await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
+                x.SourceSystem == "CSIT" &&
+                x.EventType == KmIntegrationEventTypes.VerificationApplicationAttachmentArchived &&
+                x.SourceEntityType == KmIntegrationSourceEntityTypes.VerificationApplicationFile &&
+                x.SourceEntityId == attachment.Id && x.DocumentId == documentId && x.Version == version,
+                cancellationToken))
             return NotFound();
 
-        var path = Path.Combine(file.FilePath, file.FileName);
-        if (!System.IO.File.Exists(path)) return NotFound();
+        var root = storageOptions?.Value.RootPath?.Trim();
+        if (string.IsNullOrWhiteSpace(root)) return NotFound();
         try
         {
-            var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
-            return File(stream, file.ContentType ?? "application/octet-stream", Path.GetFileName(file.FileName));
+            var fullRoot = Path.GetFullPath(root);
+            var path = Path.GetFullPath(Path.Combine(fullRoot, attachment.DocumentLibraryFile.RelativePath));
+            var prefix = fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+                + Path.DirectorySeparatorChar;
+            if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return NotFound();
+            return OpenFile(path, attachment.DocumentLibraryFile.ContentType,
+                attachment.DocumentLibraryFile.OriginalFileName);
         }
-        catch (FileNotFoundException) { return NotFound(); }
-        catch (DirectoryNotFoundException) { return NotFound(); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return NotFound();
+        }
     }
 
     [HttpPost("ingestion-status")]
@@ -100,5 +128,17 @@ public sealed class KmIntegrationController(
         logger.LogInformation("KM callback transition EventId={EventId} DocumentId={DocumentId} Version={Version} KmJobId={KmJobId} Status={Status}",
             row.EventId, row.DocumentId, row.Version, row.KmJobId, row.Status);
         return NoContent();
+    }
+
+    private IActionResult OpenFile(string path, string? contentType, string fileName)
+    {
+        if (!System.IO.File.Exists(path)) return NotFound();
+        try
+        {
+            var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+            return File(stream, contentType ?? "application/octet-stream", Path.GetFileName(fileName));
+        }
+        catch (FileNotFoundException) { return NotFound(); }
+        catch (DirectoryNotFoundException) { return NotFound(); }
     }
 }

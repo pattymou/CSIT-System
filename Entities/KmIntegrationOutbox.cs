@@ -20,7 +20,7 @@ public sealed class KmIntegrationOutbox
     public Guid SourceEntityId { get; private set; }
     public Guid DocumentId { get; private set; }
     public int Version { get; private set; }
-    public Guid ProjectId { get; private set; }
+    public Guid? ProjectId { get; private set; }
     public Guid? CaseId { get; private set; }
     public Guid? TaskId { get; private set; }
     public string FileName { get; private set; } = string.Empty;
@@ -59,6 +59,36 @@ public sealed class KmIntegrationOutbox
             ContentType = string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType,
             SizeBytes = file.FileSize, CommittedAt = now, Status = KmIntegrationStatus.Pending,
             CreatedAt = now, UpdatedAt = now
+        };
+    }
+
+    public static KmIntegrationOutbox ForArchivedVerificationAttachment(
+        VerificationApplication application,
+        VerificationApplicationFile attachment,
+        DateTime now)
+    {
+        var document = attachment.DocumentLibraryFile;
+        if (application.Status != VerificationApplicationStatus.Accepted ||
+            attachment.VerificationApplicationId != application.Id ||
+            document is null || attachment.DocumentLibraryFileId != document.Id ||
+            document.StorageArea != DocumentStorageAreas.Library ||
+            document.FileSize <= 0 || string.IsNullOrWhiteSpace(document.StandardFileName))
+            throw new InvalidOperationException(
+                "Only a formally archived verification application attachment can enter the KM outbox.");
+
+        return new KmIntegrationOutbox
+        {
+            Id = Guid.NewGuid(), EventId = Guid.NewGuid(),
+            EventType = KmIntegrationEventTypes.VerificationApplicationAttachmentArchived,
+            SourceSystem = "CSIT",
+            SourceEntityType = KmIntegrationSourceEntityTypes.VerificationApplicationFile,
+            SourceEntityId = attachment.Id, DocumentId = document.Id, Version = 1,
+            ProjectId = null, CaseId = null, TaskId = null,
+            FileName = document.OriginalFileName,
+            ContentType = string.IsNullOrWhiteSpace(document.ContentType)
+                ? "application/octet-stream" : document.ContentType,
+            SizeBytes = document.FileSize, CommittedAt = now,
+            Status = KmIntegrationStatus.Pending, CreatedAt = now, UpdatedAt = now
         };
     }
 
@@ -161,4 +191,17 @@ public sealed class KmIntegrationOutbox
 
     private static string Safe(string value, int maxLength) =>
         new string((value ?? string.Empty).Where(c => !char.IsControl(c)).Take(maxLength).ToArray());
+}
+
+public static class KmIntegrationEventTypes
+{
+    public const string TestReportCommitted = "TestReportCommitted";
+    public const string VerificationApplicationAttachmentArchived =
+        "VerificationApplicationAttachmentArchived";
+}
+
+public static class KmIntegrationSourceEntityTypes
+{
+    public const string TestReport = "TestReport";
+    public const string VerificationApplicationFile = "VerificationApplicationFile";
 }
