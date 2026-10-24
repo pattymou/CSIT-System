@@ -112,7 +112,7 @@ internal static class ValidationRequestSeedData
         Field(common, "ETHERNET_PORTS", "Ethernet / SFP+ Port Number (LAN)", "RepeatableGroup", 150, true, design: "Each interface has a speed/type and Port Count.");
         Field(common, "ETHERNET_INTERFACE", "Interface", "Dropdown", 10, true, parent: "ETHERNET_PORTS"); Options("ETHERNET_INTERFACE", ("1G", "1Gbps"), ("2_5G", "2.5Gbps"), ("5G", "5Gbps"), ("10G", "10Gbps"), ("SFP_1G", "SFP+ 1Gbps"), ("SFP_10G", "SFP+ 10Gbps"));
         Field(common, "ETHERNET_PORT_COUNT", "Port Count", "Number", 20, true, parent: "ETHERNET_PORTS", validation: "{\"integer\":true,\"min\":1}");
-        Field(common, "OTHER_PRODUCT_INFO", "上傳其他產品資訊 (PRD/HW Diagram/SPEC/Pre-test Report)", "Attachment", 160, design: "Phase 1 preview only; no file is persisted.");
+        Field(common, "OTHER_PRODUCT_INFO", "上傳其他產品資訊 (PRD/HW Diagram/SPEC/Pre-test Report)", "Attachment", 160, design: "Files are persisted with the application and linked to the application document folder on submit.");
         Field(common, "DEFAULT_IP_MODE", "Default IP", "SingleSelect", 170, true); Options("DEFAULT_IP_MODE", ("FIXED_IP", "Fixed IP"), ("DHCP_CLIENT", "DHCP Client"));
         Field(common, "DEFAULT_IP_VALUE", "IP", "Text", 180); VisibleRequired("DEFAULT_IP_VALUE", "DEFAULT_IP_MODE", "Equals", "FIXED_IP");
         Field(common, "DEFAULT_USERNAME", "Username", "Text", 190, true);

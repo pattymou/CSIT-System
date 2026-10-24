@@ -16,7 +16,7 @@ else if (_item is not null)
 {
     @if (_item.ValidationRequest is not null)
     {
-        <ValidationRequestSubmissionView Submission="_item.ValidationRequest" />
+        <ValidationRequestSubmissionView Submission="_item.ValidationRequest" ApplicationId="Id" />
     }
     else
     {

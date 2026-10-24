@@ -45,7 +45,18 @@
                 <label class="validation-checkbox"><input type="checkbox" checked="@BoolValue" disabled="@ReadOnly" @onchange="SetBool" /> 是</label>
                 break;
             case "Attachment":
-                <div class="validation-upload-placeholder" aria-disabled="true"><span>附件</span><small>附件上傳功能將於下一階段啟用</small></div>
+                @if (string.Equals(Field.Code, "OTHER_PRODUCT_INFO", StringComparison.OrdinalIgnoreCase) &&
+                    (AttachmentApplicationId.HasValue || AttachmentsManageable || EnsureAttachmentApplicationId is not null))
+                {
+                    <ValidationApplicationAttachments ApplicationId="AttachmentApplicationId"
+                                                      CanManage="AttachmentsManageable"
+                                                      EnsureApplicationId="EnsureAttachmentApplicationId"
+                                                      DraftEnsured="AttachmentDraftEnsured" />
+                }
+                else
+                {
+                    <div class="validation-upload-placeholder" aria-disabled="true"><span>附件</span><small>此附件欄位尚未啟用</small></div>
+                }
                 break;
             case "Lookup":
                 <input value="@TextValue" @oninput="SetText" disabled="@ReadOnly" />
@@ -64,13 +75,13 @@
                 @for (var index = 0; index < RepeatableGroupCount; index++)
                 {
                     var row = index;
-                    <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" ValueIndex="row" /> }</div>
+                    <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" ValueIndex="row" AttachmentApplicationId="AttachmentApplicationId" AttachmentsManageable="AttachmentsManageable" EnsureAttachmentApplicationId="EnsureAttachmentApplicationId" AttachmentDraftEnsured="AttachmentDraftEnsured" /> }</div>
                     @if (!ReadOnly && RepeatableGroupCount > 1) { <button type="button" class="validation-add-row" @onclick="() => RemoveGroupRow(row)">移除此組</button> }
                 }
                 @if (!ReadOnly) { <button type="button" class="validation-add-row" @onclick="AddGroupRow">＋ 新增一組</button> }
                 break;
             case "Group":
-                <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" /> }</div>
+                <div class="validation-group-fields">@foreach (var child in Field.Children) { <ValidationRequestFieldPreview Field="child" Values="Values" ValuesChanged="ValuesChanged" ProductTypes="ProductTypes" ProductTypeChanged="ProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" AttachmentApplicationId="AttachmentApplicationId" AttachmentsManageable="AttachmentsManageable" EnsureAttachmentApplicationId="EnsureAttachmentApplicationId" AttachmentDraftEnsured="AttachmentDraftEnsured" /> }</div>
                 break;
             default:
                 <input value="@TextValue" @oninput="SetText" disabled="@ReadOnly" />
@@ -88,6 +99,10 @@
     [Parameter] public EventCallback<string> ProductTypeChanged { get; set; }
     [Parameter] public bool ReadOnly { get; set; }
     [Parameter] public int? ValueIndex { get; set; }
+    [Parameter] public Guid? AttachmentApplicationId { get; set; }
+    [Parameter] public bool AttachmentsManageable { get; set; }
+    [Parameter] public Func<Task<Guid>>? EnsureAttachmentApplicationId { get; set; }
+    [Parameter] public EventCallback<Guid> AttachmentDraftEnsured { get; set; }
     private string TextValue => TextAt(ValueIndex ?? 0);
     private bool BoolValue => string.Equals(TextValue, "true", StringComparison.OrdinalIgnoreCase);
     private bool Contains(string value) => Values.TryGetValue(Field.Code, out var v) && v.Contains(value, StringComparer.OrdinalIgnoreCase);

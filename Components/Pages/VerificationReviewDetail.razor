@@ -41,7 +41,8 @@ else if (_item is not null)
             <ValidationRequestPreview Preview="_editPreview" ProductTypes="_productTypes"
                                       SelectedProductCode="_selectedProduct" SelectedProductCodeChanged="ChangeProductAsync"
                                       Values="_values" SelectedTestItemCodes="_selectedTests"
-                                      TestParameterValues="_testParameters" DepartmentOptions="_departments" />
+                                      TestParameterValues="_testParameters" DepartmentOptions="_departments"
+                                      AttachmentApplicationId="Id" />
             <div class="form-actions">
                 <button type="button" class="btn-primary" disabled="@_working" @onclick="SaveEditAsync">儲存修改</button>
                 <button type="button" class="btn-secondary" disabled="@_working" @onclick="CancelEdit">取消編輯</button>
@@ -51,7 +52,7 @@ else if (_item is not null)
         {
             @if (_item.ValidationRequest is not null)
             {
-                <ValidationRequestSubmissionView Submission="_item.ValidationRequest" />
+                <ValidationRequestSubmissionView Submission="_item.ValidationRequest" ApplicationId="Id" />
             }
             else
             {

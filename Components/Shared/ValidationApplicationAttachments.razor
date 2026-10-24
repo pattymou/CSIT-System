@@ -1,0 +1,207 @@
+@using System.Text.Json
+@using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Authorization
+@using Microsoft.JSInterop
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.Interfaces
+@inject BrowserApiClient Api
+@inject IJSRuntime JS
+@inject IVerificationApplicationFileService AttachmentService
+@inject AuthenticationStateProvider AuthenticationStateProvider
+
+<div class="validation-attachments">
+    @if (!string.IsNullOrWhiteSpace(_message))
+    {
+        <div class="attachment-message @(_isError ? "error" : "success")">@_message</div>
+    }
+
+    @if (CanManage)
+    {
+        <div class="attachment-upload" @ref="_inputContainer">
+            <InputFile OnChange="FilesSelected" multiple />
+            <button type="button" class="btn-primary" disabled="@(_selectedCount == 0 || _working)" @onclick="UploadAsync">
+                @(_working ? "上傳中…" : $"上傳附件{(_selectedCount > 0 ? $" ({_selectedCount})" : string.Empty)}")
+            </button>
+        </div>
+        <small class="attachment-hint">可一次選擇多個檔案；檔案會在伺服器確認保存後才顯示成功。</small>
+    }
+
+    @if (_loading)
+    {
+        <div class="attachment-empty">載入附件中…</div>
+    }
+    else if (_files.Count == 0)
+    {
+        <div class="attachment-empty">目前沒有附件。</div>
+    }
+    else
+    {
+        <div class="attachment-table-wrap">
+            <table class="attachment-table">
+                <thead><tr><th>檔案名稱</th><th>大小</th><th>上傳時間</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var file in _files)
+                    {
+                        <tr>
+                            <td>@file.FileName</td>
+                            <td>@FormatSize(file.FileSize)</td>
+                            <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                            <td class="attachment-actions">
+                                <a class="table-link-btn" href="@($"/api/verification-application-files/{file.Id}/download")">下載</a>
+                                @if (CanManage)
+                                {
+                                    <button type="button" class="table-chip-btn danger" disabled="@_working" @onclick="() => DeleteAsync(file)">移除</button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+<style>
+    .validation-attachments { display:grid; gap:10px; padding:13px; border:1px dashed rgba(148,163,184,.38); border-radius:9px; background:rgba(15,23,42,.22); }
+    .attachment-upload { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+    .attachment-upload input[type=file] { width:auto!important; min-height:auto!important; padding:7px!important; flex:1 1 340px; }
+    .attachment-hint,.attachment-empty { color:#94a3b8; font-size:.78rem; }
+    .attachment-message { padding:9px 11px; border-radius:8px; font-size:.82rem; }
+    .attachment-message.success { color:#99f6e4; background:rgba(13,148,136,.14); }
+    .attachment-message.error { color:#fecaca; background:rgba(220,38,38,.14); }
+    .attachment-table-wrap { overflow-x:auto; }
+    .attachment-table { width:100%; border-collapse:collapse; font-size:.82rem; }
+    .attachment-table th,.attachment-table td { padding:9px 8px; text-align:left; border-bottom:1px solid rgba(148,163,184,.15); }
+    .attachment-table th { color:#94a3b8; font-weight:700; }
+    .attachment-actions { white-space:nowrap; text-align:right!important; }
+</style>
+
+@code {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
+    [Parameter] public Guid? ApplicationId { get; set; }
+    [Parameter] public bool CanManage { get; set; }
+    [Parameter] public Func<Task<Guid>>? EnsureApplicationId { get; set; }
+    [Parameter] public EventCallback<Guid> DraftEnsured { get; set; }
+
+    private ElementReference _inputContainer;
+    private Guid? _loadedApplicationId;
+    private List<VerificationApplicationFileDto> _files = [];
+    private int _selectedCount;
+    private bool _loading;
+    private bool _working;
+    private bool _isError;
+    private string? _message;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (ApplicationId == _loadedApplicationId) return;
+        _loadedApplicationId = ApplicationId;
+        if (!ApplicationId.HasValue)
+        {
+            _files = [];
+            return;
+        }
+        await LoadAsync(ApplicationId.Value);
+    }
+
+    private void FilesSelected(InputFileChangeEventArgs args)
+    {
+        _selectedCount = args.FileCount;
+        _message = null;
+        _isError = false;
+    }
+
+    private async Task UploadAsync()
+    {
+        if (_selectedCount == 0) return;
+        _working = true;
+        _message = null;
+        _isError = false;
+        Guid? ensuredId = null;
+        Guid? newlyCreatedDraftId = null;
+        try
+        {
+            var applicationId = ApplicationId;
+            if (!applicationId.HasValue)
+            {
+                if (EnsureApplicationId is null)
+                    throw new InvalidOperationException("請先儲存申請草稿後再上傳附件。");
+                applicationId = await EnsureApplicationId();
+                newlyCreatedDraftId = applicationId;
+            }
+
+            var response = await Api.UploadFilesAsync(
+                $"/api/verification-applications/{applicationId.Value}/files", _inputContainer);
+            if (!response.IsSuccessStatusCode)
+                throw new BrowserApiException(response.StatusCode, response.Body);
+            var batch = JsonSerializer.Deserialize<VerificationApplicationFileUploadBatchResultDto>(response.Body, JsonOptions)
+                ?? throw new InvalidOperationException("無法讀取附件上傳結果。");
+            var successful = batch.Results.Count(x => x.Success);
+            var failed = batch.Results.Where(x => !x.Success).ToList();
+            _selectedCount = 0;
+            _isError = failed.Count > 0;
+            _message = failed.Count == 0
+                ? $"已保存 {successful} 份附件。"
+                : $"已保存 {successful} 份；失敗 {failed.Count} 份：{string.Join("；", failed.Select(x => $"{x.FileName}：{x.Message}"))}";
+            await LoadAsync(applicationId.Value);
+            if (failed.Count == 0 && successful > 0) ensuredId = newlyCreatedDraftId;
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"附件上傳失敗：{ex.Message}";
+        }
+        finally
+        {
+            _working = false;
+            if (ensuredId.HasValue && DraftEnsured.HasDelegate)
+                await DraftEnsured.InvokeAsync(ensuredId.Value);
+        }
+    }
+
+    private async Task DeleteAsync(VerificationApplicationFileDto file)
+    {
+        if (!ApplicationId.HasValue) return;
+        if (!await JS.InvokeAsync<bool>("confirm", $"確定移除附件「{file.FileName}」？")) return;
+        _working = true;
+        _message = null;
+        try
+        {
+            var response = await Api.DeleteAsync(
+                $"/api/verification-applications/{ApplicationId.Value}/files/{file.Id}");
+            if (!response.IsSuccessStatusCode)
+                throw new BrowserApiException(response.StatusCode, response.Body);
+            await LoadAsync(ApplicationId.Value);
+            _isError = false;
+            _message = "附件已移除。";
+        }
+        catch (Exception ex)
+        {
+            _isError = true;
+            _message = $"移除附件失敗：{ex.Message}";
+        }
+        finally { _working = false; }
+    }
+
+    private async Task LoadAsync(Guid applicationId)
+    {
+        _loading = true;
+        try
+        {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            _files = (await AttachmentService.GetAsync(applicationId, user)).ToList();
+            _loadedApplicationId = applicationId;
+        }
+        catch (Exception ex)
+        {
+            _files = [];
+            _isError = true;
+            _message = $"載入附件失敗：{ex.Message}";
+        }
+        finally { _loading = false; }
+    }
+
+    private static string FormatSize(long bytes) => bytes >= 1_000_000
+        ? $"{bytes / 1_000_000d:0.##} MB"
+        : bytes >= 1_000 ? $"{bytes / 1_000d:0.##} KB" : $"{bytes} B";
+}

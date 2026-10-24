@@ -31,7 +31,9 @@ else
     <ValidationRequestPreview Preview="_preview" ProductTypes="_configuration.ProductTypes"
                               SelectedProductCode="_selectedProduct" SelectedProductCodeChanged="ChangeProduct"
                               Values="_values" SelectedTestItemCodes="_selectedTests" TestParameterValues="_testParameters"
-                              DepartmentOptions="_departments" />
+                              DepartmentOptions="_departments" AttachmentApplicationId="@(_draftId ?? Id)"
+                              AttachmentsManageable="true" EnsureAttachmentApplicationId="EnsureAttachmentDraftAsync"
+                              AttachmentDraftEnsured="AttachmentDraftEnsured" />
 
     @if (_directApproval)
     {
@@ -74,6 +76,7 @@ else
     private bool _saving;
     private bool _directApproval;
     private DateOnly? _expectedEndDate;
+    private Guid? _draftId;
 
     protected override async Task OnParametersSetAsync()
     {
@@ -86,6 +89,7 @@ else
             _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department)).ToList();
             if (Id.HasValue)
             {
+                _draftId = Id.Value;
                 _existing = await Applications.GetForApplicantAsync(Id.Value, user) ?? throw new InvalidOperationException("找不到申請，或您無權存取。");
                 if (_existing.Status is not (VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned)) throw new InvalidOperationException("此申請目前不可修改。");
                 if (_existing.ValidationRequest?.FormSnapshot is null) throw new InvalidOperationException("舊版申請請使用原有編輯畫面。");
@@ -93,6 +97,7 @@ else
             }
             else
             {
+                _draftId = null;
                 _selectedProduct = _configuration.ProductTypes.Where(x => x.IsEnabled).OrderBy(x => x.DisplayOrder).FirstOrDefault()?.Code ?? "";
                 await LoadPreview();
             }
@@ -128,22 +133,45 @@ else
         _saving = true; _error = null;
         try
         {
-            if (_preview is null) throw new InvalidOperationException("申請表尚未載入。");
-            _form.ValidationRequest = new ValidationRequestSubmissionDto
-            {
-                TemplateVersionId = _preview.TemplateVersionId, TemplateVersion = _preview.TemplateVersion,
-                ProductTypeCode = _preview.ProductTypeCode, FieldValues = _values,
-                SelectedTestItemCodes = _selectedTests, TestParameterValues = _testParameters, FormSnapshot = _preview
-            };
+            var saved = await SaveDraftCoreAsync();
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
-            VerificationApplicationDto saved = Id.HasValue
-                ? await Applications.UpdateDraftAsync(Id.Value, user, _form)
-                : await Applications.CreateDraftAsync(user, ToCreate());
             if (submit) saved = await Applications.SubmitAsync(saved.Id, user, _expectedEndDate);
             Nav.NavigateTo($"/verification-applications/{saved.Id}");
         }
         catch (Exception ex) { _error = ex.Message; }
         finally { _saving = false; }
+    }
+
+    private async Task<Guid> EnsureAttachmentDraftAsync()
+    {
+        _saving = true; _error = null;
+        try { return (await SaveDraftCoreAsync()).Id; }
+        catch (Exception ex) { _error = ex.Message; throw; }
+        finally { _saving = false; }
+    }
+
+    private async Task<VerificationApplicationDto> SaveDraftCoreAsync()
+    {
+        if (_preview is null) throw new InvalidOperationException("申請表尚未載入。");
+        _form.ValidationRequest = new ValidationRequestSubmissionDto
+        {
+            TemplateVersionId = _preview.TemplateVersionId, TemplateVersion = _preview.TemplateVersion,
+            ProductTypeCode = _preview.ProductTypeCode, FieldValues = _values,
+            SelectedTestItemCodes = _selectedTests, TestParameterValues = _testParameters, FormSnapshot = _preview
+        };
+        var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+        var saved = _draftId.HasValue
+            ? await Applications.UpdateDraftAsync(_draftId.Value, user, _form)
+            : await Applications.CreateDraftAsync(user, ToCreate());
+        _draftId = saved.Id;
+        _existing = saved;
+        return saved;
+    }
+
+    private void AttachmentDraftEnsured(Guid id)
+    {
+        _draftId = id;
+        if (!Id.HasValue) Nav.NavigateTo($"/validation-requests/{id}", replace: true);
     }
 
     private CreateVerificationApplicationRequest ToCreate() => new()

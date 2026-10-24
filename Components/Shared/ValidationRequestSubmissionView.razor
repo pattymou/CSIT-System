@@ -10,12 +10,14 @@
         <ValidationRequestPreview Preview="snapshot" ProductTypes="ProductTypes(snapshot)"
                                   SelectedProductCode="Submission.ProductTypeCode" Values="Submission.FieldValues"
                                   SelectedTestItemCodes="Submission.SelectedTestItemCodes"
-                                  TestParameterValues="Submission.TestParameterValues" ReadOnly="true" />
+                                  TestParameterValues="Submission.TestParameterValues" ReadOnly="true"
+                                  AttachmentApplicationId="ApplicationId" />
     </div>
 }
 
 @code {
     [Parameter, EditorRequired] public ValidationRequestSubmissionDto Submission { get; set; } = null!;
+    [Parameter] public Guid? ApplicationId { get; set; }
     private static IReadOnlyList<ValidationProductTypeDto> ProductTypes(ValidationRequestPreviewDto snapshot) =>
         [new(Guid.Empty, snapshot.ProductTypeCode, snapshot.ProductTypeLabel, true, 0, null, null, null, [], [])];
 }

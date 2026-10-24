@@ -314,13 +314,20 @@ public class AppDbContext : DbContext
             entity.Property(x => x.FilePath).HasColumnName("file_path").HasMaxLength(1000).IsRequired();
             entity.Property(x => x.ContentType).HasColumnName("content_type").HasMaxLength(200);
             entity.Property(x => x.FileSize).HasColumnName("file_size");
+            entity.Property(x => x.Sha256).HasColumnName("sha256").HasMaxLength(64);
             entity.Property(x => x.UploadedBy).HasColumnName("uploaded_by").HasMaxLength(100).IsRequired();
             entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.Property(x => x.DocumentLibraryFileId).HasColumnName("document_library_file_id");
             entity.HasIndex(x => x.VerificationApplicationId);
+            entity.HasIndex(x => x.DocumentLibraryFileId).IsUnique().HasFilter("document_library_file_id IS NOT NULL");
             entity.HasOne(x => x.VerificationApplication)
                 .WithMany(x => x.Files)
                 .HasForeignKey(x => x.VerificationApplicationId)
                 .OnDelete(DeleteBehavior.Cascade);
+            entity.HasOne(x => x.DocumentLibraryFile)
+                .WithOne()
+                .HasForeignKey<VerificationApplicationFile>(x => x.DocumentLibraryFileId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<ModuleRecordCase>(entity =>

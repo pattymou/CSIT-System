@@ -118,6 +118,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         {
             var entity = await _db.VerificationApplications
                 .FromSqlInterpolated($"SELECT * FROM verification_applications WHERE id = {id} FOR UPDATE")
+                .Include(x => x.Files)
+                .ThenInclude(x => x.DocumentLibraryFile)
                 .SingleOrDefaultAsync(cancellationToken)
                 ?? throw new KeyNotFoundException($"Verification application {id} was not found.");
             VerificationApplicationSecurity.EnsureApplicantOwnership(entity, account);
@@ -134,6 +136,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                 enforceDepartmentTeamRule: string.IsNullOrWhiteSpace(entity.ValidationFormPayloadJson),
                 cancellationToken);
             entity.Submit(routing, now);
+            await VerificationApplicationAttachmentLinker.LinkAsync(_db, entity, now, cancellationToken);
 
             if (directApproval)
             {
@@ -182,6 +185,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         {
             var entity = await _db.VerificationApplications
                 .FromSqlInterpolated($"SELECT * FROM verification_applications WHERE id = {id} FOR UPDATE")
+                .Include(x => x.Files)
+                .ThenInclude(x => x.DocumentLibraryFile)
                 .SingleOrDefaultAsync(cancellationToken)
                 ?? throw new KeyNotFoundException($"Verification application {id} was not found.");
             if (entity.Status != VerificationApplicationStatus.Submitted)
@@ -218,6 +223,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
                 payloadJson,
                 now);
             ValidateValidationRequestForSubmit(entity);
+            await VerificationApplicationAttachmentLinker.LinkAsync(_db, entity, now, cancellationToken);
             AddEditAudit(entity, account, now, before,
                 AuditContent(routing.RoutingDepartmentOptionId, routing.TeamOptionId, edited));
             await _db.SaveChangesAsync(cancellationToken);
@@ -909,7 +915,11 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             FileName = x.FileName,
             ContentType = x.ContentType,
             FileSize = x.FileSize,
-            UploadedBy = x.UploadedBy
+            UploadedBy = x.UploadedBy,
+            UploadedAt = x.CreatedAt,
+            ModelName = entity.ProductModel,
+            DocumentFolderId = x.DocumentLibraryFile?.FolderId,
+            DocumentLibraryFileId = x.DocumentLibraryFileId
         }).ToList()
     };
 }

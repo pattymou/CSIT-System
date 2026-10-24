@@ -86,4 +86,21 @@ public class VerificationApplicationFileDto
     public string? ContentType { get; set; }
     public long FileSize { get; set; }
     public string UploadedBy { get; set; } = string.Empty;
+    public DateTime UploadedAt { get; set; }
+    public string? ModelName { get; set; }
+    public Guid? DocumentFolderId { get; set; }
+    public Guid? DocumentLibraryFileId { get; set; }
+}
+
+public sealed class VerificationApplicationFileUploadResultDto
+{
+    public string FileName { get; set; } = string.Empty;
+    public bool Success { get; set; }
+    public string Message { get; set; } = string.Empty;
+    public VerificationApplicationFileDto? File { get; set; }
+}
+
+public sealed class VerificationApplicationFileUploadBatchResultDto
+{
+    public List<VerificationApplicationFileUploadResultDto> Results { get; set; } = [];
 }

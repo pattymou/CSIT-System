@@ -271,6 +271,7 @@ builder.Services.AddScoped<IModuleService, ModuleService>();
 builder.Services.AddScoped<IModuleRecordService, ModuleRecordService>();
 builder.Services.AddScoped<IModuleRecordCreationService, ModuleRecordCreationService>();
 builder.Services.AddScoped<IVerificationApplicationService, VerificationApplicationService>();
+builder.Services.AddScoped<IVerificationApplicationFileService, VerificationApplicationFileService>();
 builder.Services.AddScoped<IReservationService, ReservationService>();
 builder.Services.AddScoped<IReservationPolicyService, ReservationPolicyService>();
 builder.Services.AddScoped<IApparatusAvailabilityService, ApparatusAvailabilityService>();

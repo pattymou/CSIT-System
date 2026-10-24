@@ -3352,7 +3352,7 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         {
                             Id = new Guid("4afd4103-2f12-168f-d6c8-d3b76eba201b"),
                             Code = "OTHER_PRODUCT_INFO",
-                            DesignNote = "Phase 1 preview only; no file is persisted.",
+                            DesignNote = "Files are persisted with the application and linked to the application document folder on submit.",
                             DisplayLabel = "上傳其他產品資訊 (PRD/HW Diagram/SPEC/Pre-test Report)",
                             DisplayOrder = 160,
                             FieldType = "Attachment",
@@ -7309,6 +7309,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<Guid?>("DocumentLibraryFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("document_library_file_id");
+
                     b.Property<string>("FileName")
                         .IsRequired()
                         .HasMaxLength(300)
@@ -7325,6 +7329,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("bigint")
                         .HasColumnName("file_size");
 
+                    b.Property<string>("Sha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("sha256");
+
                     b.Property<string>("UploadedBy")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -7336,6 +7345,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnName("verification_application_id");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("DocumentLibraryFileId")
+                        .IsUnique()
+                        .HasFilter("document_library_file_id IS NOT NULL");
 
                     b.HasIndex("VerificationApplicationId");
 
@@ -7990,11 +8003,18 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationApplicationFile", b =>
                 {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFile", "DocumentLibraryFile")
+                        .WithOne()
+                        .HasForeignKey("SIT.DepartmentSystem.Web.Entities.VerificationApplicationFile", "DocumentLibraryFileId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.HasOne("SIT.DepartmentSystem.Web.Entities.VerificationApplication", "VerificationApplication")
                         .WithMany("Files")
                         .HasForeignKey("VerificationApplicationId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+
+                    b.Navigation("DocumentLibraryFile");
 
                     b.Navigation("VerificationApplication");
                 });

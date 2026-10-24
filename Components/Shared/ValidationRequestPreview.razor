@@ -40,7 +40,9 @@
                             @foreach (var field in group.Fields)
                             {
                                 <ValidationRequestFieldPreview Field="field" Values="Values" ValuesChanged="StateHasChanged"
-                                                               ProductTypes="ProductTypes" ProductTypeChanged="HandleProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly" />
+                                                               ProductTypes="ProductTypes" ProductTypeChanged="HandleProductTypeChanged" DepartmentOptions="DepartmentOptions" ReadOnly="ReadOnly"
+                                                               AttachmentApplicationId="AttachmentApplicationId" AttachmentsManageable="AttachmentsManageable"
+                                                               EnsureAttachmentApplicationId="EnsureAttachmentApplicationId" AttachmentDraftEnsured="AttachmentDraftEnsured" />
                             }
                         </div>
                     </section>
@@ -95,6 +97,10 @@
     [Parameter] public HashSet<string> SelectedTestItemCodes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [Parameter] public Dictionary<string, Dictionary<string, List<string>>> TestParameterValues { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public Guid? AttachmentApplicationId { get; set; }
+    [Parameter] public bool AttachmentsManageable { get; set; }
+    [Parameter] public Func<Task<Guid>>? EnsureAttachmentApplicationId { get; set; }
+    [Parameter] public EventCallback<Guid> AttachmentDraftEnsured { get; set; }
     private string? _activeTab;
     private string? _lastProductCode;
     private ValidationSectionDto? ActiveSection => Preview?.Sections.FirstOrDefault(x => x.Code == _activeTab);

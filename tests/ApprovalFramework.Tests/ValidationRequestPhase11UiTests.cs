@@ -56,7 +56,8 @@ public sealed class ValidationRequestPhase11UiTests
         Assert.DoesNotContain("尚未開放儲存與送出", source);
         var fieldSource = Read("Components", "Shared", "ValidationRequestFieldPreview.razor");
         Assert.Contains("Field.DataSource == \"ValidationProductType\"", fieldSource);
-        Assert.Contains("附件上傳功能將於下一階段啟用", fieldSource);
+        Assert.Contains("ValidationApplicationAttachments", fieldSource);
+        Assert.DoesNotContain("附件上傳功能將於下一階段啟用", fieldSource);
     }
 
     [Fact]
