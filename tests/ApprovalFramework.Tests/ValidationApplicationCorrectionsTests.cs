@@ -1,9 +1,11 @@
 using System.Reflection;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Implementations;
 
@@ -156,7 +158,8 @@ public sealed class ValidationApplicationCorrectionsTests
         AppDbContext db,
         ValidationRequestSubmissionDto submission)
     {
-        var service = new VerificationApplicationService(db, null!, null!, null!, null!);
+        var service = new VerificationApplicationService(db, null!, null!, null!, null!,
+            Options.Create(new DocumentStagingOptions()));
         var method = typeof(VerificationApplicationService).GetMethod(
             "ResolveDynamicRoutingAsync",
             BindingFlags.NonPublic | BindingFlags.Instance,

@@ -15,6 +15,17 @@
 
 <PageTitle>驗證測試申請單</PageTitle>
 
+<AppMessageDialog Visible="_showAbandonDialog"
+                  Title="放棄申請單"
+                  Message="確定放棄此申請單？草稿及其附件將被刪除，此操作無法復原。"
+                  Type="AppMessageDialogType.Warning"
+                  ShowCancel="true"
+                  CancelText="繼續編輯"
+                  ConfirmText="放棄申請"
+                  ConfirmIsDanger="true"
+                  OnClose="ContinueEditing"
+                  OnConfirm="AbandonDraftAsync" />
+
 <header class="validation-request-header">
     <div><span class="eyebrow">RD APPLICATION</span><h1>驗證測試申請單</h1><p>可先儲存草稿；正式送出後將沿用既有主管審核流程。</p></div>
     <button type="button" class="btn-secondary" @onclick="OpenMyApplications">我的驗證申請</button>
@@ -74,6 +85,7 @@ else
     private string? _error;
     private bool _loading = true;
     private bool _saving;
+    private bool _showAbandonDialog;
     private bool _directApproval;
     private DateOnly? _expectedEndDate;
     private Guid? _draftId;
@@ -179,6 +191,36 @@ else
         ValidationRequest = _form.ValidationRequest
     };
     private static string StatusText(VerificationApplicationStatus status) => status switch { VerificationApplicationStatus.Draft => "草稿", VerificationApplicationStatus.Returned => "已退回", _ => status.ToString() };
-    private void Cancel() => Nav.NavigateTo("/verification-applications");
+    private void Cancel()
+    {
+        if (_draftId.HasValue && _existing?.Status == VerificationApplicationStatus.Draft)
+        {
+            _showAbandonDialog = true;
+            return;
+        }
+        Nav.NavigateTo("/verification-applications");
+    }
+
+    private void ContinueEditing() => _showAbandonDialog = false;
+
+    private async Task AbandonDraftAsync()
+    {
+        _showAbandonDialog = false;
+        if (!_draftId.HasValue)
+        {
+            Nav.NavigateTo("/verification-applications");
+            return;
+        }
+
+        _saving = true; _error = null;
+        try
+        {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            await Applications.DeleteDraftAsync(_draftId.Value, user);
+            Nav.NavigateTo("/verification-applications");
+        }
+        catch (Exception ex) { _error = $"放棄申請失敗：{ex.Message}"; }
+        finally { _saving = false; }
+    }
     private void OpenMyApplications() => Nav.NavigateTo("/verification-applications");
 }

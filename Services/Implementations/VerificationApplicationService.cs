@@ -2,9 +2,12 @@ using System.Data;
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 using SIT.DepartmentSystem.Web.Services.ValidationRequests;
 
@@ -20,19 +23,22 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     private readonly ISystemOptionService _systemOptions;
     private readonly IBusinessWriteAuthorizationGuard _businessWrite;
     private readonly IValidationRequestConfigurationService _validationRequests;
+    private readonly DocumentStagingOptions _stagingOptions;
 
     public VerificationApplicationService(
         AppDbContext db,
         IModuleRecordCreationService moduleRecordCreation,
         ISystemOptionService systemOptions,
         IBusinessWriteAuthorizationGuard businessWrite,
-        IValidationRequestConfigurationService validationRequests)
+        IValidationRequestConfigurationService validationRequests,
+        IOptions<DocumentStagingOptions> stagingOptions)
     {
         _db = db;
         _moduleRecordCreation = moduleRecordCreation;
         _systemOptions = systemOptions;
         _businessWrite = businessWrite;
         _validationRequests = validationRequests;
+        _stagingOptions = stagingOptions.Value;
     }
 
     public async Task<VerificationApplicationDto> CreateDraftAsync(
@@ -86,6 +92,94 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         SaveValidationRequest(entity, request.ValidationRequest, now);
         await _db.SaveChangesAsync(cancellationToken);
         return await MapWithDraftOptionsAsync(entity, cancellationToken);
+    }
+
+    public async Task DeleteDraftAsync(
+        Guid id,
+        ClaimsPrincipal user,
+        CancellationToken cancellationToken = default)
+    {
+        await _businessWrite.DemandAsync(cancellationToken);
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        IDbContextTransaction? transaction = null;
+        if (_db.Database.IsRelational())
+            transaction = await _db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+
+        IReadOnlyList<string> exclusivePaths;
+        try
+        {
+            var query = _db.Database.IsRelational()
+                ? _db.VerificationApplications
+                    .FromSqlInterpolated($"SELECT * FROM verification_applications WHERE id = {id} FOR UPDATE")
+                : _db.VerificationApplications.AsQueryable();
+            var entity = await query.Include(x => x.Files).SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
+                ?? throw new KeyNotFoundException("找不到驗證申請單。");
+            VerificationApplicationSecurity.EnsureApplicantOwnership(entity, account);
+            if (entity.Status != VerificationApplicationStatus.Draft)
+                throw new InvalidOperationException("只有草稿可以放棄。");
+
+            var candidatePaths = entity.Files
+                .Where(x => !x.DocumentLibraryFileId.HasValue)
+                .Select(x => x.FilePath)
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            var referencedPaths = candidatePaths.Count == 0
+                ? []
+                : await _db.DocumentLibraryFiles.AsNoTracking()
+                    .Where(x => x.StorageArea == DocumentStorageAreas.Staging &&
+                                candidatePaths.Contains(x.RelativePath))
+                    .Select(x => x.RelativePath)
+                    .ToListAsync(cancellationToken);
+            exclusivePaths = candidatePaths
+                .Except(referencedPaths, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            _db.VerificationApplications.Remove(entity);
+            await _db.SaveChangesAsync(cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        }
+        catch
+        {
+            if (transaction is not null) await transaction.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+        finally
+        {
+            if (transaction is not null) await transaction.DisposeAsync();
+        }
+
+        foreach (var relativePath in exclusivePaths)
+        {
+            var absolutePath = ResolveDraftAttachmentPath(relativePath);
+            if (File.Exists(absolutePath)) File.Delete(absolutePath);
+            DeleteEmptyDraftAttachmentDirectory(absolutePath);
+        }
+    }
+
+    private string ResolveDraftAttachmentPath(string relativePath)
+    {
+        if (string.IsNullOrWhiteSpace(_stagingOptions.RootPath))
+            throw new InvalidOperationException("尚未設定 DocumentStaging:RootPath。");
+        var root = Path.GetFullPath(_stagingOptions.RootPath.Trim());
+        var fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
+        var rootPrefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            + Path.DirectorySeparatorChar;
+        if (!fullPath.StartsWith(rootPrefix, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("附件儲存路徑無效。");
+        return fullPath;
+    }
+
+    private void DeleteEmptyDraftAttachmentDirectory(string absolutePath)
+    {
+        var directory = Path.GetDirectoryName(absolutePath);
+        if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory) ||
+            Directory.EnumerateFileSystemEntries(directory).Any()) return;
+        var root = Path.GetFullPath(_stagingOptions.RootPath).TrimEnd(
+            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (directory.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            Directory.Delete(directory);
     }
 
     public async Task<bool> IsDirectApprovalApplicantAsync(

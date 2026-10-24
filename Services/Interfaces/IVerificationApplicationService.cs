@@ -11,6 +11,7 @@ public interface IVerificationApplicationService
         CreateVerificationApplicationRequest request,
         CancellationToken cancellationToken = default);
     Task<VerificationApplicationDto> UpdateDraftAsync(Guid id, ClaimsPrincipal user, UpdateVerificationApplicationRequest request, CancellationToken cancellationToken = default);
+    Task DeleteDraftAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default);
     Task<bool> IsDirectApprovalApplicantAsync(ClaimsPrincipal user, CancellationToken cancellationToken = default);
     Task<VerificationApplicationDto> SubmitAsync(Guid id, ClaimsPrincipal user, DateOnly? expectedEndDate = null, CancellationToken cancellationToken = default);
     Task<VerificationApplicationDto> UpdateForLeaderReviewAsync(Guid id, ClaimsPrincipal user, UpdateVerificationApplicationRequest request, CancellationToken cancellationToken = default);

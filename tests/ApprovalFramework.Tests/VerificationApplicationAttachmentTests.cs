@@ -218,6 +218,138 @@ public sealed class VerificationApplicationAttachmentTests
         Assert.Contains("/api/verification-application-files/", component);
     }
 
+    [Fact]
+    public async Task DeleteDraft_OwnerRemovesDraftDatabaseRowsAndExclusivePhysicalFile()
+    {
+        var root = TempRoot();
+        try
+        {
+            await using var db = NewDb();
+            var application = Draft("VA-ABANDON-1", "MODEL-ABANDON", "owner");
+            db.VerificationApplications.Add(application);
+            await db.SaveChangesAsync();
+            await Service(db, root).UploadAsync(
+                application.Id, FormFile("draft.txt", "draft"), User("owner", rd: true));
+            var physicalPath = Directory.GetFiles(root, "*", SearchOption.AllDirectories).Single();
+
+            await ApplicationService(db, root).DeleteDraftAsync(application.Id, User("owner", rd: true));
+
+            db.ChangeTracker.Clear();
+            Assert.False(await db.VerificationApplications.AnyAsync(x => x.Id == application.Id));
+            Assert.False(await db.VerificationApplicationFiles.AnyAsync(
+                x => x.VerificationApplicationId == application.Id));
+            Assert.False(File.Exists(physicalPath));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task DeleteDraft_RejectsNonOwnerWithoutChangingDraftOrAttachment()
+    {
+        var root = TempRoot();
+        try
+        {
+            await using var db = NewDb();
+            var application = Draft("VA-ABANDON-2", "MODEL-ABANDON", "owner");
+            db.VerificationApplications.Add(application);
+            await db.SaveChangesAsync();
+            await Service(db, root).UploadAsync(
+                application.Id, FormFile("draft.txt", "draft"), User("owner", rd: true));
+            var physicalPath = Directory.GetFiles(root, "*", SearchOption.AllDirectories).Single();
+
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+                ApplicationService(db, root).DeleteDraftAsync(application.Id, User("other", rd: true)));
+
+            Assert.True(await db.VerificationApplications.AnyAsync(x => x.Id == application.Id));
+            Assert.True(await db.VerificationApplicationFiles.AnyAsync(
+                x => x.VerificationApplicationId == application.Id));
+            Assert.True(File.Exists(physicalPath));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task DeleteDraft_RejectsSubmittedApplicationWithoutChangingAttachment()
+    {
+        var root = TempRoot();
+        try
+        {
+            await using var db = NewDb();
+            var application = Draft("VA-ABANDON-3", "MODEL-ABANDON", "owner");
+            db.VerificationApplications.Add(application);
+            await db.SaveChangesAsync();
+            await Service(db, root).UploadAsync(
+                application.Id, FormFile("draft.txt", "draft"), User("owner", rd: true));
+            application.Submit(new VerificationApplicationRouting(
+                application.RoutingDepartmentOptionId!.Value, "DA40", "DA40",
+                application.TeamOptionId!.Value, "TEAM", "Team",
+                "verification", "leader", "Leader"), DateTime.UtcNow);
+            await db.SaveChangesAsync();
+            var physicalPath = Directory.GetFiles(root, "*", SearchOption.AllDirectories).Single();
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                ApplicationService(db, root).DeleteDraftAsync(application.Id, User("owner", rd: true)));
+
+            Assert.Equal("只有草稿可以放棄。", error.Message);
+            Assert.True(await db.VerificationApplications.AnyAsync(x => x.Id == application.Id));
+            Assert.True(File.Exists(physicalPath));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task DeleteDraft_KeepsPhysicalFileReferencedByDocumentLibrary()
+    {
+        var root = TempRoot();
+        try
+        {
+            await using var db = NewDb();
+            var application = Draft("VA-ABANDON-4", "MODEL-ABANDON", "owner");
+            db.VerificationApplications.Add(application);
+            await db.SaveChangesAsync();
+            var uploaded = await Service(db, root).UploadAsync(
+                application.Id, FormFile("referenced.txt", "referenced"), User("owner", rd: true));
+            var physicalPath = Directory.GetFiles(root, "*", SearchOption.AllDirectories).Single();
+            var link = await db.VerificationApplicationFiles.SingleAsync(x => x.Id == uploaded.Id);
+            var folder = new DocumentFolder
+            {
+                Id = Guid.NewGuid(), Level = 3, Name = "Application documents",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            };
+            var document = new DocumentLibraryFile
+            {
+                Id = Guid.NewGuid(), FolderId = folder.Id, OriginalFileName = link.FileName,
+                StandardFileName = link.FileName, UploadedBy = "owner", UploadedAt = DateTime.UtcNow,
+                FileSize = link.FileSize, Sha256 = link.Sha256 ?? string.Empty,
+                RelativePath = link.FilePath, StorageArea = DocumentStorageAreas.Staging
+            };
+            db.AddRange(folder, document);
+            link.DocumentLibraryFileId = document.Id;
+            await db.SaveChangesAsync();
+
+            await ApplicationService(db, root).DeleteDraftAsync(application.Id, User("owner", rd: true));
+
+            db.ChangeTracker.Clear();
+            Assert.False(await db.VerificationApplications.AnyAsync(x => x.Id == application.Id));
+            Assert.True(await db.DocumentLibraryFiles.AnyAsync(x => x.Id == document.Id));
+            Assert.True(File.Exists(physicalPath));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public void AbandonDraftUi_RequiresConfirmationAndSupportsContinueEditing()
+    {
+        var page = File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(), "Components", "Pages", "ValidationRequests.razor"));
+
+        Assert.Contains("確定放棄此申請單？草稿及其附件將被刪除，此操作無法復原。", page);
+        Assert.Contains("CancelText=\"繼續編輯\"", page);
+        Assert.Contains("ConfirmText=\"放棄申請\"", page);
+        Assert.Contains("OnClose=\"ContinueEditing\"", page);
+        Assert.Contains("await Applications.DeleteDraftAsync", page);
+    }
+
     private static async Task SubmitAndLinkAsync(AppDbContext db, Guid applicationId)
     {
         db.ChangeTracker.Clear();
@@ -254,6 +386,10 @@ public sealed class VerificationApplicationAttachmentTests
         Options.Create(new DocumentStorageOptions { RootPath = Path.Combine(root, "library") }),
         Options.Create(new DocumentStagingOptions { RootPath = root }),
         new AllowWrite());
+
+    private static VerificationApplicationService ApplicationService(AppDbContext db, string root) => new(
+        db, null!, null!, new AllowWrite(), null!,
+        Options.Create(new DocumentStagingOptions { RootPath = root }));
 
     private static IFormFile FormFile(string name, string content)
     {
