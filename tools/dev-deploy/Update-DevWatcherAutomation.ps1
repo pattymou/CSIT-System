@@ -24,7 +24,9 @@ if ($sha -notmatch '^[0-9a-f]{40}$' -or $remoteSha -ne $sha) {
     throw 'DEV watcher automation source is not the pushed branch head.'
 }
 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction Stop
-if ($task.Principal.UserId -notin @('NT AUTHORITY\LOCAL SERVICE', 'S-1-5-19')) {
+$taskSid = ([Security.Principal.NTAccount]::new([string] $task.Principal.UserId)).Translate(
+    [Security.Principal.SecurityIdentifier]).Value
+if ($taskSid -ne 'S-1-5-19') {
     throw 'The DEV watcher task principal is not LOCAL SERVICE.'
 }
 $updateLock = $null
