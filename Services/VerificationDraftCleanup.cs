@@ -21,6 +21,19 @@ public sealed record VerificationDraftCleanupReport(
     int DeletedDrafts,
     int PendingRetries);
 
+internal static class VerificationDraftCleanupQueries
+{
+    public static IQueryable<VerificationApplication> DynamicApplications(
+        IQueryable<VerificationApplication> applications) =>
+        applications.Where(x => x.ValidationTemplateVersionId.HasValue);
+
+    public static IQueryable<VerificationApplication> LegacyDrafts(
+        IQueryable<VerificationApplication> applications) =>
+        applications.Where(x =>
+            x.Status == VerificationApplicationStatus.Draft &&
+            !x.ValidationTemplateVersionId.HasValue);
+}
+
 public interface IVerificationDraftFileSystem
 {
     void DeleteStagingFile(string stagingRoot, string relativePath);
@@ -189,9 +202,9 @@ public sealed class VerificationDraftCleanupWorker(
 
         await RetryPendingAsync(utcNow, cancellationToken);
         await using var candidateDb = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var candidateIds = await candidateDb.VerificationApplications.AsNoTracking()
+        var candidateIds = await VerificationDraftCleanupQueries
+            .DynamicApplications(candidateDb.VerificationApplications.AsNoTracking())
             .Where(x => x.Status == VerificationApplicationStatus.Draft &&
-                        x.ValidationFormPayloadJson != null && x.ValidationFormPayloadJson != "" &&
                         x.UpdatedAt <= cutoff)
             .Select(x => x.Id)
             .ToListAsync(cancellationToken);
@@ -213,8 +226,8 @@ public sealed class VerificationDraftCleanupWorker(
         CancellationToken cancellationToken)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var dynamicApplications = db.VerificationApplications.AsNoTracking()
-            .Where(x => x.ValidationFormPayloadJson != null && x.ValidationFormPayloadJson != "");
+        var dynamicApplications = VerificationDraftCleanupQueries
+            .DynamicApplications(db.VerificationApplications.AsNoTracking());
         var eligibleIds = await dynamicApplications
             .Where(x => x.Status == VerificationApplicationStatus.Draft && x.UpdatedAt <= cutoff)
             .Select(x => x.Id)
@@ -229,9 +242,9 @@ public sealed class VerificationDraftCleanupWorker(
             .Select(x => x.FilePath).Distinct(StringComparer.OrdinalIgnoreCase).Count();
         var recent = await dynamicApplications.CountAsync(
             x => x.Status == VerificationApplicationStatus.Draft && x.UpdatedAt > cutoff, cancellationToken);
-        var legacy = await db.VerificationApplications.AsNoTracking().CountAsync(
-            x => x.Status == VerificationApplicationStatus.Draft &&
-                 (x.ValidationFormPayloadJson == null || x.ValidationFormPayloadJson == ""), cancellationToken);
+        var legacy = await VerificationDraftCleanupQueries
+            .LegacyDrafts(db.VerificationApplications.AsNoTracking())
+            .CountAsync(cancellationToken);
         var nonDraft = await dynamicApplications.CountAsync(
             x => x.Status != VerificationApplicationStatus.Draft, cancellationToken);
         return new VerificationDraftCleanupReport(
@@ -259,7 +272,7 @@ public sealed class VerificationDraftCleanupWorker(
             var application = await query.Include(x => x.Files)
                 .SingleOrDefaultAsync(x => x.Id == applicationId, cancellationToken);
             if (application is null || application.Status != VerificationApplicationStatus.Draft ||
-                string.IsNullOrWhiteSpace(application.ValidationFormPayloadJson) || application.UpdatedAt > cutoff)
+                !application.ValidationTemplateVersionId.HasValue || application.UpdatedAt > cutoff)
             {
                 if (transaction is not null) await transaction.CommitAsync(cancellationToken);
                 return false;

@@ -14,6 +14,35 @@ namespace ApprovalFramework.Tests;
 public sealed class VerificationDraftCleanupTests
 {
     [Fact]
+    public void PostgreSqlCleanupQueries_ClassifyByTemplateVersion_WithoutComparingJsonToEmptyString()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseNpgsql("Host=127.0.0.1;Database=sql_generation_only;Username=unused;Password=unused")
+            .Options;
+        using var db = new AppDbContext(options);
+        var cutoff = new DateTime(2026, 10, 9, 8, 0, 0, DateTimeKind.Utc);
+
+        var candidateSql = VerificationDraftCleanupQueries
+            .DynamicApplications(db.VerificationApplications.AsNoTracking())
+            .Where(x => x.Status == VerificationApplicationStatus.Draft && x.UpdatedAt <= cutoff)
+            .Select(x => x.Id)
+            .ToQueryString();
+        var legacySql = VerificationDraftCleanupQueries
+            .LegacyDrafts(db.VerificationApplications.AsNoTracking())
+            .Select(x => x.Id)
+            .ToQueryString();
+
+        Assert.Contains("validation_template_version_id", candidateSql, StringComparison.Ordinal);
+        Assert.Contains("IS NOT NULL", candidateSql, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("validation_template_version_id", legacySql, StringComparison.Ordinal);
+        Assert.Contains("IS NULL", legacySql, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("validation_form_payload_json", candidateSql, StringComparison.Ordinal);
+        Assert.DoesNotContain("validation_form_payload_json", legacySql, StringComparison.Ordinal);
+        Assert.DoesNotContain("<> ''", candidateSql, StringComparison.Ordinal);
+        Assert.DoesNotContain("= ''", legacySql, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DryRun_UsesExactUtcCutoff_ReportsExclusions_AndDoesNotDelete()
     {
         var now = new DateTime(2026, 10, 24, 8, 0, 0, DateTimeKind.Utc);
