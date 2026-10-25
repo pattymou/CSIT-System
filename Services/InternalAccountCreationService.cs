@@ -12,6 +12,9 @@ public sealed class InternalAccountCreationService(
     SharedIdentityProvisioningClient provisioningClient,
     IBusinessWriteAuthorizationGuard businessWrite)
 {
+    public const string TemporaryPasswordReissueUnsupportedMessage =
+        "此帳號不支援在 CSIT 重新核發臨時密碼，請洽 Shared Identity 管理員。";
+
     public async Task<AccountProvisioningOptions> GetOptionsAsync(
         ClaimsPrincipal principal,
         CancellationToken cancellationToken = default)
@@ -92,7 +95,8 @@ public sealed class InternalAccountCreationService(
                 x.CreatedAt,
                 x.CreatedByIdentityUserId,
                 x.CreatedByAccount,
-                leaderAccounts.Contains(x.Account)))
+                leaderAccounts.Contains(x.Account),
+                x.CanReissueTemporaryPassword))
             .ToList();
     }
 
@@ -152,6 +156,8 @@ public sealed class InternalAccountCreationService(
         await businessWrite.DemandAsync(cancellationToken);
         var actor = await actorResolver.ResolveAsync(principal, cancellationToken);
         var target = await GetSensitiveOperationTargetAsync(actor, identityUserId, cancellationToken);
+        if (!target.CanReissueTemporaryPassword)
+            throw new InvalidOperationException(TemporaryPasswordReissueUnsupportedMessage);
         if (string.IsNullOrWhiteSpace(idempotencyKey))
             throw new ArgumentException("Password reset operation key is required.");
         var request = new TemporaryPasswordReissueRequest(actor.IdentityUserId, Guid.NewGuid(),

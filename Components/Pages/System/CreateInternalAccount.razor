@@ -359,10 +359,11 @@
                                                     編輯
                                                 </button>
                                                 <button type="button" class="account-action-button account-reset-button"
-                                                        disabled="@(!_interactiveReady || account.IdentityUserId == _options.Actor.IdentityUserId)"
+                                                        disabled="@(!CanReissueTemporaryPassword(account))"
+                                                        title="@PasswordResetTitle(account)"
                                                         @onclick="() => BeginPasswordReset(account)"
                                                         @onclick:stopPropagation="true">
-                                                    重設密碼
+                                                    @(account.CanReissueTemporaryPassword ? "重設密碼" : "不支援重設")
                                                 </button>
                                                 <button type="button" class="account-action-button account-delete-button"
                                                         disabled="@(!_interactiveReady)"
@@ -583,6 +584,11 @@
         _listActionMessage = null;
         _listActionWarning = false;
         if (_options is null || account.IdentityUserId == _options.Actor.IdentityUserId) return;
+        if (!account.CanReissueTemporaryPassword)
+        {
+            _listActionMessage = InternalAccountCreationService.TemporaryPasswordReissueUnsupportedMessage;
+            return;
+        }
         _passwordResetTarget = account;
         _deleteTarget = null;
         _passwordResetResult = null;
@@ -612,7 +618,7 @@
             _passwordResetIdempotencyKey = null;
         }
         catch (Exception ex) when (ex is SharedIdentityProvisioningException or
-                                   UnauthorizedAccessException or ArgumentException)
+                                   UnauthorizedAccessException or ArgumentException or InvalidOperationException)
         {
             _actionMessage = ex.Message;
         }
@@ -908,6 +914,21 @@
     private static bool IsActive(ManagedAccountListItem account) =>
         string.Equals(account.AccountStatus, "Active", StringComparison.Ordinal) &&
         string.Equals(account.SystemAccessStatus, "Active", StringComparison.Ordinal);
+
+    private bool CanReissueTemporaryPassword(ManagedAccountListItem account) =>
+        _interactiveReady && _options is not null &&
+        account.IdentityUserId != _options.Actor.IdentityUserId &&
+        account.CanReissueTemporaryPassword;
+
+    private string PasswordResetTitle(ManagedAccountListItem account)
+    {
+        if (!_interactiveReady) return "帳號操作功能連線中";
+        if (_options is not null && account.IdentityUserId == _options.Actor.IdentityUserId)
+            return "不可透過帳號管理操作自己的密碼。";
+        return account.CanReissueTemporaryPassword
+            ? $"重新核發 {account.Account} 的臨時密碼"
+            : InternalAccountCreationService.TemporaryPasswordReissueUnsupportedMessage;
+    }
 
     private static string StatusText(ManagedAccountListItem account)
     {

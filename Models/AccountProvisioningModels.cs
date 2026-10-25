@@ -74,7 +74,8 @@ public sealed record SharedIdentityAccountListItem(
     string SystemAccessStatus,
     DateTimeOffset CreatedAt,
     Guid? CreatedByIdentityUserId,
-    string? CreatedByAccount);
+    string? CreatedByAccount,
+    bool CanReissueTemporaryPassword = false);
 
 public sealed record ManagedAccountListItem(
     Guid IdentityUserId,
@@ -93,7 +94,8 @@ public sealed record ManagedAccountListItem(
     DateTimeOffset CreatedAt,
     Guid? CreatedByIdentityUserId,
     string? CreatedByAccount,
-    bool IsTeamLeader);
+    bool IsTeamLeader,
+    bool CanReissueTemporaryPassword = false);
 
 public sealed class EditInternalAccountForm
 {
