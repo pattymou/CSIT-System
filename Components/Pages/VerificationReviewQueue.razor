@@ -16,7 +16,7 @@ else
     <div class="surface-card">
         <div class="project-table-wrap">
             <table class="project-table">
-                <thead><tr><th>申請編號</th><th>類別</th><th>申請人</th><th>部門 / 聯絡方式</th><th>專案 / 產品</th><th>送出時間</th></tr></thead>
+                <thead><tr><th>申請編號</th><th>類別</th><th>申請人</th><th>部門 / 聯絡方式</th><th>Model Name</th><th>送出時間</th></tr></thead>
                 <tbody>
                 @if (_items.Count == 0) { <tr><td colspan="6" class="empty-row">目前沒有待審核申請。</td></tr> }
                 else
@@ -25,7 +25,7 @@ else
                     {
                         <tr class="clickable-row" @onclick="() => Open(item.Id)">
                             <td><strong>@item.ApplicationNo</strong></td><td>@item.TeamName</td><td>@item.ApplicantName</td>
-                            <td>@item.Department / @item.ApplicantEmail</td><td>@item.ProjectName / @item.ProductModel</td>
+                            <td>@item.Department / @item.ApplicantEmail</td><td>@Display(item.ProductModel)</td>
                             <td>@item.SubmittedAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td>
                         </tr>
                     }
@@ -51,4 +51,5 @@ else
         finally { _loading = false; }
     }
     private void Open(Guid id) => Nav.NavigateTo($"/verification-reviews/{id}");
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
 }
