@@ -6,6 +6,20 @@
 .work-summary span { display:block; color:#9db9cb; font-size:.82rem; margin-bottom:6px; }
 .work-summary strong { display:block; overflow-wrap:anywhere; }
 .work-summary .record-status-pill { display:inline-block; }
+.work-delete-entry { display:flex; align-items:center; gap:12px; margin-bottom:14px; }
+.work-delete-entry small { color:#9db9cb; }
+.work-delete-preview { margin-bottom:16px; }
+.work-delete-heading { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.work-delete-heading h4 { margin:0; }
+.work-delete-preview p,.work-delete-preview small { overflow-wrap:anywhere; }
+.work-delete-reasons { margin:12px 0; padding:8px 14px; border-left:3px solid #f59e0b; color:#fcdba6; background:rgba(245,158,11,.08); }
+.work-delete-reasons p { margin:5px 0; }
+.work-delete-counts { display:flex; gap:8px; flex-wrap:wrap; margin:14px 0; }
+.work-delete-counts span { padding:5px 9px; border-radius:7px; background:rgba(148,163,184,.12); font-size:.8rem; }
+.work-delete-table-wrap { overflow-x:auto; margin-bottom:14px; }
+.work-delete-table { width:100%; border-collapse:collapse; font-size:.83rem; }
+.work-delete-table th,.work-delete-table td { padding:10px; border-bottom:1px solid rgba(148,163,184,.18); text-align:left; vertical-align:top; overflow-wrap:anywhere; }
+.work-delete-table small { display:block; color:#9db9cb; margin-top:3px; }
 .work-status-edit { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .work-status-edit select { min-width:110px; width:auto; }
 .work-status-edit button { white-space:nowrap; }

@@ -361,6 +361,7 @@ builder.Services.AddScoped<IApparatusService, ApparatusService>();
 builder.Services.AddScoped<IAssetFormalUploadService>(provider =>
     provider.GetRequiredService<IApparatusService>());
 builder.Services.AddScoped<ICaseFileService, CaseFileService>();
+builder.Services.AddScoped<IVerificationCaseDeletionPreviewService, VerificationCaseDeletionPreviewService>();
 
 builder.Services.Configure<RawDataSettings>(
     builder.Configuration.GetSection("RawData"));

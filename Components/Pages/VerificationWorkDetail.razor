@@ -24,6 +24,54 @@
 else if (_loading) { <div class="surface-card">載入中...</div> }
 else if (_item is not null)
 {
+    @if (_canManage)
+    {
+        <div class="work-delete-entry">
+            <button type="button" class="btn-secondary" disabled="@_previewLoading" @onclick="LoadDeletionPreviewAsync">刪除案件</button>
+            <small>先查看精確範圍與阻擋原因；目前不執行刪除。</small>
+        </div>
+    }
+    @if (_deleteError is not null) { <div class="surface-card error-text" role="alert">@_deleteError</div> }
+    @if (_deletePreview is not null)
+    {
+        <section class="surface-card work-delete-preview" aria-label="案件刪除預檢">
+            <div class="work-delete-heading"><h4>案件刪除預檢</h4><button type="button" class="btn-secondary" @onclick="CloseDeletionPreview">關閉</button></div>
+            <p>申請編號 @_deletePreview.ApplicationNo；ApplicationId @_deletePreview.ApplicationId；RecordId @_deletePreview.RecordId</p>
+            <div class="work-delete-reasons">
+                @foreach (var reason in _deletePreview.BlockingReasons) { <p>@reason</p> }
+            </div>
+            <div class="work-delete-counts">
+                @foreach (var group in _deletePreview.Items.GroupBy(x => x.Kind).OrderBy(x => x.Key))
+                {
+                    <span>@group.Key：@group.Count()</span>
+                }
+            </div>
+            <div class="work-delete-table-wrap">
+                <table class="work-delete-table">
+                    <thead><tr><th>類型／名稱</th><th>精確識別</th><th>狀態／儲存</th></tr></thead>
+                    <tbody>
+                        @foreach (var entry in _deletePreview.Items)
+                        {
+                            <tr>
+                                <td><strong>@entry.Kind</strong><br />@entry.Name</td>
+                                <td><small>Id @entry.Id</small>
+                                    @if (entry.ParentId is not null) { <small>Parent @entry.ParentId</small> }
+                                    @if (entry.DocumentId is not null) { <small>Document @entry.DocumentId</small> }
+                                    @if (entry.Version is not null) { <small>Version @entry.Version</small> }
+                                </td>
+                                <td>@(entry.Status ?? "—")
+                                    @if (entry.StorageArea is not null) { <small>@entry.StorageArea</small> }
+                                    @if (entry.Kind.StartsWith("Physical", StringComparison.Ordinal)) { <small>實體檔案：@(entry.PhysicalExists is null ? "無法確認" : entry.PhysicalExists.Value ? "存在" : "未找到")</small> }
+                                    @if (entry.KmJobId is not null) { <small>KM Job @entry.KmJobId</small> }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+            <button type="button" class="btn-primary" disabled="true">確認刪除（未開放）</button>
+        </section>
+    }
     <section class="surface-card work-summary" aria-label="案件資訊">
         <div><span>Model Name</span><strong>@Display(_item.ModelName)</strong></div>
         <div><span>申請編號</span><strong>@_item.ApplicationNo</strong></div>
@@ -136,6 +184,9 @@ else if (_item is not null)
     private bool _working;
     private bool _editing;
     private bool _canManage;
+    private bool _previewLoading;
+    private VerificationCaseDeletionPreviewDto? _deletePreview;
+    private string? _deleteError;
     private string? _error;
     private string? _statusError;
     private string? _statusSuccess;
@@ -158,6 +209,7 @@ else if (_item is not null)
             _canManage = false;
             _application = null;
             _blockedItemCodes.Clear();
+            _deletePreview = null;
             _item = await Api.GetOptionalAsync<VerificationWorkDetailDto>($"/api/verification-work/{RecordId}");
             if (_item is null) { _error = "找不到已核准的驗證案件。"; return; }
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
@@ -187,6 +239,22 @@ else if (_item is not null)
         finally { _saving = false; }
     }
     private void ClearStatusMessages() { _statusError = null; _statusSuccess = null; }
+
+    private async Task LoadDeletionPreviewAsync()
+    {
+        if (!_canManage || _previewLoading) return;
+        _previewLoading = true;
+        _deleteError = null;
+        try
+        {
+            _deletePreview = await Api.GetAsync<VerificationCaseDeletionPreviewDto>(
+                $"/api/verification-work/{RecordId}/deletion-preview");
+        }
+        catch (Exception ex) { _deleteError = ex.Message; }
+        finally { _previewLoading = false; }
+    }
+
+    private void CloseDeletionPreview() { _deletePreview = null; _deleteError = null; }
     private string TaskHref(Guid taskId) => $"/validation-request-applications/work/{RecordId}/tasks/{taskId}";
     private string ReadOnlyHref(SelectedVerificationTestItemDto item) =>
         $"/validation-request-applications/work/{RecordId}/selected/{Uri.EscapeDataString(item.Code)}";
