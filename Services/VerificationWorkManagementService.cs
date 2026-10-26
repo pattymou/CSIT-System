@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
@@ -12,7 +13,7 @@ public interface IVerificationWorkManagementService
     Task<IReadOnlyList<VerificationWorkListItemDto>> ListAsync(CancellationToken cancellationToken = default);
     Task<VerificationWorkDetailDto?> GetAsync(Guid recordId, CancellationToken cancellationToken = default);
     Task<VerificationWorkTaskDetailDto?> GetTaskAsync(Guid recordId, Guid taskId, CancellationToken cancellationToken = default);
-    Task UpdateRecordStatusAsync(Guid recordId, UpdateVerificationWorkStatusRequest request, CancellationToken cancellationToken = default);
+    Task UpdateRecordStatusAsync(Guid recordId, UpdateVerificationWorkStatusRequest request, ClaimsPrincipal user, CancellationToken cancellationToken = default);
     Task UpdateTaskAsync(Guid taskId, UpdateVerificationWorkTaskRequest request, CancellationToken cancellationToken = default);
     Task UpdateTaskForRecordAsync(Guid recordId, Guid taskId, UpdateVerificationWorkTaskRequest request, CancellationToken cancellationToken = default);
 }
@@ -133,11 +134,20 @@ public sealed class VerificationWorkManagementService(
     public async Task UpdateRecordStatusAsync(
         Guid recordId,
         UpdateVerificationWorkStatusRequest request,
+        ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
     {
         await businessWrite.DemandAsync(cancellationToken);
         var status = NormalizeStatus(request.Status);
+        if (!user.HasClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff))
+            throw new UnauthorizedAccessException("CSIT staff access is required.");
+        var application = await db.VerificationApplications.SingleOrDefaultAsync(x =>
+            x.Status == VerificationApplicationStatus.Accepted && x.ModuleRecordId == recordId,
+            cancellationToken) ?? throw new KeyNotFoundException("The accepted verification case was not found.");
+        VerificationApplicationSecurity.EnsureAcceptedManagerAccess(application, user);
         var record = await GetAcceptedRecordAsync(recordId, cancellationToken);
+        if (string.Equals(record.Status, status, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("The verification case already has this status.");
         var tasks = record.Cases.SelectMany(x => x.Tasks).ToList();
         if (status == "Close" && (tasks.Count == 0 || tasks.Any(x => !IsStatus(x.Status, "Close"))))
             throw new InvalidOperationException("All test items must be Close before the verification case can be closed.");

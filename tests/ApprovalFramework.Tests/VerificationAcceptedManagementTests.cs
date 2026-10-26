@@ -1,8 +1,11 @@
 using System.Security.Claims;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
+using SIT.DepartmentSystem.Web.Controllers;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
@@ -15,6 +18,73 @@ namespace ApprovalFramework.Tests;
 
 public sealed class VerificationAcceptedManagementTests
 {
+    [Fact]
+    public async Task SelectedWorkPostCreatesOnlyOnClickAndReturnsTheSameRealTaskOnRetry()
+    {
+        await using var db = NewDb();
+        var (application, record, _) = await SeedAsync(db);
+        var work = new VerificationWorkManagementService(db, new EmptyEngineerDirectory(), new AllowWrite());
+        var controller = new VerificationWorkController(work, Service(db))
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { User = User("leader") } }
+        };
+
+        var preview = await controller.Get(record.Id, CancellationToken.None);
+        Assert.NotNull(preview.Value ?? (preview.Result as OkObjectResult)?.Value);
+        Assert.Empty(await db.ModuleRecordTasks.ToListAsync());
+        var first = await controller.EnableSelectedWork(record.Id, "WIFI", CancellationToken.None);
+        var firstId = Assert.IsType<EnableSelectedWorkResponse>(Assert.IsType<OkObjectResult>(first.Result).Value).TaskId;
+        Assert.NotEqual(Guid.Empty, firstId);
+        var second = await controller.EnableSelectedWork(record.Id, "WIFI", CancellationToken.None);
+        var secondId = Assert.IsType<EnableSelectedWorkResponse>(Assert.IsType<OkObjectResult>(second.Result).Value).TaskId;
+        Assert.Equal(firstId, secondId);
+        Assert.Single(await db.ModuleRecordTasks.ToListAsync());
+        Assert.Single(await db.ApprovalAuditEvents.Where(x => x.SubmissionId == application.Id &&
+            x.Action == ApprovalAuditActions.VerificationWorkCreated).ToListAsync());
+    }
+
+    [Fact]
+    public async Task SelectedWorkPostWithoutManagerRightsKeepsHistoricalItemReadOnly()
+    {
+        await using var db = NewDb();
+        var (_, record, _) = await SeedAsync(db);
+        var controller = new VerificationWorkController(
+            new VerificationWorkManagementService(db, new EmptyEngineerDirectory(), new AllowWrite()), Service(db))
+        {
+            ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { User = User("staff") } }
+        };
+        var response = await controller.EnableSelectedWork(record.Id, "WIFI", CancellationToken.None);
+        Assert.IsType<ForbidResult>(response.Result);
+        Assert.Empty(await db.ModuleRecordTasks.ToListAsync());
+    }
+
+    [Fact]
+    public async Task HistoricalWorkConflictDoesNotCreateAnotherTask()
+    {
+        await using var db = NewDb();
+        var (application, record, _) = await SeedAsync(db);
+        var recordCase = new ModuleRecordCase
+        {
+            Id = Guid.NewGuid(), RecordId = record.Id, CaseNo = "OLD-RADIO", Name = "Radio",
+            SourceTestCategoryCode = "RADIO", Status = "Open",
+            CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        };
+        db.ModuleRecordCases.Add(recordCase);
+        for (var index = 0; index < 2; index++)
+            db.ModuleRecordTasks.Add(new ModuleRecordTask
+            {
+                Id = Guid.NewGuid(), CaseId = recordCase.Id, TaskNo = $"OLD-WIFI-{index}", Name = "Wi-Fi",
+                SourceTestItemCode = "WIFI", Status = "Open",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+        await db.SaveChangesAsync();
+        var service = Service(db);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.EnableSelectedWorkAsync(
+            application.Id, User("leader")));
+        Assert.Equal(2, await db.ModuleRecordTasks.CountAsync());
+        Assert.Empty(await db.ApprovalAuditEvents.ToListAsync());
+    }
+
     [Fact]
     public async Task AcceptedContentSaveUpdatesRecordAndPreservesApprovalWithRedactedAudit()
     {
@@ -141,6 +211,19 @@ public sealed class VerificationAcceptedManagementTests
     }
 
     [Fact]
+    public async Task ReadOnlyBusinessAccessDoesNotExposeAcceptedCaseActions()
+    {
+        await using var db = NewDb();
+        var (application, _, _) = await SeedAsync(db);
+        var service = new VerificationApplicationService(db, null!,
+            new SystemOptionService(db, null!, null!), new DenyWrite(), null!,
+            Options.Create(new DocumentStagingOptions()), null!, null!, new VerificationWorkItemProvisioner(db));
+        Assert.False(await service.CanManageAcceptedAsync(application.Id, User("leader")));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            service.EnableSelectedWorkAsync(application.Id, User("leader")));
+    }
+
+    [Fact]
     public void SnapshotGroupsCoverEveryFieldInOriginalOrderAcrossProductSections()
     {
         var fields = new[] { 170, 160, 151, 120, 111, 110, 10 }.Select(order => Field($"F{order}", order)).ToArray();
@@ -261,6 +344,23 @@ public sealed class VerificationAcceptedManagementTests
     private sealed class AllowWrite : IBusinessWriteAuthorizationGuard
     {
         public Task DemandAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class DenyWrite : IBusinessWriteAuthorizationGuard
+    {
+        public Task DemandAsync(CancellationToken cancellationToken = default) =>
+            throw new UnauthorizedAccessException("read only");
+    }
+
+    private sealed class EmptyEngineerDirectory : IAssignableEngineerDirectory
+    {
+        public Task<IReadOnlyList<AssignableEngineerDto>> GetForRecordAsync(
+            Guid recordId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<AssignableEngineerDto>>([]);
+
+        public Task<string?> ResolveAssignableAccountAsync(
+            Guid recordId, string? account, CancellationToken cancellationToken = default) =>
+            Task.FromResult<string?>(null);
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);

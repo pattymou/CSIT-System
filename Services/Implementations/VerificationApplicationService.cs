@@ -317,6 +317,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
     {
         EnsureCsitStaff(user);
+        try { await _businessWrite.DemandAsync(cancellationToken); }
+        catch (UnauthorizedAccessException) { return false; }
         var account = VerificationApplicationSecurity.GetAccount(user);
         return await _db.VerificationApplications.AsNoTracking().AnyAsync(x =>
             x.Id == id && x.Status == VerificationApplicationStatus.Accepted && x.ModuleRecordId != null &&
@@ -449,6 +451,21 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             var record = entity.ModuleRecord
                 ?? throw new InvalidOperationException("已核准申請缺少驗證案件。");
             var before = record.Cases.SelectMany(x => x.Tasks).Select(x => x.Id).ToHashSet();
+            var selectedCodes = request.SelectedTestItemCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var selected = request.FormSnapshot!.TestCategories
+                .SelectMany(category => category.TestItems
+                    .Where(item => selectedCodes.Contains(item.Code))
+                    .Select(item => new { item.Code, CategoryCode = category.Code }))
+                .ToDictionary(x => x.Code, x => x.CategoryCode, StringComparer.OrdinalIgnoreCase);
+            var existingTasks = record.Cases.SelectMany(x => x.Tasks.Select(task => new { Case = x, Task = task })).ToList();
+            if (record.Cases.Where(x => !string.IsNullOrWhiteSpace(x.SourceTestCategoryCode))
+                    .GroupBy(x => x.SourceTestCategoryCode!, StringComparer.OrdinalIgnoreCase).Any(x => x.Count() > 1) ||
+                existingTasks.GroupBy(x => x.Task.SourceTestItemCode, StringComparer.OrdinalIgnoreCase)
+                    .Any(x => x.Count() > 1) ||
+                existingTasks.Any(x => x.Task.SourceTestItemCode is null ||
+                    !selected.TryGetValue(x.Task.SourceTestItemCode, out var categoryCode) ||
+                    !string.Equals(categoryCode, x.Case.SourceTestCategoryCode, StringComparison.OrdinalIgnoreCase)))
+                throw new InvalidOperationException("歷史測試工作與原申請快照衝突，請先人工確認，無法直接建立工作。");
             await _workItems.EnsureAsync(entity, record, DateTime.UtcNow, cancellationToken);
             var added = _db.ChangeTracker.Entries<ModuleRecordTask>()
                 .Count(x => x.State == EntityState.Added && !before.Contains(x.Entity.Id));

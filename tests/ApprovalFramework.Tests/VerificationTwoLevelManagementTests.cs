@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
@@ -66,10 +67,10 @@ public sealed class VerificationTwoLevelManagementTests
         var directory = new FakeEngineerDirectory("engineer1");
         var service = new VerificationWorkManagementService(db, directory, new AllowWrite());
 
-        await service.UpdateRecordStatusAsync(record.Id, new UpdateVerificationWorkStatusRequest { Status = "Hold" });
+        await service.UpdateRecordStatusAsync(record.Id, new UpdateVerificationWorkStatusRequest { Status = "Hold" }, Manager());
         Assert.Equal("Hold", (await db.ModuleRecords.FindAsync(record.Id))!.Status);
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdateRecordStatusAsync(
-            record.Id, new UpdateVerificationWorkStatusRequest { Status = "Close" }));
+            record.Id, new UpdateVerificationWorkStatusRequest { Status = "Close" }, Manager()));
         await Assert.ThrowsAsync<ArgumentException>(() => service.UpdateTaskAsync(tasks[0].Id,
             new UpdateVerificationWorkTaskRequest { Status = "Open", AssignEngineer = "outsider" }));
         await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdateTaskAsync(tasks[0].Id,
@@ -81,7 +82,7 @@ public sealed class VerificationTwoLevelManagementTests
             {
                 Status = "Close", AssignEngineer = "engineer1", ActualCompletionDate = completed, Note = "done"
             });
-        await service.UpdateRecordStatusAsync(record.Id, new UpdateVerificationWorkStatusRequest { Status = "Close" });
+        await service.UpdateRecordStatusAsync(record.Id, new UpdateVerificationWorkStatusRequest { Status = "Close" }, Manager());
 
         db.ChangeTracker.Clear();
         var saved = await db.ModuleRecords.Include(x => x.Cases).ThenInclude(x => x.Tasks).SingleAsync(x => x.Id == record.Id);
@@ -112,7 +113,7 @@ public sealed class VerificationTwoLevelManagementTests
             db, new FakeEngineerDirectory("engineer1"), new DenyWrite());
 
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.UpdateRecordStatusAsync(
-            record.Id, new UpdateVerificationWorkStatusRequest { Status = "Hold" }));
+            record.Id, new UpdateVerificationWorkStatusRequest { Status = "Hold" }, Manager()));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.UpdateTaskAsync(
             tasks[0].Id, new UpdateVerificationWorkTaskRequest
             {
@@ -123,6 +124,24 @@ public sealed class VerificationTwoLevelManagementTests
         Assert.Equal("Open", (await db.ModuleRecords.FindAsync(record.Id))!.Status);
         Assert.Equal("Open", (await db.ModuleRecordTasks.FindAsync(tasks[0].Id))!.Status);
         Assert.Null((await db.ModuleRecordTasks.FindAsync(tasks[0].Id))!.AssignEngineer);
+    }
+
+    [Fact]
+    public async Task RecordStatusRequiresAssignedManagerAndRejectsUnchangedStatus()
+    {
+        await using var db = NewDb();
+        var (application, record, _) = AcceptedWork("VA-STATUS", "MODEL-STATUS", 1);
+        db.AddRange(application, record);
+        await db.SaveChangesAsync();
+        var service = new VerificationWorkManagementService(db, new FakeEngineerDirectory(), new AllowWrite());
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.UpdateRecordStatusAsync(
+            record.Id, new UpdateVerificationWorkStatusRequest { Status = "Hold" }, Manager("staff")));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdateRecordStatusAsync(
+            record.Id, new UpdateVerificationWorkStatusRequest { Status = "Open" }, Manager()));
+        Assert.Equal("Open", (await db.ModuleRecords.FindAsync(record.Id))!.Status);
+        await service.UpdateRecordStatusAsync(record.Id, new UpdateVerificationWorkStatusRequest { Status = "Hold" }, Manager());
+        Assert.Equal("Hold", (await db.ModuleRecords.FindAsync(record.Id))!.Status);
     }
 
     [Fact]
@@ -289,7 +308,9 @@ public sealed class VerificationTwoLevelManagementTests
         var task = File.ReadAllText(Path.Combine(RepositoryRoot(), "Components", "Pages", "VerificationWorkTaskDetail.razor"));
         var historical = File.ReadAllText(Path.Combine(RepositoryRoot(), "Components", "Pages", "VerificationWorkSelectedItem.razor"));
         Assert.Contains("_item.SelectedTestItems", list);
-        Assert.Contains("selected.TaskId is null", list);
+        Assert.Contains("selected.TaskId is Guid taskId", list);
+        Assert.Contains("OpenSelectedAsync(selected)", list);
+        Assert.DoesNotContain("EnableWorkAsync", list);
         Assert.DoesNotContain("VerificationWorkTaskCard", list);
         Assert.DoesNotContain("Progress%", list);
         Assert.Contains("VerificationWorkTaskCard", task);
@@ -369,6 +390,10 @@ public sealed class VerificationTwoLevelManagementTests
 
     private static AppDbContext NewDb() => new(new DbContextOptionsBuilder<AppDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
+
+    private static ClaimsPrincipal Manager(string account = "leader") => new(new ClaimsIdentity(
+        [new Claim("account", account), new Claim(SystemAuthorization.AccessScopeClaim,
+            SystemAuthorization.AccessScopes.CsitStaff)], "test"));
 
     private sealed class AllowWrite : IBusinessWriteAuthorizationGuard
     {

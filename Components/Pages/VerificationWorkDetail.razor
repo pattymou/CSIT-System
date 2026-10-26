@@ -3,6 +3,7 @@
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @using Microsoft.AspNetCore.Authorization
 @using Microsoft.AspNetCore.Components.Authorization
+@using global::System.Text.Json
 @using SIT.DepartmentSystem.Web.Entities
 @using SIT.DepartmentSystem.Web.Models.Api
 @using SIT.DepartmentSystem.Web.Services.ValidationRequests
@@ -11,7 +12,7 @@
 @inject IValidationRequestConfigurationService ValidationService
 @inject ISystemOptionService SystemOptions
 @inject AuthenticationStateProvider AuthenticationStateProvider
-@inject IJSRuntime JS
+@inject NavigationManager Navigation
 
 <PageTitle>驗證案件資訊</PageTitle>
 <nav class="work-breadcrumb" aria-label="頁面導覽">
@@ -30,7 +31,22 @@ else if (_item is not null)
         <div><span>申請人</span><strong>@Display(_item.ApplicantName)</strong></div>
         <div><span>Product Type</span><strong>@Display(_item.ProductType)</strong></div>
         <div><span>預計結束日期</span><strong>@(_item.ExpectedEndDate?.ToString("yyyy-MM-dd") ?? "—")</strong></div>
-        <div><span>整案狀態</span><strong class="record-status-pill">@_item.Status</strong></div>
+        <div class="work-status-control">
+            <span>整案狀態</span>
+            @if (_canManage)
+            {
+                <div class="work-status-edit">
+                    <select aria-label="整案狀態" @bind="_recordStatus" @bind:after="ClearStatusMessages" disabled="@_saving">
+                        <option>Open</option><option>Hold</option><option disabled="@(!CanClose)">Close</option>
+                    </select>
+                    <button type="button" class="btn-primary" disabled="@(!CanSaveStatus)" @onclick="SaveRecordStatusAsync">@(_saving ? "儲存中..." : "儲存狀態")</button>
+                </div>
+                @if (_statusError is not null) { <small class="error-text" role="alert">@_statusError</small> }
+                @if (_statusSuccess is not null) { <small class="work-status-success" role="status">@_statusSuccess</small> }
+                @if (!CanClose) { <small class="work-status-hint">所有測試項目均為 Close 後才能結案。</small> }
+            }
+            else { <strong class="record-status-pill">@_item.Status</strong> }
+        </div>
     </section>
 
     @if (_application?.ValidationRequest?.FormSnapshot is not null)
@@ -69,42 +85,37 @@ else if (_item is not null)
     }
     else
     {
-        @if (_item.SelectedTestItems.Any(x => x.TaskId is null))
-        {
-            <div class="work-notice">
-                尚有測試項目未建立工作。
-                @if (_canManage)
-                {
-                    <button type="button" class="btn-secondary" disabled="@_working" @onclick="EnableWorkAsync">建立測試工作</button>
-                }
-            </div>
-        }
-        <section class="surface-card work-items" aria-label="原申請勾選的測試項目">
-            <h4>原申請勾選的測試項目</h4>
+        <section class="surface-card work-items" aria-label="測試項目">
+            <h4>測試項目</h4>
+            @if (_itemActionError is not null) { <div class="error-text" role="alert">@_itemActionError</div> }
             <div class="work-item-list">
                 @foreach (var selected in _item.SelectedTestItems)
                 {
-                    <a class="work-item-row" href="@ItemHref(selected)">
-                        <span class="work-item-copy"><small>@selected.Category</small><strong>@selected.Name</strong></span>
-                        <span class="work-item-state">@(selected.TaskId is null ? "尚未建立工作 · 唯讀" : selected.TaskStatus)</span>
-                        <span aria-hidden="true">›</span>
-                    </a>
+                    @if (selected.TaskId is Guid taskId)
+                    {
+                        <a class="work-item-row" href="@TaskHref(taskId)">
+                            <span class="work-item-copy"><small>@selected.Category</small><strong>@selected.Name</strong></span>
+                            <span class="work-item-state">@selected.TaskStatus</span><span aria-hidden="true">›</span>
+                        </a>
+                    }
+                    else if (_canManage && !_blockedItemCodes.Contains(selected.Code))
+                    {
+                        <button type="button" class="work-item-row work-item-button" disabled="@(_openingItemCode is not null)" @onclick="() => OpenSelectedAsync(selected)">
+                            <span class="work-item-copy"><small>@selected.Category</small><strong>@selected.Name</strong></span>
+                            <span class="work-item-state">@(_openingItemCode == selected.Code ? "建立中..." : "開啟工作")</span><span aria-hidden="true">›</span>
+                        </button>
+                    }
+                    else
+                    {
+                        <a class="work-item-row" href="@ReadOnlyHref(selected)">
+                            <span class="work-item-copy"><small>@selected.Category</small><strong>@selected.Name</strong></span>
+                            <span class="work-item-state">尚未建立工作 · 唯讀</span><span aria-hidden="true">›</span>
+                        </a>
+                    }
                 }
             </div>
         </section>
     }
-
-    <details class="surface-card work-record-action">
-        <summary>整案狀態管理</summary>
-        <div class="work-record-controls">
-            <label>整案狀態
-                <select @bind="_recordStatus"><option>Open</option><option>Hold</option><option disabled="@(!CanClose)">Close</option></select>
-            </label>
-            <button class="btn-primary" @onclick="SaveRecordStatusAsync" disabled="@_saving">儲存整案狀態</button>
-        </div>
-        @if (_statusError is not null) { <div class="error-text">@_statusError</div> }
-        @if (!CanClose) { <p>所有測試工作均為 Close 後，才能將整案設為 Close。</p> }
-    </details>
     @if (_actionMessage is not null) { <div class="surface-card @(_actionError ? "error-text" : "")">@_actionMessage</div> }
 }
 
@@ -127,9 +138,16 @@ else if (_item is not null)
     private bool _canManage;
     private string? _error;
     private string? _statusError;
+    private string? _statusSuccess;
+    private string? _itemActionError;
+    private string? _openingItemCode;
+    private readonly HashSet<string> _blockedItemCodes = new(StringComparer.OrdinalIgnoreCase);
     private string? _actionMessage;
     private bool _actionError;
     private bool CanClose => _item is { TotalTasks: > 0 } && _item.CompletedTasks == _item.TotalTasks;
+    private bool CanSaveStatus => _canManage && !_saving && _item is not null &&
+        !string.Equals(_recordStatus, _item.Status, StringComparison.OrdinalIgnoreCase) &&
+        (_recordStatus != "Close" || CanClose);
 
     protected override Task OnParametersSetAsync() => ReloadAsync();
     private async Task ReloadAsync()
@@ -137,6 +155,9 @@ else if (_item is not null)
         try
         {
             _error = null;
+            _canManage = false;
+            _application = null;
+            _blockedItemCodes.Clear();
             _item = await Api.GetOptionalAsync<VerificationWorkDetailDto>($"/api/verification-work/{RecordId}");
             if (_item is null) { _error = "找不到已核准的驗證案件。"; return; }
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
@@ -150,21 +171,50 @@ else if (_item is not null)
     }
     private async Task SaveRecordStatusAsync()
     {
+        if (!CanSaveStatus) return;
         _saving = true;
         _statusError = null;
+        _statusSuccess = null;
         try
         {
             var response = await Api.PutJsonAsync($"/api/verification-work/{RecordId}/status",
                 new UpdateVerificationWorkStatusRequest { Status = _recordStatus });
             response.EnsureSuccess();
             await ReloadAsync();
+            _statusSuccess = "整案狀態已更新。";
         }
         catch (Exception ex) { _statusError = ex.Message; }
         finally { _saving = false; }
     }
-    private string ItemHref(SelectedVerificationTestItemDto item) => item.TaskId is Guid taskId
-        ? $"/validation-request-applications/work/{RecordId}/tasks/{taskId}"
-        : $"/validation-request-applications/work/{RecordId}/selected/{Uri.EscapeDataString(item.Code)}";
+    private void ClearStatusMessages() { _statusError = null; _statusSuccess = null; }
+    private string TaskHref(Guid taskId) => $"/validation-request-applications/work/{RecordId}/tasks/{taskId}";
+    private string ReadOnlyHref(SelectedVerificationTestItemDto item) =>
+        $"/validation-request-applications/work/{RecordId}/selected/{Uri.EscapeDataString(item.Code)}";
+
+    private async Task OpenSelectedAsync(SelectedVerificationTestItemDto item)
+    {
+        if (!_canManage || item.TaskId is not null || _openingItemCode is not null) return;
+        _openingItemCode = item.Code;
+        _itemActionError = null;
+        try
+        {
+            var response = await Api.PostJsonAsync(
+                $"/api/verification-work/{RecordId}/selected/{Uri.EscapeDataString(item.Code)}/enable", new { });
+            response.EnsureSuccess();
+            var result = JsonSerializer.Deserialize<EnableSelectedWorkResponse>(response.Body,
+                new JsonSerializerOptions(JsonSerializerDefaults.Web));
+            if (result is null || result.TaskId == Guid.Empty)
+                throw new InvalidOperationException("伺服器未回傳有效的測試工作。");
+            Navigation.NavigateTo(TaskHref(result.TaskId));
+        }
+        catch (BrowserApiException ex) when (ex.StatusCode is 403 or 409)
+        {
+            _blockedItemCodes.Add(item.Code);
+            _itemActionError = ex.Message;
+        }
+        catch (Exception ex) { _itemActionError = ex.Message; }
+        finally { _openingItemCode = null; }
+    }
     private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
 
     private async Task BeginEdit()
@@ -247,27 +297,6 @@ else if (_item is not null)
             await ReloadAsync();
             _actionError = false;
             _actionMessage = "案件內容已儲存，修改紀錄已保留。";
-        }
-        catch (Exception ex) { _actionError = true; _actionMessage = ex.Message; }
-        finally { _working = false; }
-    }
-
-    private async Task EnableWorkAsync()
-    {
-        if (_application is null || _item is null || !_canManage) return;
-        var missing = _item.SelectedTestItems.Where(x => x.TaskId is null).Select(x => x.Name).ToList();
-        if (missing.Count == 0) return;
-        var confirmed = await JS.InvokeAsync<bool>("confirm",
-            "將依原申請建立以下測試工作：\n" + string.Join("\n", missing) + "\n\n確定建立？");
-        if (!confirmed) return;
-        _working = true; _actionMessage = null;
-        try
-        {
-            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
-            var count = await Applications.EnableSelectedWorkAsync(_application.Id, user);
-            await ReloadAsync();
-            _actionError = false;
-            _actionMessage = $"已建立 {count} 個測試工作。";
         }
         catch (Exception ex) { _actionError = true; _actionMessage = ex.Message; }
         finally { _working = false; }

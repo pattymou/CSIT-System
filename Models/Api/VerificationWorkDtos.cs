@@ -34,6 +34,8 @@ public sealed class SelectedVerificationTestItemDto
     public IReadOnlyList<VerificationTestParameterDto> Parameters { get; set; } = [];
 }
 
+public sealed record EnableSelectedWorkResponse(Guid TaskId);
+
 public sealed record VerificationTestParameterDto(string Name, IReadOnlyList<string> Values);
 
 public sealed class VerificationWorkTaskDetailDto
