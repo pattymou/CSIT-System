@@ -1,0 +1,46 @@
+.status-tabs {
+    margin-bottom: 16px;
+}
+
+.validation-work-table {
+    min-width: 0;
+    table-layout: fixed;
+}
+
+.validation-work-table .model-column { width: 17%; }
+.validation-work-table .application-column { width: 13%; }
+.validation-work-table .project-column { width: 19%; }
+.validation-work-table .applicant-column { width: 10%; }
+.validation-work-table .product-column { width: 12%; }
+.validation-work-table .date-column { width: 11%; }
+.validation-work-table .status-column { width: 9%; }
+.validation-work-table .progress-column { width: 9%; }
+
+.validation-work-table thead th,
+.validation-work-table tbody td {
+    padding: 16px 10px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.45;
+}
+
+.validation-work-table thead th:first-child,
+.validation-work-table tbody td:first-child {
+    padding-left: 18px;
+}
+
+.validation-work-table .work-model-link {
+    color: #eaf6ff;
+    font-weight: 700;
+    text-decoration: none;
+}
+
+.validation-work-table .work-model-link:hover,
+.validation-work-table .work-model-link:focus-visible {
+    color: #46d8dd;
+    text-decoration: underline;
+}
+
+@media (max-width: 900px) {
+    .validation-work-table { min-width: 900px; }
+}

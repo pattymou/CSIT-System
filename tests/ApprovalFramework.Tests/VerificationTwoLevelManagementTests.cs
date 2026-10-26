@@ -170,17 +170,18 @@ public sealed class VerificationTwoLevelManagementTests
     }
 
     [Fact]
-    public void ValidationRequestApplicationsLoadsSharedDbContextServicesSequentially()
+    public void ValidationRequestApplicationsShowsOnlyAcceptedWorkByRecordStatus()
     {
         var source = File.ReadAllText(Path.Combine(
             RepositoryRoot(), "Components", "Pages", "ValidationRequestApplications.razor"));
-        var workAwait = source.IndexOf("_work = await Work.ListAsync();", StringComparison.Ordinal);
-        var applicationsAwait = source.IndexOf(
-            "_applications = (await Applications.ListForCsitAsync(user, 1, 200)).Items.ToList();",
-            StringComparison.Ordinal);
-
-        Assert.True(workAwait >= 0, "The work list must be awaited directly.");
-        Assert.True(applicationsAwait > workAwait, "The application list must start after the work list completes.");
+        Assert.Contains("_work = await Work.ListAsync();", source);
+        Assert.Contains("private string _selectedStatus = \"Open\";", source);
+        Assert.Contains("string.Equals(item.Status, _selectedStatus, StringComparison.OrdinalIgnoreCase)", source);
+        Assert.Contains("/validation-request-applications/work/{item.RecordId}", source);
+        Assert.Equal(1, source.Split("<table ", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("ListForCsitAsync", source);
+        Assert.DoesNotContain("APPLICATION WORKFLOW", source);
+        Assert.DoesNotContain("Model Name 整案管理", source);
         Assert.DoesNotContain("Task.WhenAll", source, StringComparison.Ordinal);
     }
 
