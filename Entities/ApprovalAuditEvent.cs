@@ -14,6 +14,7 @@ public static class ApprovalAuditActions
     public const string Resubmitted = "Resubmitted";
     public const string SubmitterDismissed = "SubmitterDismissed";
     public const string VerificationContentEdited = "VerificationContentEdited";
+    public const string VerificationWorkCreated = "VerificationWorkCreated";
 }
 
 public sealed class ApprovalAuditEvent

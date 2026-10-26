@@ -42,6 +42,16 @@ public static class VerificationApplicationSecurity
             EnsureLeaderOwnership(entity, account);
     }
 
+    public static void EnsureAcceptedManagerAccess(VerificationApplication entity, ClaimsPrincipal user)
+    {
+        if (entity.Status != VerificationApplicationStatus.Accepted || !entity.ModuleRecordId.HasValue)
+            throw new InvalidOperationException("Only accepted verification cases can be managed.");
+        var account = GetAccount(user);
+        if (!user.IsInRole("Admin") &&
+            !string.Equals(entity.AssignedLeaderAccount, account, StringComparison.Ordinal))
+            throw new UnauthorizedAccessException("Only the assigned Team Leader or Admin can manage this case.");
+    }
+
     public static bool CanBypassReview(ClaimsPrincipal user, bool isActiveTeamLeader)
     {
         ArgumentNullException.ThrowIfNull(user);

@@ -313,6 +313,167 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         }
     }
 
+    public async Task<bool> CanManageAcceptedAsync(
+        Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    {
+        EnsureCsitStaff(user);
+        var account = VerificationApplicationSecurity.GetAccount(user);
+        return await _db.VerificationApplications.AsNoTracking().AnyAsync(x =>
+            x.Id == id && x.Status == VerificationApplicationStatus.Accepted && x.ModuleRecordId != null &&
+            (user.IsInRole("Admin") || x.AssignedLeaderAccount == account), cancellationToken);
+    }
+
+    public async Task<VerificationApplicationDto> UpdateAcceptedAsync(
+        Guid id, ClaimsPrincipal user, UpdateVerificationApplicationRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureCsitStaff(user);
+        await _businessWrite.DemandAsync(cancellationToken);
+        ArgumentNullException.ThrowIfNull(request);
+        var actor = VerificationApplicationSecurity.GetAccount(user);
+        await using var transaction = _db.Database.IsRelational()
+            ? await _db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            : null;
+        try
+        {
+            var entity = await LockedAcceptedAsync(id, cancellationToken);
+            VerificationApplicationSecurity.EnsureAcceptedManagerAccess(entity, user);
+            var original = DeserializeValidationRequest(entity)
+                ?? throw new InvalidOperationException("原申請快照缺失，無法修改已核准內容。");
+            var edited = request.ValidationRequest
+                ?? throw new ArgumentException("驗證申請內容不可空白。", nameof(request));
+            if (edited.TemplateVersionId != original.TemplateVersionId || edited.TemplateVersion != original.TemplateVersion)
+                throw new InvalidOperationException("已核准案件必須沿用原申請表單版本。");
+            var productChanged = !string.Equals(
+                edited.ProductTypeCode, original.ProductTypeCode, StringComparison.OrdinalIgnoreCase);
+            edited.FormSnapshot = productChanged
+                ? await _validationRequests.GetPreviewAsync(original.TemplateVersionId, edited.ProductTypeCode, cancellationToken)
+                : original.FormSnapshot ?? throw new InvalidOperationException("原申請快照缺失，無法修改已核准內容。");
+            ValidateSubmissionSnapshot(edited);
+            ValidateSelectedCodes(edited);
+            var prepared = await PrepareDraftAsync(request, cancellationToken);
+            var selection = await ResolveDynamicRoutingAsync(edited, true, cancellationToken);
+            var routing = await ResolveRoutingAsync(
+                selection.DepartmentOptionId, selection.TeamOptionId, false, cancellationToken);
+            var record = entity.ModuleRecord
+                ?? throw new InvalidOperationException("已核准申請缺少驗證案件。");
+            var tasks = record.Cases.SelectMany(x => x.Tasks).ToList();
+            var selectionChanged = !original.SelectedTestItemCodes
+                .ToHashSet(StringComparer.OrdinalIgnoreCase).SetEquals(edited.SelectedTestItemCodes);
+            var selectedCodes = edited.SelectedTestItemCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var teamChanged = entity.TeamOptionId != routing.TeamOptionId;
+            var structural = productChanged || teamChanged || selectionChanged;
+            var originalCodes = original.SelectedTestItemCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var taskCodes = tasks.Where(x => !string.IsNullOrWhiteSpace(x.SourceTestItemCode))
+                .Select(x => x.SourceTestItemCode!).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            if (structural && (tasks.Any(x => string.IsNullOrWhiteSpace(x.SourceTestItemCode)) ||
+                               taskCodes.Count != tasks.Count ||
+                               !originalCodes.SetEquals(taskCodes)))
+                throw new InvalidOperationException("現有測試工作與原申請勾選項目不一致，請先確認或建立測試工作，才能修改結構。");
+
+            var taskIds = tasks.Select(x => x.Id).ToList();
+            var fileTaskIds = await _db.ModuleCaseFiles.AsNoTracking()
+                .Where(x => x.TaskId != null && taskIds.Contains(x.TaskId.Value))
+                .Select(x => x.TaskId!.Value).Distinct().ToListAsync(cancellationToken);
+            var taskContexts = taskIds.Select(x => x.ToString("N")).ToList();
+            var submittedContexts = await _db.PendingSubmissions.AsNoTracking()
+                .Where(x => taskContexts.Contains(x.ContextId) &&
+                    (x.ContextType == "TestReport" || x.ContextType == "TaskAttachment"))
+                .Select(x => x.ContextId).Distinct().ToListAsync(cancellationToken);
+            var files = fileTaskIds.ToHashSet();
+            var submitted = submittedContexts.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var removed = tasks.Where(x => structural &&
+                (productChanged || teamChanged || !selectedCodes.Contains(x.SourceTestItemCode!))).ToList();
+            foreach (var task in tasks)
+            {
+                var activity = HasTaskActivity(task) || files.Contains(task.Id) || submitted.Contains(task.Id.ToString("N"));
+                if (removed.Contains(task) && activity)
+                    throw new InvalidOperationException($"測試項目「{task.Name}」已有執行、指派或報告紀錄，不能直接移除或改派 Team。");
+                if (!removed.Contains(task) && activity &&
+                    !string.Equals(ParameterSignature(original, task.SourceTestItemCode!),
+                        ParameterSignature(edited, task.SourceTestItemCode!), StringComparison.Ordinal))
+                    throw new InvalidOperationException($"測試項目「{task.Name}」已有執行或報告紀錄，不能改寫原測試參數。");
+            }
+
+            var before = AuditContent(entity.RoutingDepartmentOptionId, entity.TeamOptionId, original);
+            var now = DateTime.UtcNow;
+            entity.UpdateAcceptedContent(routing, prepared.Content,
+                edited.TemplateVersionId, edited.TemplateVersion, edited.ProductTypeCode,
+                JsonSerializer.Serialize(edited, PayloadJsonOptions), now);
+            ValidateValidationRequestForSubmit(entity);
+            SyncModuleRecord(record, entity, now);
+            foreach (var task in removed)
+            {
+                var owner = record.Cases.Single(x => x.Id == task.CaseId);
+                owner.Tasks.Remove(task);
+                _db.ModuleRecordTasks.Remove(task);
+            }
+            if (structural)
+                await _workItems.EnsureAsync(entity, record, now, cancellationToken);
+            foreach (var task in tasks.Except(removed).Where(x => !HasTaskActivity(x) && !files.Contains(x.Id) &&
+                !submitted.Contains(x.Id.ToString("N")) &&
+                !string.Equals(ParameterSignature(original, x.SourceTestItemCode!),
+                    ParameterSignature(edited, x.SourceTestItemCode!), StringComparison.Ordinal)))
+                RefreshTaskSnapshot(task, edited);
+            AddEditAudit(entity, actor, now, before,
+                AuditContent(entity.RoutingDepartmentOptionId, entity.TeamOptionId, edited));
+            await _db.SaveChangesAsync(cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+            return await MapWithDraftOptionsAsync(entity, cancellationToken);
+        }
+        catch
+        {
+            if (transaction is not null) await transaction.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+    }
+
+    public async Task<int> EnableSelectedWorkAsync(
+        Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
+    {
+        EnsureCsitStaff(user);
+        await _businessWrite.DemandAsync(cancellationToken);
+        var actor = VerificationApplicationSecurity.GetAccount(user);
+        await using var transaction = _db.Database.IsRelational()
+            ? await _db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            : null;
+        try
+        {
+            var entity = await LockedAcceptedAsync(id, cancellationToken);
+            VerificationApplicationSecurity.EnsureAcceptedManagerAccess(entity, user);
+            var request = DeserializeValidationRequest(entity)
+                ?? throw new InvalidOperationException("原申請快照缺失，不能建立測試工作。");
+            ValidateSubmissionSnapshot(request);
+            ValidateSelectedCodes(request);
+            var record = entity.ModuleRecord
+                ?? throw new InvalidOperationException("已核准申請缺少驗證案件。");
+            var before = record.Cases.SelectMany(x => x.Tasks).Select(x => x.Id).ToHashSet();
+            await _workItems.EnsureAsync(entity, record, DateTime.UtcNow, cancellationToken);
+            var added = _db.ChangeTracker.Entries<ModuleRecordTask>()
+                .Count(x => x.State == EntityState.Added && !before.Contains(x.Entity.Id));
+            if (added > 0)
+            {
+                _db.ApprovalAuditEvents.Add(ApprovalAuditEvent.Create(
+                    entity.Id, VerificationAuditSource, VerificationApplicationWorkflow.ModuleCode,
+                    ApprovalAuditActions.VerificationWorkCreated, actor, DateTime.UtcNow,
+                    null, null,
+                    details: JsonSerializer.Serialize(new { entity.ApplicationNo, record.Id,
+                        SelectedTestItemCodes = request.SelectedTestItemCodes.Order(StringComparer.OrdinalIgnoreCase).ToArray(),
+                        CreatedTaskCount = added }, PayloadJsonOptions)));
+            }
+            await _db.SaveChangesAsync(cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+            return added;
+        }
+        catch
+        {
+            if (transaction is not null) await transaction.RollbackAsync(CancellationToken.None);
+            _db.ChangeTracker.Clear();
+            throw;
+        }
+    }
+
     public async Task<VerificationApplicationDto> ReturnAsync(
         Guid id,
         ClaimsPrincipal user,
@@ -716,9 +877,17 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             .Select(item =>
             {
                 if (!request.TestParameterValues.TryGetValue(item.Code, out var values)) return item.DisplayLabel;
-                var labels = item.Parameters.SelectMany(FlattenParameters).ToDictionary(x => x.Code, x => x.DisplayLabel, StringComparer.OrdinalIgnoreCase);
+                var definitions = item.Parameters.SelectMany(FlattenParameters)
+                    .ToDictionary(x => x.Code, StringComparer.OrdinalIgnoreCase);
                 var parameters = values.Where(x => x.Value.Any(v => !string.IsNullOrWhiteSpace(v)))
-                    .Select(x => $"{labels.GetValueOrDefault(x.Key, x.Key)}={string.Join(", ", x.Value.Where(v => !string.IsNullOrWhiteSpace(v)))}")
+                    .Select(x =>
+                    {
+                        definitions.TryGetValue(x.Key, out var definition);
+                        var display = definition?.FieldType == "SensitiveText"
+                            ? "[REDACTED]"
+                            : string.Join(", ", x.Value.Where(v => !string.IsNullOrWhiteSpace(v)));
+                        return $"{definition?.DisplayLabel ?? x.Key}={display}";
+                    })
                     .ToList();
                 return parameters.Count == 0 ? item.DisplayLabel : $"{item.DisplayLabel} ({string.Join("; ", parameters)})";
             })
@@ -804,6 +973,98 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             "IsFalse" => actual.All(x => !string.Equals(x, "true", StringComparison.OrdinalIgnoreCase)),
             _ => false
         };
+    }
+
+    private async Task<VerificationApplication> LockedAcceptedAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var query = _db.Database.IsRelational()
+            ? _db.VerificationApplications
+                .FromSqlInterpolated($"SELECT * FROM verification_applications WHERE id = {id} FOR UPDATE")
+            : _db.VerificationApplications.AsQueryable();
+        var entity = await query.Include(x => x.ModuleRecord!).ThenInclude(x => x.Cases)
+            .ThenInclude(x => x.Tasks).SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
+            ?? throw new KeyNotFoundException("找不到驗證申請單。");
+        if (entity.Status != VerificationApplicationStatus.Accepted || entity.ModuleRecord is null)
+            throw new InvalidOperationException("只有已核准且建立案件的申請可以管理。");
+        return entity;
+    }
+
+    private static void ValidateSelectedCodes(ValidationRequestSubmissionDto request)
+    {
+        if (request.FieldValues is null || request.TestParameterValues is null ||
+            request.SelectedTestItemCodes is null || request.FormSnapshot?.Sections is null ||
+            request.FormSnapshot.TestCategories is null)
+            throw new InvalidOperationException("申請資料或原表單快照不完整。");
+        var fields = request.FormSnapshot.Sections.SelectMany(x => x.Fields).SelectMany(Flatten)
+            .Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        if (request.FieldValues.Keys.Any(x => !fields.Contains(x)))
+            throw new InvalidOperationException("申請資料包含原表單未定義的欄位。");
+        var selected = request.SelectedTestItemCodes.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var found = request.FormSnapshot.TestCategories.SelectMany(x => x.TestItems)
+            .Where(x => selected.Contains(x.Code)).Select(x => x.Code).ToList();
+        if (selected.Count == 0 || found.Count != selected.Count ||
+            found.Distinct(StringComparer.OrdinalIgnoreCase).Count() != selected.Count)
+            throw new InvalidOperationException("原申請勾選項目與表單快照不相容，不能修改或建立測試工作。");
+        var parameterCodes = request.FormSnapshot.TestCategories.SelectMany(x => x.TestItems)
+            .ToDictionary(x => x.Code,
+                x => x.Parameters.SelectMany(FlattenParameters).Select(p => p.Code)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase),
+                StringComparer.OrdinalIgnoreCase);
+        if (request.TestParameterValues.Any(x => !parameterCodes.TryGetValue(x.Key, out var codes) ||
+            x.Value.Keys.Any(code => !codes.Contains(code))))
+            throw new InvalidOperationException("申請資料包含原表單未定義的測試參數。");
+    }
+
+    private static bool HasTaskActivity(ModuleRecordTask task) =>
+        !string.Equals(task.Status, "Open", StringComparison.OrdinalIgnoreCase) ||
+        !string.IsNullOrWhiteSpace(task.AssignEngineer) || task.ActualCompletionDate.HasValue ||
+        task.StartDate.HasValue || !string.IsNullOrWhiteSpace(task.Result) ||
+        !string.IsNullOrWhiteSpace(task.Quoted) || !string.IsNullOrWhiteSpace(task.Reimburse) ||
+        task.UpdatedAt > task.CreatedAt;
+
+    private static string ParameterSignature(ValidationRequestSubmissionDto request, string code)
+    {
+        var values = request.TestParameterValues.FirstOrDefault(x =>
+            string.Equals(x.Key, code, StringComparison.OrdinalIgnoreCase)).Value;
+        return values is null ? string.Empty : JsonSerializer.Serialize(values
+            .OrderBy(x => x.Key, StringComparer.OrdinalIgnoreCase)
+            .Select(x => new { Code = x.Key.ToUpperInvariant(), Values = x.Value }), PayloadJsonOptions);
+    }
+
+    private static void RefreshTaskSnapshot(ModuleRecordTask task, ValidationRequestSubmissionDto request)
+    {
+        var item = request.FormSnapshot!.TestCategories.SelectMany(x => x.TestItems)
+            .Single(x => string.Equals(x.Code, task.SourceTestItemCode, StringComparison.OrdinalIgnoreCase));
+        var values = request.TestParameterValues.FirstOrDefault(x =>
+            string.Equals(x.Key, item.Code, StringComparison.OrdinalIgnoreCase)).Value;
+        task.SourceTestParametersJson = JsonSerializer.Serialize(
+            new { definitions = item.Parameters, values }, PayloadJsonOptions);
+    }
+
+    private static void SyncModuleRecord(ModuleRecord record, VerificationApplication entity, DateTime now)
+    {
+        record.Name = entity.ProjectName;
+        record.Customer = entity.Customer;
+        record.Team = entity.TeamCode;
+        record.Department = entity.RoutingDepartmentCode;
+        record.RequestDepartment = entity.Department;
+        record.RequestApplicant = entity.ApplicantName;
+        record.CustomerProductName = entity.ProductModel;
+        record.SampleReadyDate = entity.SampleReadyDate;
+        record.ApplicantNote = entity.ValidationRequirement;
+        record.Npi = entity.Npi;
+        record.HardwareVersion = entity.HardwareVersion;
+        record.SoftwareVersion = entity.SoftwareVersion;
+        record.Location = entity.Location;
+        record.SubPu = entity.SubPu;
+        record.FirmwareVersion = entity.FirmwareVersion;
+        record.WirelessDrive = entity.WirelessDrive;
+        record.Chipset = entity.Chipset;
+        record.SampleMacAddress = entity.SampleMacAddress;
+        record.UtilityVersion = entity.UtilityVersion;
+        record.DspModel = entity.DspModel;
+        record.JiraLink = entity.JiraLink;
+        record.UpdatedAt = now;
     }
 
     private async Task CreateRecordAndAcceptAsync(

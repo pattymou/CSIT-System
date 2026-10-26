@@ -28,6 +28,24 @@ public static class ValidationRequestPresentation
     public static string Enabled(bool value) => value ? "啟用" : "停用";
     public static string CategoryLabel(ValidationTestCategoryDto category) => $"{category.Code} {category.DisplayLabel}";
 
+    public static bool IsVisible(ValidationFieldDto field, IReadOnlyDictionary<string, List<string>> values) =>
+        field.Conditions.Where(x => x.Action == "Visible").All(condition =>
+        {
+            values.TryGetValue(condition.SourceFieldCode, out var actual);
+            actual ??= [];
+            var expected = condition.ExpectedValue ?? string.Empty;
+            return condition.Operator switch
+            {
+                "Equals" => actual.Any(x => string.Equals(x, expected, StringComparison.OrdinalIgnoreCase)),
+                "NotEquals" => actual.All(x => !string.Equals(x, expected, StringComparison.OrdinalIgnoreCase)),
+                "Contains" => actual.Contains(expected, StringComparer.OrdinalIgnoreCase),
+                "NotContains" => !actual.Contains(expected, StringComparer.OrdinalIgnoreCase),
+                "IsTrue" => actual.Any(x => string.Equals(x, "true", StringComparison.OrdinalIgnoreCase)),
+                "IsFalse" => actual.All(x => !string.Equals(x, "true", StringComparison.OrdinalIgnoreCase)),
+                _ => false
+            };
+        });
+
     public static IReadOnlyList<ValidationFieldGroup> Groups(ValidationSectionDto section)
     {
         var fields = section.Fields.OrderBy(x => x.DisplayOrder).ToList();
@@ -36,8 +54,8 @@ public static class ValidationRequestPresentation
             "COMMON_PRODUCT_INFO" =>
             [
                 new("A. 產品專案資訊", fields.Where(x => x.DisplayOrder <= 110).ToList()),
-                new("B. 產品軟硬體版本資訊", fields.Where(x => x.DisplayOrder is >= 120 and <= 150).ToList()),
-                new("C. 其他資訊", fields.Where(x => x.DisplayOrder == 160).ToList()),
+                new("B. 產品軟硬體版本資訊", fields.Where(x => x.DisplayOrder is > 110 and < 160).ToList()),
+                new("C. 其他資訊", fields.Where(x => x.DisplayOrder is >= 160 and < 170).ToList()),
                 new("D. 產品登入資訊", fields.Where(x => x.DisplayOrder >= 170).ToList())
             ],
             "TYPE_WIFI" => Split(fields, 50),

@@ -84,7 +84,7 @@ public sealed class VerificationWorkItemProvisioner(AppDbContext db)
 
                 var parameters = request.TestParameterValues.FirstOrDefault(x => string.Equals(
                     x.Key, entry.Item.Code, StringComparison.OrdinalIgnoreCase)).Value;
-                recordCase.Tasks.Add(new ModuleRecordTask
+                var task = new ModuleRecordTask
                 {
                     Id = Guid.NewGuid(),
                     CaseId = recordCase.Id,
@@ -101,7 +101,9 @@ public sealed class VerificationWorkItemProvisioner(AppDbContext db)
                         : JsonSerializer.Serialize(new { definitions = entry.Item.Parameters, values = parameters }, JsonOptions),
                     CreatedAt = now,
                     UpdatedAt = now
-                });
+                };
+                recordCase.Tasks.Add(task);
+                db.ModuleRecordTasks.Add(task);
             }
         }
     }

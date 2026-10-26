@@ -1,0 +1,79 @@
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.ValidationRequests
+
+@if (Field.IsEnabled && ValidationRequestPresentation.IsVisible(Field, Values))
+{
+    <div class="snapshot-field @(Field.FieldType is "Group" or "RepeatableGroup" or "Attachment" ? "wide" : "")">
+        <div class="snapshot-label">@Field.DisplayLabel</div>
+        @if (Field.FieldType == "Group")
+        {
+            <div class="snapshot-children">
+                @foreach (var child in Field.Children.OrderBy(x => x.DisplayOrder))
+                {
+                    <ValidationRequestFieldReadOnly Field="child" Values="Values" ProductTypes="ProductTypes" ApplicationId="ApplicationId" ValueIndex="ValueIndex" />
+                }
+            </div>
+        }
+        else if (Field.FieldType == "RepeatableGroup")
+        {
+            <div class="snapshot-groups">
+                @for (var index = 0; index < RepeatableGroupCount; index++)
+                {
+                    var row = index;
+                    <div class="snapshot-group-row"><small>第 @(row + 1) 組</small>
+                        <div class="snapshot-children">
+                            @foreach (var child in Field.Children.OrderBy(x => x.DisplayOrder))
+                            {
+                                <ValidationRequestFieldReadOnly Field="child" Values="Values" ProductTypes="ProductTypes" ApplicationId="ApplicationId" ValueIndex="row" />
+                            }
+                        </div>
+                    </div>
+                }
+            </div>
+        }
+        else if (Field.FieldType == "Attachment")
+        {
+            @if (ApplicationId.HasValue)
+            {
+                <ValidationApplicationAttachments ApplicationId="ApplicationId" />
+            }
+            else { <div class="snapshot-value">—</div> }
+        }
+        else
+        {
+            <div class="snapshot-value">@DisplayValue()</div>
+        }
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public ValidationFieldDto Field { get; set; } = null!;
+    [Parameter, EditorRequired] public IReadOnlyDictionary<string, List<string>> Values { get; set; } = null!;
+    [Parameter] public IReadOnlyList<ValidationProductTypeDto> ProductTypes { get; set; } = [];
+    [Parameter] public Guid? ApplicationId { get; set; }
+    [Parameter] public int? ValueIndex { get; set; }
+
+    private int RepeatableGroupCount => Math.Max(1, Field.Children
+        .Select(child => Values.TryGetValue(child.Code, out var values) ? values.Count : 0).DefaultIfEmpty().Max());
+
+    private string DisplayValue()
+    {
+        if (!Values.TryGetValue(Field.Code, out var values) || values.Count == 0) return "—";
+        var selected = ValueIndex is int index
+            ? values.Skip(index).Take(1)
+            : Field.FieldType is "RepeatableText" or "MultiSelect" ? values : values.Take(1);
+        var displayed = selected.Where(value => !string.IsNullOrWhiteSpace(value))
+            .Select(value => DisplayOne(value.Trim())).ToList();
+        return displayed.Count == 0 ? "—" : string.Join("、", displayed);
+    }
+
+    private string DisplayOne(string value)
+    {
+        if (Field.IsSensitive || Field.FieldType == "SensitiveText") return "••••";
+        if (Field.FieldType == "Checkbox")
+            return string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) ? "是" : "否";
+        if (Field.DataSource == "ValidationProductType")
+            return ProductTypes.FirstOrDefault(x => string.Equals(x.Code, value, StringComparison.OrdinalIgnoreCase))?.DisplayLabel ?? value;
+        return Field.Options.FirstOrDefault(x => string.Equals(x.ValueCode, value, StringComparison.OrdinalIgnoreCase))?.DisplayLabel ?? value;
+    }
+}

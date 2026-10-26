@@ -16,6 +16,30 @@
 {
     <div class="validation-preview">
         @if (ShowPreviewBadge) { <div class="validation-preview-intro"><strong>預覽模式</strong><span>目前僅供檢視欄位與區塊配置，送出功能將於後續階段開放。</span></div> }
+        @if (ExpandSections && ReadOnly)
+        {
+            @foreach (var expandedSection in Preview.Sections.OrderBy(x => x.Code == "COMMON_PRODUCT_INFO" ? 0 : 1))
+            {
+                <section class="dashboard-card validation-section-group" data-section-code="@expandedSection.Code">
+                    <div class="validation-section-heading"><h2>@ValidationRequestPresentation.SectionLabel(expandedSection)</h2></div>
+                    @foreach (var group in ValidationRequestPresentation.Groups(expandedSection).Where(x => x.Fields.Count > 0))
+                    {
+                        <div class="validation-snapshot-group">
+                            <h3>@group.Label</h3>
+                            <div class="validation-fields">
+                                @foreach (var field in group.Fields)
+                                {
+                                    <ValidationRequestFieldReadOnly Field="field" Values="Values" ProductTypes="ProductTypes"
+                                                                    ApplicationId="AttachmentApplicationId" />
+                                }
+                            </div>
+                        </div>
+                    }
+                </section>
+            }
+        }
+        else
+        {
         <nav class="validation-form-tabs" role="tablist" aria-label="申請單區塊">
             @foreach (var tabSection in Preview.Sections)
             {
@@ -82,6 +106,7 @@
                 }
             </section>
         }
+        }
     </div>
 }
 
@@ -97,6 +122,7 @@
     [Parameter] public HashSet<string> SelectedTestItemCodes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [Parameter] public Dictionary<string, Dictionary<string, List<string>>> TestParameterValues { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     [Parameter] public bool ReadOnly { get; set; }
+    [Parameter] public bool ExpandSections { get; set; }
     [Parameter] public Guid? AttachmentApplicationId { get; set; }
     [Parameter] public bool AttachmentsManageable { get; set; }
     [Parameter] public Func<Task<Guid>>? EnsureAttachmentApplicationId { get; set; }

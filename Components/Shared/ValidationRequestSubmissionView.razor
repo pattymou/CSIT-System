@@ -3,21 +3,23 @@
 @if (Submission.FormSnapshot is { } snapshot)
 {
     <div class="validation-submission-view">
-        <div class="surface-card validation-snapshot-heading">
+        @if (ShowHeader) { <div class="surface-card validation-snapshot-heading">
             <strong>新版驗證申請內容</strong>
             <span>表單版本 @Submission.TemplateVersion · @snapshot.ProductTypeLabel</span>
-        </div>
+        </div> }
         <ValidationRequestPreview Preview="snapshot" ProductTypes="ProductTypes(snapshot)"
                                   SelectedProductCode="Submission.ProductTypeCode" Values="Submission.FieldValues"
                                   SelectedTestItemCodes="Submission.SelectedTestItemCodes"
                                   TestParameterValues="Submission.TestParameterValues" ReadOnly="true"
-                                  AttachmentApplicationId="ApplicationId" />
+                                  AttachmentApplicationId="ApplicationId" ExpandSections="ExpandSections" />
     </div>
 }
 
 @code {
     [Parameter, EditorRequired] public ValidationRequestSubmissionDto Submission { get; set; } = null!;
     [Parameter] public Guid? ApplicationId { get; set; }
+    [Parameter] public bool ExpandSections { get; set; }
+    [Parameter] public bool ShowHeader { get; set; } = true;
     private static IReadOnlyList<ValidationProductTypeDto> ProductTypes(ValidationRequestPreviewDto snapshot) =>
         [new(Guid.Empty, snapshot.ProductTypeCode, snapshot.ProductTypeLabel, true, 0, null, null, null, [], [])];
 }

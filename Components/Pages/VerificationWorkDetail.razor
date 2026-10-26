@@ -2,14 +2,22 @@
 @rendermode InteractiveServer
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @using Microsoft.AspNetCore.Authorization
+@using Microsoft.AspNetCore.Components.Authorization
+@using SIT.DepartmentSystem.Web.Entities
 @using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.ValidationRequests
 @inject BrowserApiClient Api
+@inject IVerificationApplicationService Applications
+@inject IValidationRequestConfigurationService ValidationService
+@inject ISystemOptionService SystemOptions
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject IJSRuntime JS
 
-<PageTitle>驗證案件測試項目</PageTitle>
+<PageTitle>驗證案件資訊</PageTitle>
 <nav class="work-breadcrumb" aria-label="頁面導覽">
-    <a href="/validation-request-applications">驗證申請專區</a><span>›</span><span>測試項目</span>
+    <a href="/validation-request-applications">驗證申請專區</a><span>›</span><span>案件資訊</span>
 </nav>
-<h3 class="page-title">測試項目</h3>
+<h3 class="page-title">驗證案件資訊</h3>
 
 @if (_error is not null) { <div class="surface-card error-text">@_error</div> }
 else if (_loading) { <div class="surface-card">載入中...</div> }
@@ -19,8 +27,41 @@ else if (_item is not null)
         <div><span>Model Name</span><strong>@Display(_item.ModelName)</strong></div>
         <div><span>申請編號</span><strong>@_item.ApplicationNo</strong></div>
         <div><span>Project Name</span><strong>@Display(_item.ProjectName)</strong></div>
+        <div><span>申請人</span><strong>@Display(_item.ApplicantName)</strong></div>
+        <div><span>Product Type</span><strong>@Display(_item.ProductType)</strong></div>
+        <div><span>預計結束日期</span><strong>@(_item.ExpectedEndDate?.ToString("yyyy-MM-dd") ?? "—")</strong></div>
         <div><span>整案狀態</span><strong class="record-status-pill">@_item.Status</strong></div>
     </section>
+
+    @if (_application?.ValidationRequest?.FormSnapshot is not null)
+    {
+        @if (_editing && _editPreview is not null)
+        {
+            <div class="work-notice">修改產品類型、Team 或測試項目會影響現有工作；已有指派、執行或報告的工作不可直接移除或改寫參數。</div>
+            <ValidationRequestPreview Preview="_editPreview" ProductTypes="_productTypes"
+                                      SelectedProductCode="_selectedProduct" SelectedProductCodeChanged="ChangeProductAsync"
+                                      Values="_values" SelectedTestItemCodes="_selectedTests"
+                                      TestParameterValues="_testParameters" DepartmentOptions="_departments"
+                                      AttachmentApplicationId="_application.Id" />
+            <div class="form-actions">
+                <button type="button" class="btn-primary" disabled="@_working" @onclick="SaveAcceptedAsync">儲存核准後修改</button>
+                <button type="button" class="btn-secondary" disabled="@_working" @onclick="CancelEdit">取消</button>
+            </div>
+        }
+        else
+        {
+            @if (_canManage)
+            {
+                <div class="form-actions"><button type="button" class="btn-secondary" @onclick="BeginEdit">修改案件內容</button></div>
+            }
+            <ValidationRequestSubmissionView Submission="_application.ValidationRequest" ApplicationId="_application.Id"
+                                             ExpandSections="true" ShowHeader="false" />
+        }
+    }
+    else
+    {
+        <div class="work-notice">原申請表單快照缺失，無法呈現產品資訊。</div>
+    }
 
     @if (_item.SnapshotMessage is not null)
     {
@@ -30,7 +71,13 @@ else if (_item is not null)
     {
         @if (_item.SelectedTestItems.Any(x => x.TaskId is null))
         {
-            <div class="work-notice">部分歷史項目尚未建立可管理工作，僅能查看原申請資訊。</div>
+            <div class="work-notice">
+                尚有測試項目未建立工作。
+                @if (_canManage)
+                {
+                    <button type="button" class="btn-secondary" disabled="@_working" @onclick="EnableWorkAsync">建立測試工作</button>
+                }
+            </div>
         }
         <section class="surface-card work-items" aria-label="原申請勾選的測試項目">
             <h4>原申請勾選的測試項目</h4>
@@ -58,16 +105,30 @@ else if (_item is not null)
         @if (_statusError is not null) { <div class="error-text">@_statusError</div> }
         @if (!CanClose) { <p>所有測試工作均為 Close 後，才能將整案設為 Close。</p> }
     </details>
+    @if (_actionMessage is not null) { <div class="surface-card @(_actionError ? "error-text" : "")">@_actionMessage</div> }
 }
 
 @code {
     [Parameter] public Guid RecordId { get; set; }
     private VerificationWorkDetailDto? _item;
+    private VerificationApplicationDto? _application;
+    private ValidationRequestPreviewDto? _editPreview;
+    private IReadOnlyList<ValidationProductTypeDto> _productTypes = [];
+    private List<SystemOptionDto> _departments = [];
+    private Dictionary<string, List<string>> _values = new(StringComparer.OrdinalIgnoreCase);
+    private HashSet<string> _selectedTests = new(StringComparer.OrdinalIgnoreCase);
+    private Dictionary<string, Dictionary<string, List<string>>> _testParameters = new(StringComparer.OrdinalIgnoreCase);
+    private string _selectedProduct = string.Empty;
     private string _recordStatus = "Open";
     private bool _loading = true;
     private bool _saving;
+    private bool _working;
+    private bool _editing;
+    private bool _canManage;
     private string? _error;
     private string? _statusError;
+    private string? _actionMessage;
+    private bool _actionError;
     private bool CanClose => _item is { TotalTasks: > 0 } && _item.CompletedTasks == _item.TotalTasks;
 
     protected override Task OnParametersSetAsync() => ReloadAsync();
@@ -78,6 +139,10 @@ else if (_item is not null)
             _error = null;
             _item = await Api.GetOptionalAsync<VerificationWorkDetailDto>($"/api/verification-work/{RecordId}");
             if (_item is null) { _error = "找不到已核准的驗證案件。"; return; }
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            _application = await Applications.GetForCsitAsync(_item.ApplicationId, user);
+            if (_application is null) { _error = "找不到原申請單。"; return; }
+            _canManage = await Applications.CanManageAcceptedAsync(_application.Id, user);
             _recordStatus = _item.Status;
         }
         catch (Exception ex) { _error = ex.Message; }
@@ -101,4 +166,116 @@ else if (_item is not null)
         ? $"/validation-request-applications/work/{RecordId}/tasks/{taskId}"
         : $"/validation-request-applications/work/{RecordId}/selected/{Uri.EscapeDataString(item.Code)}";
     private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+
+    private async Task BeginEdit()
+    {
+        if (!_canManage || _application?.ValidationRequest?.FormSnapshot is null) return;
+        _working = true; _actionMessage = null;
+        try
+        {
+            var configuration = await ValidationService.GetConfigurationAsync();
+            _productTypes = configuration.ProductTypes;
+            _departments = (await SystemOptions.GetEnabledByCategoryAsync(SystemOptionCategories.Department)).ToList();
+            InitializeEditor(_application.ValidationRequest);
+            _editing = true;
+        }
+        catch (Exception ex) { _actionError = true; _actionMessage = ex.Message; }
+        finally { _working = false; }
+    }
+
+    private void InitializeEditor(ValidationRequestSubmissionDto request)
+    {
+        _selectedProduct = request.ProductTypeCode;
+        _editPreview = request.FormSnapshot;
+        _values = request.FieldValues.ToDictionary(x => x.Key, x => x.Value.ToList(), StringComparer.OrdinalIgnoreCase);
+        _selectedTests = new(request.SelectedTestItemCodes, StringComparer.OrdinalIgnoreCase);
+        _testParameters = request.TestParameterValues.ToDictionary(x => x.Key,
+            x => x.Value.ToDictionary(y => y.Key, y => y.Value.ToList(), StringComparer.OrdinalIgnoreCase),
+            StringComparer.OrdinalIgnoreCase);
+    }
+
+    private void CancelEdit()
+    {
+        _editing = false; _actionMessage = null;
+        if (_application?.ValidationRequest is not null) InitializeEditor(_application.ValidationRequest);
+    }
+
+    private async Task ChangeProductAsync(string code)
+    {
+        if (_application?.ValidationRequest is null || string.IsNullOrWhiteSpace(code) || code == _selectedProduct) return;
+        _working = true; _actionMessage = null;
+        try
+        {
+            _editPreview = await ValidationService.GetPreviewAsync(_application.ValidationRequest.TemplateVersionId, code);
+            _selectedProduct = code;
+            var fieldCodes = _editPreview.Sections.SelectMany(x => x.Fields).SelectMany(FlattenFields)
+                .Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _values = _values.Where(x => fieldCodes.Contains(x.Key))
+                .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
+            _values["PRODUCT_TYPE"] = [code];
+            var testCodes = _editPreview.TestCategories.SelectMany(x => x.TestItems)
+                .Select(x => x.Code).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            _selectedTests.RemoveWhere(x => !testCodes.Contains(x));
+            _testParameters = _testParameters.Where(x => testCodes.Contains(x.Key))
+                .ToDictionary(x => x.Key, x => x.Value, StringComparer.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) { _actionError = true; _actionMessage = ex.Message; }
+        finally { _working = false; }
+    }
+
+    private async Task SaveAcceptedAsync()
+    {
+        if (_application is null || _editPreview is null || !_canManage) return;
+        _working = true; _actionMessage = null;
+        try
+        {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            await Applications.UpdateAcceptedAsync(_application.Id, user, new UpdateVerificationApplicationRequest
+            {
+                ValidationRequest = new ValidationRequestSubmissionDto
+                {
+                    TemplateVersionId = _editPreview.TemplateVersionId,
+                    TemplateVersion = _editPreview.TemplateVersion,
+                    ProductTypeCode = _editPreview.ProductTypeCode,
+                    FieldValues = _values,
+                    SelectedTestItemCodes = _selectedTests,
+                    TestParameterValues = _testParameters,
+                    FormSnapshot = _editPreview
+                }
+            });
+            _editing = false;
+            await ReloadAsync();
+            _actionError = false;
+            _actionMessage = "案件內容已儲存，修改紀錄已保留。";
+        }
+        catch (Exception ex) { _actionError = true; _actionMessage = ex.Message; }
+        finally { _working = false; }
+    }
+
+    private async Task EnableWorkAsync()
+    {
+        if (_application is null || _item is null || !_canManage) return;
+        var missing = _item.SelectedTestItems.Where(x => x.TaskId is null).Select(x => x.Name).ToList();
+        if (missing.Count == 0) return;
+        var confirmed = await JS.InvokeAsync<bool>("confirm",
+            "將依原申請建立以下測試工作：\n" + string.Join("\n", missing) + "\n\n確定建立？");
+        if (!confirmed) return;
+        _working = true; _actionMessage = null;
+        try
+        {
+            var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+            var count = await Applications.EnableSelectedWorkAsync(_application.Id, user);
+            await ReloadAsync();
+            _actionError = false;
+            _actionMessage = $"已建立 {count} 個測試工作。";
+        }
+        catch (Exception ex) { _actionError = true; _actionMessage = ex.Message; }
+        finally { _working = false; }
+    }
+
+    private static IEnumerable<ValidationFieldDto> FlattenFields(ValidationFieldDto field)
+    {
+        yield return field;
+        foreach (var child in field.Children.SelectMany(FlattenFields)) yield return child;
+    }
 }

@@ -26,3 +26,5 @@
 .validation-preview ::deep .validation-test-item strong{font-size:15px}
 .validation-preview ::deep .validation-test-item small,.validation-preview ::deep .validation-empty{font-size:13px;line-height:1.45}
 .validation-preview ::deep .validation-field-focus{padding:12px;border:2px solid #f59e0b;border-radius:11px;background:rgba(245,158,11,.1);box-shadow:0 0 0 4px rgba(245,158,11,.08)}
+.validation-snapshot-group + .validation-snapshot-group{margin-top:20px;padding-top:18px;border-top:1px solid rgba(148,163,184,.16)}
+.validation-snapshot-group h3{margin:0 0 14px;font-size:.96rem;color:#d9eefb}

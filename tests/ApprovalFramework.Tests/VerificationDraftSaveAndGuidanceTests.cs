@@ -226,6 +226,9 @@ public sealed class VerificationDraftSaveAndGuidanceTests
         public Task<bool> IsDirectApprovalApplicantAsync(ClaimsPrincipal user, CancellationToken cancellationToken = default) => Task.FromResult(false);
         public Task<VerificationApplicationDto> SubmitAsync(Guid id, ClaimsPrincipal user, DateOnly? expectedEndDate = null, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<VerificationApplicationDto> UpdateForLeaderReviewAsync(Guid id, ClaimsPrincipal user, UpdateVerificationApplicationRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<bool> CanManageAcceptedAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<VerificationApplicationDto> UpdateAcceptedAsync(Guid id, ClaimsPrincipal user, UpdateVerificationApplicationRequest request, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<int> EnableSelectedWorkAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<VerificationApplicationDto> ReturnAsync(Guid id, ClaimsPrincipal user, string? note, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<VerificationApplicationDto> RejectAsync(Guid id, ClaimsPrincipal user, string? note, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<VerificationApplicationDto> AcceptAsync(Guid id, ClaimsPrincipal user, DateOnly expectedEndDate, CancellationToken cancellationToken = default) => throw new NotSupportedException();

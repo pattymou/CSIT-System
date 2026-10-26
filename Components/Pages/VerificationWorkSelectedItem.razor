@@ -22,7 +22,7 @@ else if (_item is not null && _selected is not null)
         <div><span>分類</span><strong>@_selected.Category</strong></div>
         <div><span>測試項目</span><strong>@_selected.Name</strong></div>
     </section>
-    <div class="selected-notice">此項目尚未建立可管理的測試工作，以下為原申請資訊，無法指派工程師、變更狀態或上傳測試報告。</div>
+    <div class="selected-notice">尚未建立測試工作。可返回案件資訊，由管理者建立後再操作。</div>
     <section class="surface-card selected-parameters">
         <h4>原申請測試參數</h4>
         @if (_selected.Parameters.Count == 0) { <p>原申請未填寫測試參數。</p> }

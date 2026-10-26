@@ -188,6 +188,28 @@ public class VerificationApplication
         UpdatedAt = now;
     }
 
+    public void UpdateAcceptedContent(
+        VerificationApplicationRouting routing,
+        VerificationApplicationContent content,
+        Guid templateVersionId,
+        int templateVersionNumber,
+        string productTypeCode,
+        string payloadJson,
+        DateTime now)
+    {
+        EnsureStatus(VerificationApplicationStatus.Accepted);
+        if (!ModuleRecordId.HasValue)
+            throw new InvalidOperationException("Accepted application has no ModuleRecord.");
+        ArgumentNullException.ThrowIfNull(routing);
+        ApplyContent(content);
+        RoutingDepartmentOptionId = routing.RoutingDepartmentOptionId;
+        TeamOptionId = routing.TeamOptionId;
+        ApplyRouting(routing);
+        SetValidationRequestValues(templateVersionId, templateVersionNumber, productTypeCode, payloadJson);
+        EnsureSubmitRequirements();
+        UpdatedAt = now;
+    }
+
     public void Submit(VerificationApplicationRouting routing, DateTime now)
     {
         EnsureStatus(VerificationApplicationStatus.Draft, VerificationApplicationStatus.Returned);
