@@ -4,51 +4,70 @@
 @using Microsoft.AspNetCore.Authorization
 @using SIT.DepartmentSystem.Web.Models.Api
 @inject BrowserApiClient Api
-@inject NavigationManager Nav
 
 <PageTitle>驗證案件測試項目</PageTitle>
-<h3 class="page-title">驗證案件測試項目</h3>
+<nav class="work-breadcrumb" aria-label="頁面導覽">
+    <a href="/validation-request-applications">驗證申請專區</a><span>›</span><span>測試項目</span>
+</nav>
+<h3 class="page-title">測試項目</h3>
 
 @if (_error is not null) { <div class="surface-card error-text">@_error</div> }
 else if (_loading) { <div class="surface-card">載入中...</div> }
 else if (_item is not null)
 {
-    <div class="surface-card">
-        <div class="detail-grid">
-            <div><span>Model Name</span><strong>@Display(_item.ModelName)</strong></div>
-            <div><span>申請編號</span><strong>@_item.ApplicationNo</strong></div>
-            <div><span>Project Name</span><strong>@_item.ProjectName</strong></div>
-            <div><span>申請人</span><strong>@_item.ApplicantName</strong></div>
-            <div><span>Product Type</span><strong>@Display(_item.ProductType)</strong></div>
-            <div><span>預計結束日期</span><strong>@(_item.ExpectedEndDate?.ToString("yyyy-MM-dd") ?? "—")</strong></div>
-            <div><span>進度</span><strong>@_item.CompletedTasks / @_item.TotalTasks (@_item.Progress%)</strong></div>
-            <label><span>整案狀態</span><select @bind="_recordStatus"><option>Open</option><option>Hold</option><option disabled="@(!CanClose)">Close</option></select></label>
-        </div>
-        <div class="form-actions"><button class="btn-primary" @onclick="SaveRecordStatusAsync" disabled="@_saving">儲存整案狀態</button></div>
-        @if (_item.RequiresSetupReview) { <div class="error-text">此為既有資料，缺少可追溯的測試工作項目；系統不會自動補建，需另行確認。</div> }
-    </div>
+    <section class="surface-card work-summary" aria-label="案件資訊">
+        <div><span>Model Name</span><strong>@Display(_item.ModelName)</strong></div>
+        <div><span>申請編號</span><strong>@_item.ApplicationNo</strong></div>
+        <div><span>Project Name</span><strong>@Display(_item.ProjectName)</strong></div>
+        <div><span>整案狀態</span><strong class="record-status-pill">@_item.Status</strong></div>
+    </section>
 
-    @foreach (var task in _item.Tasks)
+    @if (_item.SnapshotMessage is not null)
     {
-        <VerificationWorkTaskCard Task="task" Engineers="_engineers" OnChanged="ReloadAsync" />
+        <div class="surface-card work-notice">@_item.SnapshotMessage</div>
     }
-    @if (_item.Tasks.Count == 0) { <div class="surface-card">此案件目前沒有測試項目。</div> }
-    <div class="form-actions"><button class="btn-secondary" @onclick="Back">返回案件列表</button></div>
-}
+    else
+    {
+        @if (_item.SelectedTestItems.Any(x => x.TaskId is null))
+        {
+            <div class="work-notice">部分歷史項目尚未建立可管理工作，僅能查看原申請資訊。</div>
+        }
+        <section class="surface-card work-items" aria-label="原申請勾選的測試項目">
+            <h4>原申請勾選的測試項目</h4>
+            <div class="work-item-list">
+                @foreach (var selected in _item.SelectedTestItems)
+                {
+                    <a class="work-item-row" href="@ItemHref(selected)">
+                        <span class="work-item-copy"><small>@selected.Category</small><strong>@selected.Name</strong></span>
+                        <span class="work-item-state">@(selected.TaskId is null ? "尚未建立工作 · 唯讀" : selected.TaskStatus)</span>
+                        <span aria-hidden="true">›</span>
+                    </a>
+                }
+            </div>
+        </section>
+    }
 
-<style>
-    .detail-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px}.detail-grid span{display:block;color:#64748b;font-size:.82rem;margin-bottom:4px}
-    @@media(max-width:900px){.detail-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
-</style>
+    <details class="surface-card work-record-action">
+        <summary>整案狀態管理</summary>
+        <div class="work-record-controls">
+            <label>整案狀態
+                <select @bind="_recordStatus"><option>Open</option><option>Hold</option><option disabled="@(!CanClose)">Close</option></select>
+            </label>
+            <button class="btn-primary" @onclick="SaveRecordStatusAsync" disabled="@_saving">儲存整案狀態</button>
+        </div>
+        @if (_statusError is not null) { <div class="error-text">@_statusError</div> }
+        @if (!CanClose) { <p>所有測試工作均為 Close 後，才能將整案設為 Close。</p> }
+    </details>
+}
 
 @code {
     [Parameter] public Guid RecordId { get; set; }
     private VerificationWorkDetailDto? _item;
-    private IReadOnlyList<AssignableEngineerDto> _engineers = [];
     private string _recordStatus = "Open";
     private bool _loading = true;
     private bool _saving;
     private string? _error;
+    private string? _statusError;
     private bool CanClose => _item is { TotalTasks: > 0 } && _item.CompletedTasks == _item.TotalTasks;
 
     protected override Task OnParametersSetAsync() => ReloadAsync();
@@ -60,7 +79,6 @@ else if (_item is not null)
             _item = await Api.GetOptionalAsync<VerificationWorkDetailDto>($"/api/verification-work/{RecordId}");
             if (_item is null) { _error = "找不到已核准的驗證案件。"; return; }
             _recordStatus = _item.Status;
-            _engineers = await Api.GetAsync<List<AssignableEngineerDto>>($"/api/records/{RecordId}/assignable-engineers");
         }
         catch (Exception ex) { _error = ex.Message; }
         finally { _loading = false; }
@@ -68,15 +86,19 @@ else if (_item is not null)
     private async Task SaveRecordStatusAsync()
     {
         _saving = true;
+        _statusError = null;
         try
         {
-            var response = await Api.PutJsonAsync($"/api/verification-work/{RecordId}/status", new UpdateVerificationWorkStatusRequest { Status = _recordStatus });
+            var response = await Api.PutJsonAsync($"/api/verification-work/{RecordId}/status",
+                new UpdateVerificationWorkStatusRequest { Status = _recordStatus });
             response.EnsureSuccess();
             await ReloadAsync();
         }
-        catch (Exception ex) { _error = ex.Message; }
+        catch (Exception ex) { _statusError = ex.Message; }
         finally { _saving = false; }
     }
+    private string ItemHref(SelectedVerificationTestItemDto item) => item.TaskId is Guid taskId
+        ? $"/validation-request-applications/work/{RecordId}/tasks/{taskId}"
+        : $"/validation-request-applications/work/{RecordId}/selected/{Uri.EscapeDataString(item.Code)}";
     private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
-    private void Back() => Nav.NavigateTo("/validation-request-applications");
 }

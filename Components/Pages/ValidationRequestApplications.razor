@@ -27,13 +27,13 @@ else
                 <colgroup>
                     <col class="model-column" /><col class="application-column" /><col class="project-column" />
                     <col class="applicant-column" /><col class="product-column" /><col class="date-column" />
-                    <col class="status-column" /><col class="progress-column" />
+                    <col class="status-column" />
                 </colgroup>
-                <thead><tr><th>Model Name</th><th>申請編號</th><th>Project Name</th><th>申請人</th><th>Product Type</th><th>預計結束日期</th><th>狀態</th><th>進度</th></tr></thead>
+                <thead><tr><th>Model Name</th><th>申請編號</th><th>Project Name</th><th>申請人</th><th>Product Type</th><th>預計結束日期</th><th>狀態</th></tr></thead>
                 <tbody>
                 @if (FilteredWork.Count == 0)
                 {
-                    <tr><td colspan="8" class="empty-row">目前沒有 @_selectedStatus 狀態的驗證案件。</td></tr>
+                    <tr><td colspan="7" class="empty-row">目前沒有 @_selectedStatus 狀態的驗證案件。</td></tr>
                 }
                 @foreach (var item in FilteredWork)
                 {
@@ -41,8 +41,7 @@ else
                         <td><a href="@($"/validation-request-applications/work/{item.RecordId}")" class="work-model-link">@Display(item.ModelName)</a></td>
                         <td>@item.ApplicationNo</td><td>@Display(item.ProjectName)</td><td>@item.ApplicantName</td>
                         <td>@Display(item.ProductType)</td><td>@DisplayDate(item.ExpectedEndDate)</td>
-                        <td><span class="record-status-pill">@item.Status</span>@if (item.RequiresSetupReview) { <div class="error-text">歷史資料：待確認工作項目</div> }</td>
-                        <td>@item.CompletedTasks / @item.TotalTasks (@item.Progress%)</td>
+                        <td><span class="record-status-pill">@_selectedStatus</span></td>
                     </tr>
                 }
                 </tbody>

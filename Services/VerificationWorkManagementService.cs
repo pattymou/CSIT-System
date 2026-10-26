@@ -11,8 +11,10 @@ public interface IVerificationWorkManagementService
 {
     Task<IReadOnlyList<VerificationWorkListItemDto>> ListAsync(CancellationToken cancellationToken = default);
     Task<VerificationWorkDetailDto?> GetAsync(Guid recordId, CancellationToken cancellationToken = default);
+    Task<VerificationWorkTaskDetailDto?> GetTaskAsync(Guid recordId, Guid taskId, CancellationToken cancellationToken = default);
     Task UpdateRecordStatusAsync(Guid recordId, UpdateVerificationWorkStatusRequest request, CancellationToken cancellationToken = default);
     Task UpdateTaskAsync(Guid taskId, UpdateVerificationWorkTaskRequest request, CancellationToken cancellationToken = default);
+    Task UpdateTaskForRecordAsync(Guid recordId, Guid taskId, UpdateVerificationWorkTaskRequest request, CancellationToken cancellationToken = default);
 }
 
 public sealed class VerificationWorkManagementService(
@@ -54,6 +56,7 @@ public sealed class VerificationWorkManagementService(
             .ToListAsync(cancellationToken);
         var reportsByTask = reports.GroupBy(x => x.TaskId!.Value).ToDictionary(x => x.Key, x => x.ToList());
         var list = ToListItem(application);
+        var (selectedItems, snapshotMessage) = SelectedItems(application, tasks);
         return new VerificationWorkDetailDto
         {
             ApplicationId = list.ApplicationId,
@@ -69,6 +72,8 @@ public sealed class VerificationWorkManagementService(
             CompletedTasks = list.CompletedTasks,
             Progress = list.Progress,
             RequiresSetupReview = list.RequiresSetupReview,
+            SelectedTestItems = selectedItems,
+            SnapshotMessage = snapshotMessage,
             Tasks = application.ModuleRecord.Cases.OrderBy(x => x.SortOrder)
                 .SelectMany(recordCase => recordCase.Tasks.OrderBy(x => x.CreatedAt)
                     .Select(task => new VerificationWorkTaskDto
@@ -95,6 +100,34 @@ public sealed class VerificationWorkManagementService(
                             }).ToList()
                     })).ToList()
         };
+    }
+
+    public async Task<VerificationWorkTaskDetailDto?> GetTaskAsync(
+        Guid recordId, Guid taskId, CancellationToken cancellationToken = default)
+    {
+        var detail = await GetAsync(recordId, cancellationToken);
+        var selected = detail?.SelectedTestItems.SingleOrDefault(x => x.TaskId == taskId);
+        var task = detail?.Tasks.SingleOrDefault(x => x.Id == taskId);
+        if (selected is null || task is null) return null;
+        task.Name = selected.Name;
+        task.Category = selected.Category;
+        return new VerificationWorkTaskDetailDto
+        {
+            RecordId = recordId,
+            ModelName = detail!.ModelName,
+            ApplicationNo = detail.ApplicationNo,
+            SelectedItem = selected,
+            Task = task
+        };
+    }
+
+    public async Task UpdateTaskForRecordAsync(
+        Guid recordId, Guid taskId, UpdateVerificationWorkTaskRequest request,
+        CancellationToken cancellationToken = default)
+    {
+        var selected = await GetTaskAsync(recordId, taskId, cancellationToken);
+        if (selected is null) throw new KeyNotFoundException("The selected test item does not belong to this verification case.");
+        await UpdateTaskAsync(taskId, request, cancellationToken);
     }
 
     public async Task UpdateRecordStatusAsync(
@@ -206,6 +239,76 @@ public sealed class VerificationWorkManagementService(
             catch (JsonException) { }
         }
         return application.ValidationProductTypeCode ?? string.Empty;
+    }
+
+    private static (IReadOnlyList<SelectedVerificationTestItemDto> Items, string? Message) SelectedItems(
+        VerificationApplication application, IReadOnlyList<ModuleRecordTask> tasks)
+    {
+        if (string.IsNullOrWhiteSpace(application.ValidationFormPayloadJson))
+            return ([], "原申請單沒有測試項目快照，無法確認當時勾選的項目。");
+        try
+        {
+            var request = JsonSerializer.Deserialize<ValidationRequestSubmissionDto>(
+                application.ValidationFormPayloadJson, JsonOptions);
+            if (request?.FormSnapshot?.TestCategories is null || request.SelectedTestItemCodes is null ||
+                request.SelectedTestItemCodes.Count == 0)
+                return ([], "原申請單測試項目快照缺少或不完整，無法確認當時勾選的項目。");
+            if (request.FormSnapshot.TestCategories.Any(category => category.TestItems is null))
+                return ([], "原申請單測試項目快照缺少或不完整，無法確認當時勾選的項目。");
+
+            var selected = request.SelectedTestItemCodes
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var entries = request.FormSnapshot.TestCategories
+                .SelectMany(category => category.TestItems.Select(item => (category, item)))
+                .Where(x => selected.Contains(x.item.Code)).ToList();
+            if (selected.Count == 0 || entries.Count != selected.Count ||
+                entries.Select(x => x.item.Code).Distinct(StringComparer.OrdinalIgnoreCase).Count() != selected.Count)
+                return ([], "原申請單勾選項目與快照不一致，無法可靠顯示測試項目。");
+
+            var items = entries.OrderBy(x => x.category.DisplayOrder).ThenBy(x => x.item.DisplayOrder)
+                .Select(entry =>
+                {
+                    var matches = tasks.Where(task => string.Equals(
+                        task.SourceTestItemCode, entry.item.Code, StringComparison.OrdinalIgnoreCase)).ToList();
+                    var task = matches.Count == 1 ? matches[0] : null;
+                    var values = request.TestParameterValues?.FirstOrDefault(x => string.Equals(
+                        x.Key, entry.item.Code, StringComparison.OrdinalIgnoreCase)).Value;
+                    var labels = FlattenParameters(entry.item.Parameters ?? [])
+                        .GroupBy(x => x.Code, StringComparer.OrdinalIgnoreCase)
+                        .ToDictionary(x => x.Key, x => x.First(), StringComparer.OrdinalIgnoreCase);
+                    return new SelectedVerificationTestItemDto
+                    {
+                        Code = entry.item.Code,
+                        Name = entry.item.DisplayLabel,
+                        Category = entry.category.DisplayLabel,
+                        TaskId = task?.Id,
+                        TaskStatus = task?.Status,
+                        Parameters = values is null ? [] : values
+                            .Where(x => x.Value is not null && x.Value.Any(v => !string.IsNullOrWhiteSpace(v)))
+                            .Select(x => new VerificationTestParameterDto(
+                                labels.TryGetValue(x.Key, out var definition) ? definition.DisplayLabel : x.Key,
+                                string.Equals(definition?.FieldType, "SensitiveText", StringComparison.OrdinalIgnoreCase)
+                                    ? ["敏感資料"] : x.Value.Where(v => !string.IsNullOrWhiteSpace(v)).ToList()))
+                            .ToList()
+                    };
+                }).ToList();
+            return (items, null);
+        }
+        catch (JsonException)
+        {
+            return ([], "原申請單測試項目快照無法解析，無法確認當時勾選的項目。");
+        }
+    }
+
+    private static IEnumerable<ValidationParameterDto> FlattenParameters(
+        IEnumerable<ValidationParameterDto> parameters)
+    {
+        foreach (var parameter in parameters)
+        {
+            yield return parameter;
+            foreach (var child in FlattenParameters(parameter.Children ?? [])) yield return child;
+        }
     }
 
     private static int Progress(IReadOnlyCollection<ModuleRecordTask> tasks) =>

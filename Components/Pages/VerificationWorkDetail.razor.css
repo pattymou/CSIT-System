@@ -1,0 +1,31 @@
+.work-breadcrumb { display:flex; gap:10px; align-items:center; margin-bottom:14px; color:#9db9cb; font-size:.9rem; }
+.work-breadcrumb a { color:#60d8df; text-decoration:none; }
+.work-breadcrumb a:hover { text-decoration:underline; }
+.work-summary { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:18px; margin-bottom:16px; }
+.work-summary div { min-width:0; }
+.work-summary span { display:block; color:#9db9cb; font-size:.82rem; margin-bottom:6px; }
+.work-summary strong { display:block; overflow-wrap:anywhere; }
+.work-summary .record-status-pill { display:inline-block; }
+.work-notice { margin-bottom:14px; padding:12px 16px; color:#c7d8e7; border:1px solid rgba(120,160,185,.26); border-radius:10px; background:rgba(20,43,61,.65); }
+.work-items h4 { margin:0 0 16px; font-size:1.05rem; }
+.work-item-list { border-top:1px solid rgba(120,160,185,.22); }
+.work-item-row { display:grid; grid-template-columns:minmax(0,1fr) auto 12px; align-items:center; gap:20px; padding:16px 4px; border-bottom:1px solid rgba(120,160,185,.18); color:#eaf6ff; text-decoration:none; }
+.work-item-row:hover,.work-item-row:focus-visible { background:rgba(40,115,137,.15); }
+.work-item-copy { min-width:0; }
+.work-item-copy small { display:block; margin-bottom:4px; color:#9db9cb; }
+.work-item-copy strong { overflow-wrap:anywhere; }
+.work-item-state { color:#a8dfe2; white-space:nowrap; font-size:.86rem; }
+.work-record-action { margin-top:16px; }
+.work-record-action summary { cursor:pointer; font-weight:700; }
+.work-record-controls { display:flex; align-items:end; gap:14px; margin-top:16px; }
+.work-record-controls label { display:flex; flex-direction:column; gap:6px; }
+.work-record-action p { color:#9db9cb; font-size:.85rem; margin-bottom:0; }
+@media(max-width:850px) {
+    .work-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
+}
+@media(max-width:580px) {
+    .work-summary { grid-template-columns:1fr; }
+    .work-item-row { grid-template-columns:minmax(0,1fr) 12px; gap:10px; }
+    .work-item-state { grid-column:1; grid-row:2; }
+    .work-record-controls { align-items:stretch; flex-direction:column; }
+}

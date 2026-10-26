@@ -19,7 +19,30 @@ public class VerificationWorkListItemDto
 
 public sealed class VerificationWorkDetailDto : VerificationWorkListItemDto
 {
+    public IReadOnlyList<SelectedVerificationTestItemDto> SelectedTestItems { get; set; } = [];
+    public string? SnapshotMessage { get; set; }
     public IReadOnlyList<VerificationWorkTaskDto> Tasks { get; set; } = [];
+}
+
+public sealed class SelectedVerificationTestItemDto
+{
+    public string Code { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public string Category { get; set; } = string.Empty;
+    public Guid? TaskId { get; set; }
+    public string? TaskStatus { get; set; }
+    public IReadOnlyList<VerificationTestParameterDto> Parameters { get; set; } = [];
+}
+
+public sealed record VerificationTestParameterDto(string Name, IReadOnlyList<string> Values);
+
+public sealed class VerificationWorkTaskDetailDto
+{
+    public Guid RecordId { get; set; }
+    public string ModelName { get; set; } = string.Empty;
+    public string ApplicationNo { get; set; } = string.Empty;
+    public SelectedVerificationTestItemDto SelectedItem { get; set; } = null!;
+    public VerificationWorkTaskDto Task { get; set; } = null!;
 }
 
 public sealed class VerificationWorkTaskDto

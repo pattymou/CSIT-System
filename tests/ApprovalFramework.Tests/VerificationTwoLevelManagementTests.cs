@@ -161,6 +161,100 @@ public sealed class VerificationTwoLevelManagementTests
     }
 
     [Fact]
+    public async Task Detail_UsesEachAcceptedApplicationSnapshotAndRejectsCrossRecordTaskAccess()
+    {
+        await using var db = NewDb();
+        var first = SubmittedApplication("VA-FIRST", "SAME-MODEL", Submission(["WIFI"]));
+        var second = SubmittedApplication("VA-SECOND", "SAME-MODEL", Submission(["BT"]));
+        var firstRecord = Record("REC-FIRST", "SAME-MODEL");
+        var secondRecord = Record("REC-SECOND", "SAME-MODEL");
+        db.AddRange(first, second, firstRecord, secondRecord);
+        await db.SaveChangesAsync();
+        var provisioner = new VerificationWorkItemProvisioner(db);
+        await provisioner.EnsureAsync(first, firstRecord, DateTime.UtcNow);
+        await provisioner.EnsureAsync(second, secondRecord, DateTime.UtcNow);
+        first.Accept(firstRecord.Id, firstRecord.ExpectedEndDate!.Value, "leader", DateTime.UtcNow);
+        second.Accept(secondRecord.Id, secondRecord.ExpectedEndDate!.Value, "leader", DateTime.UtcNow);
+        await db.SaveChangesAsync();
+        db.ChangeTracker.Clear();
+        var service = new VerificationWorkManagementService(db, new FakeEngineerDirectory("engineer1"), new AllowWrite());
+
+        var firstDetail = (await service.GetAsync(firstRecord.Id))!;
+        var secondDetail = (await service.GetAsync(secondRecord.Id))!;
+        var selected = Assert.Single(firstDetail.SelectedTestItems);
+        Assert.Equal("WIFI", selected.Code);
+        Assert.Equal("Wi-Fi", selected.Name);
+        Assert.Equal("Radio", selected.Category);
+        Assert.Equal("BAND", selected.Parameters.Single().Name);
+        Assert.Equal(["5G"], selected.Parameters.Single().Values);
+        Assert.NotNull(selected.TaskId);
+        Assert.Equal("BT", Assert.Single(secondDetail.SelectedTestItems).Code);
+        Assert.Equal("VA-FIRST", firstDetail.ApplicationNo);
+        Assert.Equal("VA-SECOND", secondDetail.ApplicationNo);
+        Assert.DoesNotContain(firstDetail.SelectedTestItems, x => x.Code == "GPS");
+        Assert.Null(await service.GetTaskAsync(secondRecord.Id, selected.TaskId!.Value));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => service.UpdateTaskForRecordAsync(
+            secondRecord.Id, selected.TaskId.Value, new UpdateVerificationWorkTaskRequest
+            { Status = "Hold", AssignEngineer = "engineer1" }));
+        Assert.Equal("Open", (await db.ModuleRecordTasks.FindAsync(selected.TaskId.Value))!.Status);
+
+        var taskDetail = (await service.GetTaskAsync(firstRecord.Id, selected.TaskId.Value))!;
+        Assert.Equal(firstRecord.Id, taskDetail.RecordId);
+        Assert.Equal("WIFI", taskDetail.SelectedItem.Code);
+        await service.UpdateTaskForRecordAsync(firstRecord.Id, selected.TaskId.Value,
+            new UpdateVerificationWorkTaskRequest { Status = "Hold", AssignEngineer = "engineer1" });
+        Assert.Equal("Hold", (await db.ModuleRecordTasks.FindAsync(selected.TaskId.Value))!.Status);
+    }
+
+    [Fact]
+    public async Task HistoricalAcceptedSnapshotRemainsReadOnlyWithoutCreatingTasks()
+    {
+        await using var db = NewDb();
+        var application = SubmittedApplication("VA-HISTORY", "OLD-MODEL", Submission(["WIFI"]));
+        var record = Record("REC-HISTORY", "OLD-MODEL");
+        application.Accept(record.Id, record.ExpectedEndDate!.Value, "leader", DateTime.UtcNow);
+        db.AddRange(application, record);
+        await db.SaveChangesAsync();
+        var service = new VerificationWorkManagementService(db, new FakeEngineerDirectory(), new AllowWrite());
+
+        var detail = (await service.GetAsync(record.Id))!;
+        var selected = Assert.Single(detail.SelectedTestItems);
+        Assert.Equal("WIFI", selected.Code);
+        Assert.Null(selected.TaskId);
+        Assert.Null(selected.TaskStatus);
+        Assert.Null(detail.SnapshotMessage);
+        Assert.Empty(detail.Tasks);
+        Assert.Empty(await db.ModuleRecordCases.Where(x => x.RecordId == record.Id).ToListAsync());
+        Assert.Null(await service.GetTaskAsync(record.Id, Guid.NewGuid()));
+        await Assert.ThrowsAsync<KeyNotFoundException>(() => service.UpdateTaskForRecordAsync(
+            record.Id, Guid.NewGuid(), new UpdateVerificationWorkTaskRequest { Status = "Hold" }));
+    }
+
+    [Fact]
+    public async Task MissingSnapshotShowsDataMessageWithoutInventingItems()
+    {
+        await using var db = NewDb();
+        var request = Submission(["WIFI"]);
+        request.FormSnapshot = null;
+        var application = SubmittedApplication("VA-MISSING", "OLD-MODEL", request);
+        var record = Record("REC-MISSING", "OLD-MODEL");
+        application.Accept(record.Id, record.ExpectedEndDate!.Value, "leader", DateTime.UtcNow);
+        db.AddRange(application, record);
+        await db.SaveChangesAsync();
+        var service = new VerificationWorkManagementService(db, new FakeEngineerDirectory(), new AllowWrite());
+
+        var detail = (await service.GetAsync(record.Id))!;
+        Assert.Empty(detail.SelectedTestItems);
+        Assert.NotNull(detail.SnapshotMessage);
+
+        db.Entry(application).Property(x => x.ValidationFormPayloadJson).CurrentValue = "{invalid";
+        await db.SaveChangesAsync();
+        var malformed = (await service.GetAsync(record.Id))!;
+        Assert.Empty(malformed.SelectedTestItems);
+        Assert.Contains("無法解析", malformed.SnapshotMessage);
+    }
+
+    [Fact]
     public void AcceptAndDirectApprovalShareTheTransactionalProvisioningPath()
     {
         var source = File.ReadAllText(Path.Combine(RepositoryRoot(), "Services", "Implementations", "VerificationApplicationService.cs"));
@@ -182,7 +276,27 @@ public sealed class VerificationTwoLevelManagementTests
         Assert.DoesNotContain("ListForCsitAsync", source);
         Assert.DoesNotContain("APPLICATION WORKFLOW", source);
         Assert.DoesNotContain("Model Name 整案管理", source);
+        Assert.DoesNotContain("<th>進度</th>", source);
+        Assert.DoesNotContain("item.Progress", source);
+        Assert.DoesNotContain("歷史資料：待確認工作項目", source);
         Assert.DoesNotContain("Task.WhenAll", source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WorkPagesSeparateSelectionFromTaskEditingAndHistoricalReadOnlyView()
+    {
+        var list = File.ReadAllText(Path.Combine(RepositoryRoot(), "Components", "Pages", "VerificationWorkDetail.razor"));
+        var task = File.ReadAllText(Path.Combine(RepositoryRoot(), "Components", "Pages", "VerificationWorkTaskDetail.razor"));
+        var historical = File.ReadAllText(Path.Combine(RepositoryRoot(), "Components", "Pages", "VerificationWorkSelectedItem.razor"));
+        Assert.Contains("_item.SelectedTestItems", list);
+        Assert.Contains("selected.TaskId is null", list);
+        Assert.DoesNotContain("VerificationWorkTaskCard", list);
+        Assert.DoesNotContain("Progress%", list);
+        Assert.Contains("VerificationWorkTaskCard", task);
+        Assert.Contains("/api/verification-work/{RecordId}/tasks/{TaskId}", task);
+        Assert.Contains("x.TaskId is null", historical);
+        Assert.DoesNotContain("VerificationWorkTaskCard", historical);
+        Assert.DoesNotContain("UploadFilesAsync", historical);
     }
 
     private static ValidationRequestSubmissionDto Submission(string[] selected)

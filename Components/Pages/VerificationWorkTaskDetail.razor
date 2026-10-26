@@ -1,0 +1,63 @@
+@page "/validation-request-applications/work/{RecordId:guid}/tasks/{TaskId:guid}"
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@using Microsoft.AspNetCore.Authorization
+@using SIT.DepartmentSystem.Web.Models.Api
+@inject BrowserApiClient Api
+
+<PageTitle>測試項目明細</PageTitle>
+<nav class="work-breadcrumb" aria-label="頁面導覽">
+    <a href="/validation-request-applications">驗證申請專區</a><span>›</span>
+    <a href="@($"/validation-request-applications/work/{RecordId}")">測試項目</a><span>›</span><span>項目明細</span>
+</nav>
+<h3 class="page-title">測試項目明細</h3>
+
+@if (_error is not null) { <div class="surface-card error-text">@_error</div> }
+else if (_loading) { <div class="surface-card">載入中...</div> }
+else if (_item is not null)
+{
+    <section class="surface-card task-context">
+        <div><span>Model Name</span><strong>@_item.ModelName</strong></div>
+        <div><span>申請編號</span><strong>@_item.ApplicationNo</strong></div>
+        <div><span>分類</span><strong>@_item.SelectedItem.Category</strong></div>
+    </section>
+    <section class="surface-card task-parameters">
+        <h4>原申請測試參數</h4>
+        @if (_item.SelectedItem.Parameters.Count == 0) { <p>原申請未填寫測試參數。</p> }
+        else
+        {
+            <dl>
+                @foreach (var parameter in _item.SelectedItem.Parameters)
+                {
+                    <dt>@parameter.Name</dt><dd>@string.Join("、", parameter.Values)</dd>
+                }
+            </dl>
+        }
+    </section>
+    <VerificationWorkTaskCard RecordId="RecordId" Task="_item.Task" Engineers="_engineers" OnChanged="ReloadAsync" />
+}
+
+@code {
+    [Parameter] public Guid RecordId { get; set; }
+    [Parameter] public Guid TaskId { get; set; }
+    private VerificationWorkTaskDetailDto? _item;
+    private IReadOnlyList<AssignableEngineerDto> _engineers = [];
+    private bool _loading = true;
+    private string? _error;
+
+    protected override Task OnParametersSetAsync() => ReloadAsync();
+    private async Task ReloadAsync()
+    {
+        try
+        {
+            _error = null;
+            _item = await Api.GetOptionalAsync<VerificationWorkTaskDetailDto>(
+                $"/api/verification-work/{RecordId}/tasks/{TaskId}");
+            if (_item is null) { _error = "找不到屬於此案件的可管理測試項目。"; return; }
+            _engineers = await Api.GetAsync<List<AssignableEngineerDto>>(
+                $"/api/records/{RecordId}/assignable-engineers");
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _loading = false; }
+    }
+}

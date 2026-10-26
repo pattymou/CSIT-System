@@ -1,0 +1,7 @@
+.work-task-card .report-panel { border-top-color:rgba(120,160,185,.22); }
+.work-task-card .project-table { min-width:0; table-layout:fixed; }
+.work-task-card .project-table th,
+.work-task-card .project-table td { padding:13px 10px; white-space:normal; overflow-wrap:anywhere; }
+@media(max-width:750px) {
+    .work-task-card .project-table { min-width:700px; }
+}

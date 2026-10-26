@@ -41,6 +41,7 @@
 
 @code {
     [Parameter, EditorRequired] public VerificationWorkTaskDto Task { get; set; } = null!;
+    [Parameter, EditorRequired] public Guid RecordId { get; set; }
     [Parameter] public IReadOnlyList<AssignableEngineerDto> Engineers { get; set; } = [];
     [Parameter] public EventCallback OnChanged { get; set; }
     private string? _engineer; private string _status = "Open"; private DateOnly? _completionDate; private string? _note;
@@ -53,7 +54,7 @@
         _busy = true; _error = null;
         try
         {
-            var response = await Api.PutJsonAsync($"/api/verification-work/tasks/{Task.Id}", new UpdateVerificationWorkTaskRequest { Status = _status, AssignEngineer = _engineer, ActualCompletionDate = _completionDate, Note = _note });
+            var response = await Api.PutJsonAsync($"/api/verification-work/{RecordId}/tasks/{Task.Id}", new UpdateVerificationWorkTaskRequest { Status = _status, AssignEngineer = _engineer, ActualCompletionDate = _completionDate, Note = _note });
             response.EnsureSuccess(); await OnChanged.InvokeAsync();
         }
         catch (Exception ex) { _error = ex.Message; }

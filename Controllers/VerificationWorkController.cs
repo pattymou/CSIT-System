@@ -21,6 +21,14 @@ public sealed class VerificationWorkController(IVerificationWorkManagementServic
         return result is null ? NotFound() : Ok(result);
     }
 
+    [HttpGet("{recordId:guid}/tasks/{taskId:guid}")]
+    public async Task<ActionResult<VerificationWorkTaskDetailDto>> GetTask(
+        Guid recordId, Guid taskId, CancellationToken cancellationToken)
+    {
+        var result = await service.GetTaskAsync(recordId, taskId, cancellationToken);
+        return result is null ? NotFound() : Ok(result);
+    }
+
     [HttpPut("{recordId:guid}/status")]
     [BusinessWrite]
     public async Task<IActionResult> UpdateStatus(
@@ -44,6 +52,21 @@ public sealed class VerificationWorkController(IVerificationWorkManagementServic
         try
         {
             await service.UpdateTaskAsync(taskId, request, cancellationToken);
+            return NoContent();
+        }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+    }
+
+    [HttpPut("{recordId:guid}/tasks/{taskId:guid}")]
+    [BusinessWrite]
+    public async Task<IActionResult> UpdateTaskForRecord(
+        Guid recordId, Guid taskId, UpdateVerificationWorkTaskRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await service.UpdateTaskForRecordAsync(recordId, taskId, request, cancellationToken);
             return NoContent();
         }
         catch (KeyNotFoundException) { return NotFound(); }
