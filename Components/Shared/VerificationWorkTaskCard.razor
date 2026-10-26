@@ -1,0 +1,78 @@
+@using Microsoft.AspNetCore.Components.Forms
+@using SIT.DepartmentSystem.Web.Models.Api
+@inject BrowserApiClient Api
+
+<div class="surface-card work-task-card">
+    <div class="case-card-head"><div><div class="case-kicker">@Task.Category</div><h2>@Task.Name</h2></div><span class="record-status-pill">@Task.Status</span></div>
+    @if (_error is not null) { <div class="error-text">@_error</div> }
+    <div class="task-grid">
+        <label>指派工程師
+            <select @bind="_engineer"><option value="">未指派</option>@foreach (var engineer in Engineers) { <option value="@engineer.Account">@EngineerText(engineer)</option> }</select>
+        </label>
+        <label>狀態<select @bind="_status"><option>Open</option><option>Hold</option><option>Close</option></select></label>
+        <label>實際完成日期<input type="date" @bind="_completionDate" /></label>
+        <label class="wide">備註<textarea @bind="_note"></textarea></label>
+    </div>
+    <div class="form-actions"><button class="btn-primary" @onclick="SaveAsync" disabled="@_busy">儲存測試項目</button></div>
+
+    <div class="report-panel">
+        <h3>測試報告</h3>
+        @if (!Task.Reports.Any())
+        {
+            <div class="upload-box" @ref="_newReportContainer"><InputFile OnChange="e => _newSelected = e.FileCount == 1" /><button class="table-chip-btn" @onclick="UploadReportAsync" disabled="@(!_newSelected || _busy)">上傳測試報告</button></div>
+        }
+        else
+        {
+            <div class="upload-box" @ref="_versionContainer"><InputFile OnChange="e => _versionSelected = e.FileCount == 1" /><button class="table-chip-btn" @onclick="UploadVersionAsync" disabled="@(!_versionSelected || _busy)">上傳新版</button></div>
+            <div class="project-table-wrap"><table class="project-table"><thead><tr><th>版本</th><th>檔名</th><th>審核</th><th>上傳時間</th><th>操作</th></tr></thead><tbody>
+            @foreach (var report in Task.Reports.OrderByDescending(x => x.VersionNo))
+            {
+                <tr><td>v@report.VersionNo</td><td>@report.FileName</td><td>@(report.IsFinal ? "Final" : report.ReviewStatus ?? "—")</td><td>@report.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td><td><a class="table-link-btn" href="@($"/api/files/{report.Id}/download")" target="_blank">下載</a></td></tr>
+            }
+            </tbody></table></div>
+        }
+    </div>
+</div>
+
+<style>
+    .work-task-card{margin-top:1rem}.task-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.task-grid label{display:flex;flex-direction:column;gap:5px}.task-grid .wide{grid-column:1/-1}.report-panel{margin-top:1rem;border-top:1px solid #e2e8f0;padding-top:1rem}
+    @@media(max-width:800px){.task-grid{grid-template-columns:1fr}}
+</style>
+
+@code {
+    [Parameter, EditorRequired] public VerificationWorkTaskDto Task { get; set; } = null!;
+    [Parameter] public IReadOnlyList<AssignableEngineerDto> Engineers { get; set; } = [];
+    [Parameter] public EventCallback OnChanged { get; set; }
+    private string? _engineer; private string _status = "Open"; private DateOnly? _completionDate; private string? _note;
+    private ElementReference _newReportContainer; private ElementReference _versionContainer;
+    private bool _newSelected; private bool _versionSelected; private bool _busy; private string? _error;
+
+    protected override void OnParametersSet() { _engineer = Task.AssignEngineer; _status = Task.Status; _completionDate = Task.ActualCompletionDate; _note = Task.Note; }
+    private async Task SaveAsync()
+    {
+        _busy = true; _error = null;
+        try
+        {
+            var response = await Api.PutJsonAsync($"/api/verification-work/tasks/{Task.Id}", new UpdateVerificationWorkTaskRequest { Status = _status, AssignEngineer = _engineer, ActualCompletionDate = _completionDate, Note = _note });
+            response.EnsureSuccess(); await OnChanged.InvokeAsync();
+        }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+    private async Task UploadReportAsync()
+    {
+        _busy = true; _error = null;
+        try { var response = await Api.UploadFilesAsync($"/api/tasks/{Task.Id}/test-reports", _newReportContainer); response.EnsureSuccess(); _newSelected = false; await OnChanged.InvokeAsync(); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+    private async Task UploadVersionAsync()
+    {
+        var latest = Task.Reports.OrderByDescending(x => x.VersionNo).First();
+        _busy = true; _error = null;
+        try { var response = await Api.UploadFilesAsync($"/api/files/{latest.Id}/versions", _versionContainer); response.EnsureSuccess(); _versionSelected = false; await OnChanged.InvokeAsync(); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+    private static string EngineerText(AssignableEngineerDto value) => string.IsNullOrWhiteSpace(value.DisplayName) ? value.Account : $"{value.DisplayName} ({value.Account})";
+}

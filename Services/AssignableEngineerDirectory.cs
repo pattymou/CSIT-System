@@ -4,9 +4,15 @@ using SIT.DepartmentSystem.Web.Models.Api;
 
 namespace SIT.DepartmentSystem.Web.Services;
 
+public interface IAssignableEngineerDirectory
+{
+    Task<IReadOnlyList<AssignableEngineerDto>> GetForRecordAsync(Guid recordId, CancellationToken cancellationToken = default);
+    Task<string?> ResolveAssignableAccountAsync(Guid recordId, string? account, CancellationToken cancellationToken = default);
+}
+
 public sealed class AssignableEngineerDirectory(
     AppDbContext db,
-    SharedIdentityProvisioningClient provisioningClient)
+    SharedIdentityProvisioningClient provisioningClient) : IAssignableEngineerDirectory
 {
     public async Task<IReadOnlyList<AssignableEngineerDto>> GetForRecordAsync(
         Guid recordId,

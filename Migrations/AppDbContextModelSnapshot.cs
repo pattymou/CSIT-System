@@ -1485,6 +1485,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("sort_order");
 
+                    b.Property<string>("SourceTestCategoryCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("source_test_category_code");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasColumnType("text")
@@ -1500,7 +1505,9 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("RecordId");
+                    b.HasIndex("RecordId", "SourceTestCategoryCode")
+                        .IsUnique()
+                        .HasFilter("source_test_category_code IS NOT NULL");
 
                     b.ToTable("module_record_cases", (string)null);
                 });
@@ -1511,6 +1518,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
                         .HasColumnName("id");
+
+                    b.Property<DateOnly?>("ActualCompletionDate")
+                        .HasColumnType("date")
+                        .HasColumnName("actual_completion_date");
 
                     b.Property<string>("AssignEngineer")
                         .HasColumnType("text")
@@ -1561,6 +1572,15 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("text")
                         .HasColumnName("result");
 
+                    b.Property<string>("SourceTestItemCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("source_test_item_code");
+
+                    b.Property<string>("SourceTestParametersJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("source_test_parameters_json");
+
                     b.Property<DateOnly?>("StartDate")
                         .HasColumnType("date")
                         .HasColumnName("start_date");
@@ -1585,7 +1605,9 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("CaseId");
+                    b.HasIndex("CaseId", "SourceTestItemCode")
+                        .IsUnique()
+                        .HasFilter("source_test_item_code IS NOT NULL");
 
                     b.ToTable("module_record_tasks", (string)null);
                 });

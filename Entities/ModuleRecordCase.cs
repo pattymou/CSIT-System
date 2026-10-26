@@ -9,6 +9,7 @@ public class ModuleRecordCase
     public string Status { get; set; } = "Open";
     public string? Note { get; set; }
     public int SortOrder { get; set; }
+    public string? SourceTestCategoryCode { get; set; }
 
     public string? WifiNo { get; set; }
     public string? BtNo { get; set; }

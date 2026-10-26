@@ -343,6 +343,7 @@ public class AppDbContext : DbContext
             entity.Property(x => x.Note).HasColumnName("note");
             entity.Property(x => x.SortOrder).HasColumnName("sort_order");
             entity.Property(x => x.WifiNo).HasColumnName("wifi_no");
+            entity.Property(x => x.SourceTestCategoryCode).HasColumnName("source_test_category_code").HasMaxLength(100);
             entity.Property(x => x.BtNo).HasColumnName("bt_no");
             entity.Property(x => x.GcfNo).HasColumnName("gcf_no");
             entity.Property(x => x.PtcrbNo).HasColumnName("ptcrb_no");
@@ -353,6 +354,9 @@ public class AppDbContext : DbContext
             entity.HasOne(x => x.Record)
                 .WithMany(x => x.Cases)
                 .HasForeignKey(x => x.RecordId);
+            entity.HasIndex(x => new { x.RecordId, x.SourceTestCategoryCode })
+                .IsUnique()
+                .HasFilter("source_test_category_code IS NOT NULL");
         });
 
         modelBuilder.Entity<ModuleRecordTask>(entity =>
@@ -370,6 +374,9 @@ public class AppDbContext : DbContext
             entity.Property(x => x.Progress).HasColumnName("progress");
             entity.Property(x => x.StartDate).HasColumnName("start_date");
             entity.Property(x => x.ExpectedEndDate).HasColumnName("expected_end_date");
+            entity.Property(x => x.ActualCompletionDate).HasColumnName("actual_completion_date");
+            entity.Property(x => x.SourceTestItemCode).HasColumnName("source_test_item_code").HasMaxLength(100);
+            entity.Property(x => x.SourceTestParametersJson).HasColumnName("source_test_parameters_json").HasColumnType("jsonb");
             entity.Property(x => x.SubPu).HasColumnName("sub_pu");
             entity.Property(x => x.ModelName).HasColumnName("model_name");
             entity.Property(x => x.Lab).HasColumnName("lab");
@@ -382,6 +389,9 @@ public class AppDbContext : DbContext
             entity.HasOne(x => x.Case)
                 .WithMany(x => x.Tasks)
                 .HasForeignKey(x => x.CaseId);
+            entity.HasIndex(x => new { x.CaseId, x.SourceTestItemCode })
+                .IsUnique()
+                .HasFilter("source_test_item_code IS NOT NULL");
         });
 
         modelBuilder.Entity<MenuSection>(entity =>

@@ -94,6 +94,7 @@ public sealed class VerificationDraftSaveAndGuidanceTests
             null!,
             Options.Create(new SIT.DepartmentSystem.Web.Models.Config.DocumentStagingOptions()),
             factory,
+            null!,
             null!);
         var systemOptions = new SystemOptionService(retainedCircuitContext, factory, null!);
         var user = new ClaimsPrincipal(new ClaimsIdentity([new Claim("account", "applicant")], "test"));

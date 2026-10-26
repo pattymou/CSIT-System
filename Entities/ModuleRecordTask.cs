@@ -18,6 +18,9 @@ public class ModuleRecordTask
     public int Progress { get; set; }
     public DateOnly? StartDate { get; set; }
     public DateOnly? ExpectedEndDate { get; set; }
+    public DateOnly? ActualCompletionDate { get; set; }
+    public string? SourceTestItemCode { get; set; }
+    public string? SourceTestParametersJson { get; set; }
 
     // 舊系統欄位：Sub PU / 機種名稱 / 實驗室名稱 / 報價金額 / 請款金額 / 備註
     public string? SubPu { get; set; }

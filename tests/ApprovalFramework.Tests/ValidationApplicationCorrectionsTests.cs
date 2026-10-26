@@ -159,7 +159,7 @@ public sealed class ValidationApplicationCorrectionsTests
         ValidationRequestSubmissionDto submission)
     {
         var service = new VerificationApplicationService(db, null!, null!, null!, null!,
-            Options.Create(new DocumentStagingOptions()), null!, null!);
+            Options.Create(new DocumentStagingOptions()), null!, null!, null!);
         var method = typeof(VerificationApplicationService).GetMethod(
             "ResolveDynamicRoutingAsync",
             BindingFlags.NonPublic | BindingFlags.Instance,

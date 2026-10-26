@@ -28,6 +28,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     private readonly DocumentStagingOptions _stagingOptions;
     private readonly VerificationAttachmentArchiveProcessor _attachmentArchive;
     private readonly bool _kmEnabled;
+    private readonly VerificationWorkItemProvisioner _workItems;
 
     public VerificationApplicationService(
         AppDbContext db,
@@ -38,6 +39,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         IOptions<DocumentStagingOptions> stagingOptions,
         IDbContextFactory<AppDbContext> dbFactory,
         VerificationAttachmentArchiveProcessor attachmentArchive,
+        VerificationWorkItemProvisioner workItems,
         IOptions<KmIntegrationOptions>? kmOptions = null)
     {
         _db = db;
@@ -49,6 +51,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         _stagingOptions = stagingOptions.Value;
         _attachmentArchive = attachmentArchive;
         _kmEnabled = kmOptions?.Value.Enabled == true;
+        _workItems = workItems;
     }
 
     public async Task<VerificationApplicationDto> CreateDraftAsync(
@@ -844,6 +847,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             DspModel = entity.DspModel,
             JiraLink = entity.JiraLink
         }, cancellationToken);
+        await _workItems.EnsureAsync(entity, moduleRecord, now, cancellationToken);
         entity.Accept(moduleRecord.Id, expectedEndDate, processedBy, now, processingNote);
     }
 

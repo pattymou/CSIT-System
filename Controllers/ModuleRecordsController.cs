@@ -12,11 +12,11 @@ namespace SIT.DepartmentSystem.Web.Controllers;
 public class ModuleRecordsController : ControllerBase
 {
     private readonly IModuleRecordService _service;
-    private readonly AssignableEngineerDirectory _engineerDirectory;
+    private readonly IAssignableEngineerDirectory _engineerDirectory;
 
     public ModuleRecordsController(
         IModuleRecordService service,
-        AssignableEngineerDirectory engineerDirectory)
+        IAssignableEngineerDirectory engineerDirectory)
     {
         _service = service;
         _engineerDirectory = engineerDirectory;

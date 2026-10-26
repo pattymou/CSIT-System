@@ -11,12 +11,12 @@ public class ModuleTaskService : IModuleTaskService
 {
     private readonly AppDbContext _db;
     private readonly ICaseFileService _caseFileService;
-    private readonly AssignableEngineerDirectory _engineerDirectory;
+    private readonly IAssignableEngineerDirectory _engineerDirectory;
 
     public ModuleTaskService(
         AppDbContext db,
         ICaseFileService caseFileService,
-        AssignableEngineerDirectory engineerDirectory)
+        IAssignableEngineerDirectory engineerDirectory)
     {
         _db = db;
         _caseFileService = caseFileService;

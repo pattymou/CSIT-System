@@ -375,7 +375,7 @@ public sealed class VerificationApplicationAttachmentTests
 
     private static VerificationApplicationService ApplicationService(AppDbContext db, string root) => new(
         db, null!, null!, new AllowWrite(), null!,
-        Options.Create(new DocumentStagingOptions { RootPath = root }), null!, null!);
+        Options.Create(new DocumentStagingOptions { RootPath = root }), null!, null!, null!);
 
     private static IFormFile FormFile(string name, string content)
     {
