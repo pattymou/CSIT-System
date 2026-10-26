@@ -169,6 +169,21 @@ public sealed class VerificationTwoLevelManagementTests
         Assert.Contains("await _workItems.EnsureAsync(entity, moduleRecord, now, cancellationToken)", source);
     }
 
+    [Fact]
+    public void ValidationRequestApplicationsLoadsSharedDbContextServicesSequentially()
+    {
+        var source = File.ReadAllText(Path.Combine(
+            RepositoryRoot(), "Components", "Pages", "ValidationRequestApplications.razor"));
+        var workAwait = source.IndexOf("_work = await Work.ListAsync();", StringComparison.Ordinal);
+        var applicationsAwait = source.IndexOf(
+            "_applications = (await Applications.ListForCsitAsync(user, 1, 200)).Items.ToList();",
+            StringComparison.Ordinal);
+
+        Assert.True(workAwait >= 0, "The work list must be awaited directly.");
+        Assert.True(applicationsAwait > workAwait, "The application list must start after the work list completes.");
+        Assert.DoesNotContain("Task.WhenAll", source, StringComparison.Ordinal);
+    }
+
     private static ValidationRequestSubmissionDto Submission(string[] selected)
     {
         var version = Guid.NewGuid();

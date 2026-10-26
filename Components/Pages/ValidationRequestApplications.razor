@@ -65,11 +65,8 @@ else
         try
         {
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
-            var workTask = Work.ListAsync();
-            var applicationsTask = Applications.ListForCsitAsync(user, 1, 200);
-            await Task.WhenAll(workTask, applicationsTask);
-            _work = await workTask;
-            _applications = (await applicationsTask).Items.ToList();
+            _work = await Work.ListAsync();
+            _applications = (await Applications.ListForCsitAsync(user, 1, 200)).Items.ToList();
         }
         catch (Exception ex) { _error = ex.Message; }
         finally { _loading = false; }
