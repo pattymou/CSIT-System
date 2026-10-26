@@ -17,6 +17,7 @@ public sealed class KmIntegrationAuthOptions
     public const string SectionName = "KmIntegrationAuth";
     public string? ClientId { get; set; }
     public string? Audience { get; set; }
+    public string? DeletionStatusScope { get; set; }
 }
 
 public sealed class KmIntegrationM2MOptions

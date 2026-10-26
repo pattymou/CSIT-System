@@ -6,6 +6,7 @@ using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
@@ -306,6 +307,12 @@ public sealed class DocumentLibraryService(
         var entity = await db.DocumentLibraryFiles.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == fileId, cancellationToken);
         if (entity is null) return null;
+        var linkedRecordId = await db.VerificationApplicationFiles.AsNoTracking()
+            .Where(x => x.DocumentLibraryFileId == fileId)
+            .Select(x => x.VerificationApplication.ModuleRecordId)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (linkedRecordId is { } recordId &&
+            await VerificationCaseDeletionHold.IsActiveAsync(db, recordId, cancellationToken)) return null;
         var path = ResolvePath(entity.StorageArea, entity.RelativePath);
         if (!File.Exists(path)) throw new FileNotFoundException("文件實體檔案不存在。", path);
         var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);

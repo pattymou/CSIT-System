@@ -30,6 +30,7 @@ public sealed class KmIntegrationController(
             x.ReviewStatus == TestReportReviewStatuses.Approved && x.IsRawDataExported,
             cancellationToken);
         if (file is not null &&
+            !await VerificationCaseDeletionHold.IsActiveAsync(db, file.RecordId, cancellationToken) &&
             await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
                 x.SourceSystem == "CSIT" && x.EventType == "TestReportCommitted" &&
                 x.SourceEntityId == file.Id && x.DocumentId == documentId && x.Version == version,
@@ -46,6 +47,8 @@ public sealed class KmIntegrationController(
             .Include(x => x.DocumentLibraryFile)
             .SingleOrDefaultAsync(x => x.DocumentLibraryFileId == documentId, cancellationToken);
         if (attachment?.DocumentLibraryFile is null ||
+            (attachment.VerificationApplication.ModuleRecordId is { } attachmentRecordId &&
+             await VerificationCaseDeletionHold.IsActiveAsync(db, attachmentRecordId, cancellationToken)) ||
             attachment.VerificationApplication.Status != VerificationApplicationStatus.Accepted ||
             attachment.DocumentLibraryFile.StorageArea != DocumentStorageAreas.Library ||
             !await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
@@ -107,6 +110,13 @@ public sealed class KmIntegrationController(
                 callback.JobId, callback.DocumentId, callback.Version);
             return Conflict(new { error = "callback_mismatch" });
         }
+        var recordId = row.ProjectId ?? await db.VerificationApplicationFiles.AsNoTracking()
+            .Where(x => x.Id == row.SourceEntityId)
+            .Select(x => x.VerificationApplication.ModuleRecordId)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (recordId is { } activeRecordId &&
+            await VerificationCaseDeletionHold.IsActiveAsync(db, activeRecordId, cancellationToken))
+            return Conflict(new { error = "deletion_in_progress" });
         try
         {
             var now = DateTime.UtcNow;

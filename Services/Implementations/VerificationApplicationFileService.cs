@@ -195,6 +195,9 @@ public sealed class VerificationApplicationFileService(
             .SingleOrDefaultAsync(x => x.Id == fileId, cancellationToken);
         if (file is null) return null;
         EnsureCanView(file.VerificationApplication, user);
+        if (file.VerificationApplication.ModuleRecordId is { } recordId &&
+            await VerificationCaseDeletionHold.IsActiveAsync(db, recordId, cancellationToken))
+            return null;
         var storageArea = file.DocumentLibraryFile?.StorageArea ?? DocumentStorageAreas.Staging;
         var relativePath = file.DocumentLibraryFile?.RelativePath ?? file.FilePath;
         var absolutePath = ResolvePath(storageArea, relativePath);

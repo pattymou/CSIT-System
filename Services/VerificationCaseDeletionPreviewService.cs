@@ -152,7 +152,7 @@ public sealed class VerificationCaseDeletionPreviewService(
 
         var blockers = new List<string>
         {
-            "v1.2 附錄 B 與 KM 刪除 API 尚未確認；目前僅提供盤點，不能執行刪除。"
+            "v1.2 附錄 B 已確認；KM 刪除 API 與資料庫 Migration 尚未驗收，目前僅提供盤點。"
         };
         if (files.Any(x => x.FileKind == ModuleCaseFileKinds.TestReport &&
             (x.ReviewStatus == TestReportReviewStatuses.Approved || x.IsFinal)))

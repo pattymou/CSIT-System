@@ -52,6 +52,9 @@ public sealed class KmSyncWorker(
             command.CommandText = """
                 SELECT id FROM km_integration_outbox
                 WHERE event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND
+                  NOT EXISTS (SELECT 1 FROM verification_case_deletion_jobs AS deletion
+                    WHERE deletion.record_id = km_integration_outbox.project_id
+                    AND deletion.status IN ('WaitingForKm', 'KmVerified')) AND
                   (status = 'Pending' OR retry_count < @max) AND
                   (status = 'Pending' OR
                    (status = 'Failed' AND next_retry_at <= @now) OR
@@ -71,6 +74,9 @@ public sealed class KmSyncWorker(
                 .FirstOrDefaultAsync(x =>
                     x.EventType == KmIntegrationEventTypes.TestReportCommitted &&
                     x.SourceEntityType == KmIntegrationSourceEntityTypes.TestReport &&
+                    !db.VerificationCaseDeletionJobs.Any(deletion =>
+                        deletion.RecordId == x.ProjectId &&
+                        (deletion.Status == "WaitingForKm" || deletion.Status == "KmVerified")) &&
                     (x.Status == KmIntegrationStatus.Pending ||
                     x.RetryCount < options.MaxRetryCount) &&
                     (x.Status == KmIntegrationStatus.Pending ||
@@ -145,6 +151,8 @@ public sealed class KmSyncWorker(
             row.SourceEntityType != KmIntegrationSourceEntityTypes.TestReport ||
             !row.ProjectId.HasValue)
             return null;
+        if (await VerificationCaseDeletionHold.IsActiveAsync(db, row.ProjectId.Value,
+            cancellationToken)) return null;
         var file = await db.ModuleCaseFiles.AsNoTracking().SingleOrDefaultAsync(x =>
             x.Id == row.SourceEntityId && x.DocumentId == row.DocumentId && x.VersionNo == row.Version &&
             x.FileKind == ModuleCaseFileKinds.TestReport &&

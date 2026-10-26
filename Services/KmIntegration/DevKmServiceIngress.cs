@@ -35,7 +35,8 @@ public static partial class DevKmServiceIngress
         if (context.Connection.LocalPort != Port) return true;
         var path = context.Request.Path.Value ?? string.Empty;
         return (HttpMethods.IsPost(context.Request.Method) &&
-                path.Equals("/api/integrations/km/v1/ingestion-status", StringComparison.OrdinalIgnoreCase)) ||
+                (path.Equals("/api/integrations/km/v1/ingestion-status", StringComparison.OrdinalIgnoreCase) ||
+                 path.Equals("/api/integrations/km/v1/document-deletion-status", StringComparison.OrdinalIgnoreCase))) ||
                (HttpMethods.IsGet(context.Request.Method) && DocumentContentPath().IsMatch(path));
     }
 

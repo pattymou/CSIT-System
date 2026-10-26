@@ -219,6 +219,11 @@ builder.Services.AddAuthorization(options =>
         policy.AddAuthenticationSchemes(KmIntegrationAuthorization.Scheme)
             .RequireAuthenticatedUser().AddRequirements(
                 new KmServicePrincipalRequirement(KmIntegrationAuthorization.StatusWriteScope)));
+    options.AddPolicy(KmIntegrationAuthorization.DeletionStatusWritePolicy, policy =>
+        policy.AddAuthenticationSchemes(KmIntegrationAuthorization.Scheme)
+            .RequireAuthenticatedUser().AddRequirements(
+                new KmServicePrincipalRequirement(
+                    builder.Configuration["KmIntegrationAuth:DeletionStatusScope"] ?? "__not_configured__")));
     options.AddPolicy(SystemAuthorization.Policies.RdApplicant, policy =>
         policy.RequireAuthenticatedUser()
             .RequireClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.RdApplicant));
@@ -237,6 +242,7 @@ builder.Services.AddAuthorization(options =>
             .AddRequirements(new BusinessWriteRequirement()));
 });
 builder.Services.Configure<KmIntegrationOptions>(builder.Configuration.GetSection(KmIntegrationOptions.SectionName));
+builder.Services.Configure<KmDeletionOptions>(builder.Configuration.GetSection(KmDeletionOptions.SectionName));
 builder.Services.Configure<KmIntegrationAuthOptions>(builder.Configuration.GetSection(KmIntegrationAuthOptions.SectionName));
 builder.Services.Configure<KmIntegrationM2MOptions>(builder.Configuration.GetSection(KmIntegrationM2MOptions.SectionName));
 builder.Services.PostConfigure<KmIntegrationM2MOptions>(options =>
@@ -246,9 +252,9 @@ var m2mConfiguration = builder.Configuration.GetSection(KmIntegrationM2MOptions.
     .Get<KmIntegrationM2MOptions>();
 if (m2mConfiguration is not null)
     m2mConfiguration.Authority = builder.Configuration["SharedIdentity:Authority"];
+builder.Services.AddSingleton(TimeProvider.System);
 if (useSharedIdentity && m2mConfiguration?.IsConfigured == true)
 {
-    builder.Services.AddSingleton(TimeProvider.System);
     builder.Services.AddHttpClient(ClientCredentialsKmIntegrationAccessTokenProvider.HttpClientName,
             http => http.Timeout = TimeSpan.FromSeconds(15))
         .RedactLoggedHeaders(_ => true);
@@ -259,6 +265,11 @@ else
     builder.Services.AddSingleton<IKmIntegrationAccessTokenProvider,
         UnavailableKmIntegrationAccessTokenProvider>();
 builder.Services.AddHttpClient<IKmIntegrationClient, KmIntegrationClient>();
+builder.Services.AddSingleton<IKmDeletionAccessTokenProvider, KmDeletionAccessTokenProvider>();
+builder.Services.AddHttpClient<IKmDeletionClient, KmDeletionClient>();
+builder.Services.AddScoped<KmDeletionCallbackService>();
+builder.Services.AddScoped<KmDeletionDispatchService>();
+builder.Services.AddScoped<VerificationCaseDeletionPreparationService>();
 builder.Services.AddScoped<KmSyncWorker>();
 builder.Services.AddScoped<KmManualRetryService>();
 builder.Services.AddScoped<KmSyncDiagnostics>();

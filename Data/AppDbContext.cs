@@ -41,6 +41,9 @@ public class AppDbContext : DbContext
     public DbSet<ApprovalAuditEvent> ApprovalAuditEvents => Set<ApprovalAuditEvent>();
     public DbSet<KmIntegrationOutbox> KmIntegrationOutbox => Set<KmIntegrationOutbox>();
     public DbSet<KmIntegrationManualRetryAudit> KmIntegrationManualRetryAudits => Set<KmIntegrationManualRetryAudit>();
+    public DbSet<VerificationCaseDeletionJob> VerificationCaseDeletionJobs => Set<VerificationCaseDeletionJob>();
+    public DbSet<VerificationCaseDeletionTarget> VerificationCaseDeletionTargets => Set<VerificationCaseDeletionTarget>();
+    public DbSet<VerificationCaseDeletionCallbackReceipt> VerificationCaseDeletionCallbacks => Set<VerificationCaseDeletionCallbackReceipt>();
     public DbSet<ValidationFormTemplate> ValidationFormTemplates => Set<ValidationFormTemplate>();
     public DbSet<ValidationFormTemplateVersion> ValidationFormTemplateVersions => Set<ValidationFormTemplateVersion>();
     public DbSet<ValidationProductType> ValidationProductTypes => Set<ValidationProductType>();
@@ -89,6 +92,7 @@ public class AppDbContext : DbContext
         modelBuilder.ConfigureApparatusResourceCapabilities();
         modelBuilder.ConfigureSupervisorApproval();
         modelBuilder.ConfigureKmIntegration();
+        modelBuilder.ConfigureVerificationCaseDeletion();
         modelBuilder.ConfigureValidationRequests();
 
         modelBuilder.Entity<DocumentFolder>(entity =>

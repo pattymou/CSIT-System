@@ -8,6 +8,7 @@ using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 using SIT.DepartmentSystem.Web.Services.Approval;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
@@ -590,6 +591,8 @@ public class CaseFileService : ICaseFileService
         var file = await _db.ModuleCaseFiles.FirstOrDefaultAsync(x => x.Id == fileId);
         if (file == null)
             throw new FileNotFoundException("找不到檔案資料");
+        if (await VerificationCaseDeletionHold.IsActiveAsync(_db, file.RecordId))
+            throw new FileNotFoundException("案件刪除處理中，檔案下載已停用。");
 
         var fullPath = Path.Combine(file.FilePath, file.FileName);
 
