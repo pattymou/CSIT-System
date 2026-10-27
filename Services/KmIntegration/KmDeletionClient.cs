@@ -69,7 +69,7 @@ public sealed class KmDeletionClient(
         string token;
         try { token = await tokens.GetAccessTokenAsync(cancellationToken); }
         catch (Exception) when (!cancellationToken.IsCancellationRequested)
-        { return KmDeletionDeliveryResult.Failure(false, "AUTH_UNAVAILABLE"); }
+        { return KmDeletionDeliveryResult.Failure(true, "AUTH_UNAVAILABLE"); }
         if (string.IsNullOrWhiteSpace(token))
             return KmDeletionDeliveryResult.Failure(false, "AUTH_UNAVAILABLE");
 

@@ -76,6 +76,188 @@ public sealed class KmDeletionContractTests
     }
 
     [Fact]
+    public async Task MockKmUsesFormalEndpointAndPreservesIdempotencyAcrossFailures()
+    {
+        await using var mock = await MockKmDeletionServer.StartAsync();
+        var client = MockClient(mock.Client, timeoutSeconds: 1);
+        var request = Request();
+
+        var accepted = await client.SubmitAsync(request);
+        var repeated = await client.SubmitAsync(request);
+        Assert.True(accepted.Accepted);
+        Assert.Equal(accepted.JobId, repeated.JobId);
+        Assert.Single(mock.DeletionRequestIds);
+
+        var conflict = await client.SubmitAsync(request with { ReasonCode = "AdministrativeCleanup" });
+        Assert.Equal("HTTP_409", conflict.ErrorCode);
+        Assert.False(conflict.Retryable);
+
+        mock.Enqueue(MockKmDeliveryBehavior.ServiceUnavailable);
+        var unavailable = await client.SubmitAsync(Request());
+        Assert.Equal("HTTP_503", unavailable.ErrorCode);
+        Assert.True(unavailable.Retryable);
+
+        mock.Enqueue(MockKmDeliveryBehavior.Timeout);
+        var timeout = await client.SubmitAsync(Request());
+        Assert.Equal("TIMEOUT", timeout.ErrorCode);
+        Assert.True(timeout.Retryable);
+
+        mock.Enqueue(MockKmDeliveryBehavior.InvalidAcceptedResponse);
+        Assert.Equal("INVALID_RESPONSE", (await client.SubmitAsync(Request())).ErrorCode);
+    }
+
+    [Fact]
+    public async Task ControlledBatchDispatchRetriesPersistedTargetsAndStaysDisabledByDefault()
+    {
+        var factory = new Factory();
+        var job = Job();
+        job.AddTarget(new KmDeletionResource("TestReport", null, Guid.NewGuid(), 3,
+            Guid.NewGuid(), job.ApplicationId, job.RecordId), Now);
+        var prepared = VerificationCaseDeletionJob.Prepare(Guid.NewGuid(), Guid.NewGuid(),
+            "leader", "Prepared deletion remains unfrozen", Now);
+        prepared.AddTarget(new KmDeletionResource("TestReport", null, Guid.NewGuid(), 1,
+            Guid.NewGuid(), prepared.ApplicationId, prepared.RecordId), Now);
+        await using (var db = factory.CreateDbContext())
+        { db.VerificationCaseDeletionJobs.AddRange(job, prepared); await db.SaveChangesAsync(); }
+        await using var mock = await MockKmDeletionServer.StartAsync();
+        var integration = Options.Create(new KmIntegrationOptions
+        { BaseUrl = "https://km.mock.test/", TimeoutSeconds = 2, LeaseSeconds = 30,
+            MaxRetryCount = 3 });
+        var disabled = new KmDeletionDispatchService(factory, MockClient(mock.Client, 2),
+            Options.Create(new KmDeletionOptions()), integration);
+        Assert.Equal(0, await disabled.ProcessBatchAsync());
+        Assert.Empty(mock.DeletionRequestIds);
+
+        mock.Enqueue(MockKmDeliveryBehavior.ServiceUnavailable);
+        var enabled = Options.Create(new KmDeletionOptions
+        { Enabled = true, Scope = "csit.document.delete" });
+        Assert.Equal(1, await new KmDeletionDispatchService(factory, MockClient(mock.Client, 2),
+            enabled, integration).ProcessBatchAsync());
+        Assert.Equal(1, await new KmDeletionDispatchService(factory, MockClient(mock.Client, 2),
+            enabled, integration).ProcessBatchAsync());
+        Assert.Equal(2, mock.DeletionRequestIds.Count);
+
+        await using var verify = factory.CreateDbContext();
+        var targets = await verify.VerificationCaseDeletionTargets
+            .Where(x => x.JobId == job.Id).OrderBy(x => x.Id).ToListAsync();
+        Assert.All(targets, target =>
+        {
+            Assert.Equal("Accepted", target.Status);
+            Assert.NotNull(target.KmDeletionJobId);
+        });
+        Assert.Contains(targets, target => target.AttemptCount == 2);
+        Assert.Contains(targets, target => target.AttemptCount == 1);
+        Assert.Equal("Pending", (await verify.VerificationCaseDeletionTargets
+            .SingleAsync(x => x.JobId == prepared.Id)).Status);
+    }
+
+    [Fact]
+    public async Task MockCallbackEndpointRejectsInvalidCorrelationAndAcceptsCompletedBeforeProcessing()
+    {
+        var factory = new Factory();
+        var job = Job();
+        var targetId = job.Targets.Single().Id;
+        await using (var db = factory.CreateDbContext())
+        { db.VerificationCaseDeletionJobs.Add(job); await db.SaveChangesAsync(); }
+        await using var mock = await MockKmDeletionServer.StartAsync();
+        await using var callbackHost = await CsitDeletionCallbackTestServer.StartAsync(factory);
+        var options = Options.Create(new KmIntegrationOptions
+        { BaseUrl = "https://km.mock.test/", TimeoutSeconds = 2, LeaseSeconds = 30,
+            MaxRetryCount = 3 });
+        var enabled = Options.Create(new KmDeletionOptions
+        { Enabled = true, Scope = "csit.document.delete" });
+        Assert.Equal(1, await new KmDeletionDispatchService(factory, MockClient(mock.Client, 2),
+            enabled, options).ProcessBatchAsync());
+
+        var completed = mock.CreateCallback(targetId, "Completed");
+        foreach (var invalid in new[]
+        {
+            completed with { Result = completed.Result! with { CleanupVerified = false } },
+            completed with { Result = completed.Result! with
+                { Cleanup = completed.Result.Cleanup with { VectorIndex = "Unknown" } } }
+        })
+        {
+            using var response = await MockKmDeletionServer.SendCallbackAsync(
+                callbackHost.Client, invalid);
+            Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        }
+        foreach (var mismatch in new[]
+        {
+            completed with { CallbackId = Guid.NewGuid(), KmDeletionJobId = "forged-job" },
+            completed with { CallbackId = Guid.NewGuid(), Resource = completed.Resource with
+                { DocumentId = Guid.NewGuid() } }
+        })
+        {
+            using var response = await MockKmDeletionServer.SendCallbackAsync(
+                callbackHost.Client, mismatch);
+            Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        }
+        using (var unknown = await MockKmDeletionServer.SendCallbackAsync(callbackHost.Client,
+            completed with { CallbackId = Guid.NewGuid(), DeletionRequestId = Guid.NewGuid() }))
+            Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
+
+        using (var response = await MockKmDeletionServer.SendCallbackAsync(
+            callbackHost.Client, completed))
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        using (var duplicate = await MockKmDeletionServer.SendCallbackAsync(
+            callbackHost.Client, completed))
+            Assert.Equal(HttpStatusCode.NoContent, duplicate.StatusCode);
+        using (var late = await MockKmDeletionServer.SendCallbackAsync(callbackHost.Client,
+            mock.CreateCallback(targetId, "Processing")))
+            Assert.Equal(HttpStatusCode.Conflict, late.StatusCode);
+
+        using var unauthorized = await callbackHost.Client.PostAsJsonAsync(
+            "/api/integrations/km/v1/document-deletion-status", completed);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthorized.StatusCode);
+    }
+
+    [Fact]
+    public async Task FailedCallbackRetriesSameRequestAcrossCsitAndMockKmRestart()
+    {
+        var factory = new Factory();
+        var job = Job();
+        var targetId = job.Targets.Single().Id;
+        await using (var db = factory.CreateDbContext())
+        { db.VerificationCaseDeletionJobs.Add(job); await db.SaveChangesAsync(); }
+        var state = new MockKmDeletionState();
+        var firstMock = await MockKmDeletionServer.StartAsync(state);
+        await using var callbackHost = await CsitDeletionCallbackTestServer.StartAsync(factory);
+        var options = Options.Create(new KmIntegrationOptions
+        { BaseUrl = "https://km.mock.test/", TimeoutSeconds = 2, LeaseSeconds = 30,
+            MaxRetryCount = 3 });
+        var enabled = Options.Create(new KmDeletionOptions
+        { Enabled = true, Scope = "csit.document.delete" });
+        Assert.Equal(1, await new KmDeletionDispatchService(factory,
+            MockClient(firstMock.Client, 2), enabled, options).ProcessBatchAsync());
+        var failed = firstMock.CreateCallback(targetId, "Failed", retryable: true);
+        using (var response = await MockKmDeletionServer.SendCallbackAsync(
+            callbackHost.Client, failed))
+            Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        string originalJobId;
+        await using (var pending = factory.CreateDbContext())
+        {
+            var target = await pending.VerificationCaseDeletionTargets.SingleAsync();
+            Assert.Equal("Failed", target.Status);
+            Assert.True(target.LastErrorRetryable);
+            originalJobId = target.KmDeletionJobId!;
+        }
+        await firstMock.DisposeAsync();
+
+        await using var restartedMock = await MockKmDeletionServer.StartAsync(state);
+        Assert.Equal(1, await new KmDeletionDispatchService(factory,
+            MockClient(restartedMock.Client, 2), enabled, options).ProcessBatchAsync());
+        Assert.Equal(0, await new KmDeletionDispatchService(factory,
+            MockClient(restartedMock.Client, 2), enabled, options).ProcessBatchAsync());
+        await using var verify = factory.CreateDbContext();
+        var retried = await verify.VerificationCaseDeletionTargets.SingleAsync();
+        Assert.Equal(targetId, retried.Id);
+        Assert.Equal(originalJobId, retried.KmDeletionJobId);
+        Assert.Equal("Accepted", retried.Status);
+        Assert.Equal(2, retried.AttemptCount);
+        Assert.Single(state.Requests);
+    }
+
+    [Fact]
     public async Task CallbackRequiresExactIdsAndSevenVerifiedCleanupValuesAndIsIdempotent()
     {
         var factory = new Factory();
@@ -419,9 +601,21 @@ public sealed class KmDeletionContractTests
             Options.Create(new KmDeletionOptions { Enabled = enabled, Scope = "configured.delete.scope" }),
             new StaticToken());
 
+    private static KmDeletionClient MockClient(HttpClient http, int timeoutSeconds) =>
+        new(http, Options.Create(new KmIntegrationOptions
+            { BaseUrl = "https://km.mock.test/", TimeoutSeconds = timeoutSeconds }),
+            Options.Create(new KmDeletionOptions
+                { Enabled = true, Scope = "csit.document.delete" }),
+            new FixedToken("mock-km-submit"));
+
     private sealed class StaticToken : IKmDeletionAccessTokenProvider
     {
         public Task<string> GetAccessTokenAsync(CancellationToken _) => Task.FromResult("token");
+    }
+
+    private sealed class FixedToken(string token) : IKmDeletionAccessTokenProvider
+    {
+        public Task<string> GetAccessTokenAsync(CancellationToken _) => Task.FromResult(token);
     }
 
     private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

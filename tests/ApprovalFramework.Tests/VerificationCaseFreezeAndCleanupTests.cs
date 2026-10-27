@@ -473,6 +473,12 @@ public sealed class VerificationCaseFreezeAndCleanupTests
         var firstV2Outbox = KmIntegrationOutbox.ForCommittedTestReport(firstReportV2, now);
         var firstAttachmentOutbox = KmIntegrationOutbox.ForArchivedVerificationAttachment(
             first, firstAttachment, now);
+        foreach (var delivered in new[] { firstV2Outbox, firstAttachmentOutbox })
+        {
+            var lease = Guid.NewGuid();
+            delivered.Claim(lease, now, TimeSpan.FromMinutes(2));
+            delivered.Sent(lease, "KM-INGEST-" + Guid.NewGuid().ToString("N"), now);
+        }
         var otherOutbox = KmIntegrationOutbox.ForCommittedTestReport(otherReport, now);
         var retainedAudit = ApprovalAuditEvent.Create(first.Id, "verification", "verification",
             ApprovalAuditActions.Approved, "leader", now, null, null,
@@ -513,14 +519,17 @@ public sealed class VerificationCaseFreezeAndCleanupTests
                 Value = directory.Path, IsEnabled = true });
             await seed.SaveChangesAsync();
         }
+        Guid deletionJobId;
         await using (var db = factory.CreateDbContext())
         {
             var archive = Archive(factory, directory.Path);
             var confirmation = new VerificationCaseDeletionConfirmationService(db,
                 new VerificationCaseDeletionPreparationService(db, new AllowWrite()), archive,
                 Options.Create(new KmDeletionOptions { Enabled = true }));
-            Assert.Equal("WaitingForKm", (await confirmation.ConfirmAsync(record.Id,
-                first.ApplicationNo, "Delete exact test case", Manager())).Status);
+            var confirmed = await confirmation.ConfirmAsync(record.Id,
+                first.ApplicationNo, "Delete exact test case", Manager());
+            Assert.Equal("WaitingForKm", confirmed.Status);
+            deletionJobId = confirmed.Id;
         }
         await using (var db = factory.CreateDbContext())
         {
@@ -530,26 +539,62 @@ public sealed class VerificationCaseFreezeAndCleanupTests
             Assert.Equal("WaitingForKm",
                 (await db.VerificationCaseDeletionJobs.SingleAsync(x => x.RecordId == record.Id)).Status);
         }
-        Guid deletionTargetId;
-        KmDeletionCallback completedCallback;
-        await using (var db = factory.CreateDbContext())
+        await using var mockKm = await MockKmDeletionServer.StartAsync();
+        await using var callbackHost = await CsitDeletionCallbackTestServer.StartAsync(factory);
+        var dispatchOptions = Options.Create(new KmIntegrationOptions
         {
-            var job = await db.VerificationCaseDeletionJobs.Include(x => x.Targets)
+            BaseUrl = "https://km.mock.test/", TimeoutSeconds = 2, LeaseSeconds = 30,
+            MaxRetryCount = 3
+        });
+        var deletionOptions = Options.Create(new KmDeletionOptions
+            { Enabled = true, Scope = "csit.document.delete" });
+        var dispatcher = new KmDeletionDispatchService(factory,
+            new KmDeletionClient(mockKm.Client, dispatchOptions, deletionOptions,
+                new MockDeletionToken()), deletionOptions, dispatchOptions);
+        Assert.Equal(3, await dispatcher.ProcessJobAsync(deletionJobId));
+
+        Guid deletionTargetId;
+        KmDeletionCallback completedCallback = null!;
+        List<Guid> deletionTargetIds;
+        await using (var verifyAccepted = factory.CreateDbContext())
+        {
+            var acceptedJob = await verifyAccepted.VerificationCaseDeletionJobs.Include(x => x.Targets)
                 .SingleAsync(x => x.RecordId == record.Id);
-            var target = job.Targets.Single(x => x.SourceEntityId == firstReportV1.Id);
-            deletionTargetId = target.Id;
-            var lease = target.ClaimDispatch(now, TimeSpan.FromMinutes(2));
-            target.DeliveryAccepted(lease, "KM-DELETE-" + target.Id.ToString("N"), now);
-            completedCallback = new KmDeletionCallback("1.0", Guid.NewGuid(), "CSIT", target.Id,
-                target.KmDeletionJobId!, target.Resource, "Completed",
-                new KmDeletionTimestamps(new DateTimeOffset(now), new DateTimeOffset(now.AddSeconds(2)), null),
-                new KmDeletionResult(true, new DateTimeOffset(now.AddSeconds(1)),
-                    new KmDeletionCleanup("Deleted", "Deleted", "Deleted", "Deleted",
-                        "Deleted", "Deleted", "NotPresent")), null);
-            await db.SaveChangesAsync();
+            Assert.Equal("WaitingForKm", acceptedJob.Status);
+            Assert.All(acceptedJob.Targets, target => Assert.Equal("Accepted", target.Status));
+            Assert.All(acceptedJob.Targets, target => Assert.NotNull(target.KmDeletionJobId));
+            deletionTargetIds = acceptedJob.Targets.Select(x => x.Id).ToList();
+            deletionTargetId = acceptedJob.Targets
+                .Single(x => x.SourceEntityId == firstReportV1.Id).Id;
         }
-        Assert.Equal(KmDeletionCallbackOutcome.Accepted,
-            await new KmDeletionCallbackService(factory).ApplyAsync(completedCallback));
+        Assert.Equal(3, mockKm.DeletionRequestIds.Count);
+
+        foreach (var targetId in deletionTargetIds)
+        {
+            var processing = mockKm.CreateCallback(targetId, "Processing");
+            using var processingResponse = await MockKmDeletionServer.SendCallbackAsync(
+                callbackHost.Client, processing);
+            Assert.Equal(System.Net.HttpStatusCode.NoContent, processingResponse.StatusCode);
+            var completed = mockKm.CreateCallback(targetId, "Completed");
+            using var completedResponse = await MockKmDeletionServer.SendCallbackAsync(
+                callbackHost.Client, completed);
+            Assert.Equal(System.Net.HttpStatusCode.NoContent, completedResponse.StatusCode);
+            if (targetId == deletionTargetId) completedCallback = completed;
+        }
+        using (var duplicate = await MockKmDeletionServer.SendCallbackAsync(
+            callbackHost.Client, completedCallback))
+            Assert.Equal(System.Net.HttpStatusCode.NoContent, duplicate.StatusCode);
+        await using (var verified = factory.CreateDbContext())
+        {
+            var verifiedJob = await verified.VerificationCaseDeletionJobs.Include(x => x.Targets)
+                .SingleAsync(x => x.RecordId == record.Id);
+            Assert.Equal("KmVerified", verifiedJob.Status);
+            Assert.All(verifiedJob.Targets, target =>
+            {
+                Assert.Equal("Completed", target.Status);
+                Assert.NotNull(target.KmVerifiedAt);
+            });
+        }
         await using (var db = factory.CreateDbContext())
         {
             var cleanup = Cleanup(db, factory, directory.Path);
@@ -709,6 +754,12 @@ public sealed class VerificationCaseFreezeAndCleanupTests
     {
         public Task DemandAsync(CancellationToken cancellationToken = default) =>
             throw new UnauthorizedAccessException("BusinessWrite denied.");
+    }
+
+    private sealed class MockDeletionToken : IKmDeletionAccessTokenProvider
+    {
+        public Task<string> GetAccessTokenAsync(CancellationToken cancellationToken) =>
+            Task.FromResult("mock-km-submit");
     }
 
     private sealed class AdminAuthorization : IAuthorizationService

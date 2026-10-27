@@ -269,6 +269,7 @@ builder.Services.AddSingleton<IKmDeletionAccessTokenProvider, KmDeletionAccessTo
 builder.Services.AddHttpClient<IKmDeletionClient, KmDeletionClient>();
 builder.Services.AddScoped<KmDeletionCallbackService>();
 builder.Services.AddScoped<KmDeletionDispatchService>();
+builder.Services.AddHostedService<KmDeletionBackgroundService>();
 builder.Services.AddScoped<VerificationCaseDeletionPreparationService>();
 builder.Services.AddScoped<VerificationCaseDeletionConfirmationService>();
 builder.Services.AddScoped<VerificationCaseLocalCleanupService>();
