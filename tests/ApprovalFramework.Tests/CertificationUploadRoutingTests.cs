@@ -200,6 +200,73 @@ public sealed class CertificationUploadRoutingTests
         Assert.Equal(ApprovalAuditActions.ApprovalBypassed, Assert.Single(db.ApprovalAuditEvents).Action);
     }
 
+    [Fact]
+    public async Task HistoricalVerificationTaskReportUsesCurrentApplicationMenu()
+    {
+        using var env = new EnvironmentFixture(true);
+        using (var db = env.Factory.CreateDbContext())
+        {
+            var legacy = db.MenuItems.Single(x => x.Code == "verification");
+            legacy.IsEnabled = false;
+            db.SaveChanges();
+        }
+
+        using var services = new ServiceCollection().AddLogging().AddControllers().Services.BuildServiceProvider();
+        var http = new DefaultHttpContext { RequestServices = services, User = User("engineer") };
+        http.Request.Form = new FormCollection(new Dictionary<string, StringValues>(),
+            new FormFileCollection { File() });
+        http.Response.Body = new MemoryStream();
+        var controller = new ModuleTaskFilesController(null!, new TestAuthorization(), env.Upload)
+        {
+            ControllerContext = new ControllerContext { HttpContext = http }
+        };
+
+        var result = await controller.UploadTaskReports(env.VerificationReportTarget.Id);
+        await result.ExecuteResultAsync(new ActionContext(http, new RouteData(), new ActionDescriptor()));
+
+        Assert.Equal(StatusCodes.Status200OK, http.Response.StatusCode);
+        Assert.Contains("測試報告上傳成功",
+            Encoding.UTF8.GetString(((MemoryStream)http.Response.Body).ToArray()));
+        Assert.Single(env.Formal.Calls);
+        using var verify = env.Factory.CreateDbContext();
+        Assert.Empty(verify.PendingSubmissions);
+    }
+
+    [Fact]
+    public async Task VerificationTaskReportApprovalUsesCurrentApplicationMenuCode()
+    {
+        using var env = new EnvironmentFixture(true, verificationEnabled: true);
+
+        var result = await env.Upload.UploadAsync(env.VerificationReportTarget, [File()],
+            User("engineer"), "engineer", false);
+
+        Assert.Equal(ApprovalUploadDecisionKind.Pending, result.Decision);
+        using var db = env.Factory.CreateDbContext();
+        var pending = Assert.Single(db.PendingSubmissions);
+        Assert.Equal(ApprovalSourceMenuBinding.ValidationRequestApplications, pending.SourceMenuCode);
+        Assert.Equal(ApprovalSourceMenuBinding.VerificationModule, pending.SourceModuleCode);
+        Assert.Empty(env.Formal.Calls);
+    }
+
+    [Fact]
+    public async Task MissingVerificationApplicationMenuStopsReportUploadWithRelevantError()
+    {
+        using var env = new EnvironmentFixture(true);
+        using (var db = env.Factory.CreateDbContext())
+        {
+            db.MenuItems.Remove(db.MenuItems.Single(
+                x => x.Code == ApprovalSourceMenuBinding.ValidationRequestApplications));
+            db.SaveChanges();
+        }
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => env.Upload.UploadAsync(
+            env.VerificationReportTarget, [File()], User("engineer"), "engineer", false));
+
+        Assert.Contains("測試報告", error.Message);
+        Assert.Contains("驗證申請專區", error.Message);
+        Assert.Empty(env.Formal.Calls);
+    }
+
     [Theory]
     [InlineData(false, "certification")]
     [InlineData(true, "verification")]
@@ -340,6 +407,10 @@ public sealed class CertificationUploadRoutingTests
                     Title = "認證管理", IsEnabled = true, RequiresSupervisorApproval = enabled });
                 db.MenuItems.Add(new MenuItem { Id = Guid.NewGuid(), Code = "verification", ModuleCode = "verification",
                     Title = "專案管理", IsEnabled = true, RequiresSupervisorApproval = verificationEnabled });
+                db.MenuItems.Add(new MenuItem { Id = Guid.NewGuid(),
+                    Code = ApprovalSourceMenuBinding.ValidationRequestApplications,
+                    Title = "驗證申請專區", IsEnabled = true,
+                    RequiresSupervisorApproval = verificationEnabled });
                 db.SaveChanges();
             }
             CaseTarget = new ThreeLevelUploadTarget(ThreeLevelUploadKind.CaseAttachment, caseId);

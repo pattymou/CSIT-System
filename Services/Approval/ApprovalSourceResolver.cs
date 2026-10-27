@@ -135,13 +135,25 @@ public sealed class ApprovalSourceResolver(IDbContextFactory<AppDbContext> dbFac
 public sealed class ApprovalMenuResolver(IDbContextFactory<AppDbContext> dbFactory)
 {
     public async Task<MenuItem> ResolveAsync(string moduleCode, CancellationToken cancellationToken = default)
+        => await ResolveAsync(moduleCode, null, cancellationToken);
+
+    public async Task<MenuItem> ResolveAsync(string moduleCode, string? sourceMenuCode,
+        CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(moduleCode))
             throw new InvalidOperationException("來源 ModuleCode 不可空白。");
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var matches = await db.MenuItems.AsNoTracking()
-            .Where(x => x.IsEnabled && x.ModuleCode != null && x.ModuleCode.ToLower() == moduleCode.ToLower())
-            .Take(2).ToListAsync(cancellationToken);
+        var query = db.MenuItems.AsNoTracking().Where(x => x.IsEnabled);
+        var matches = string.IsNullOrWhiteSpace(sourceMenuCode)
+            ? await query.Where(x => x.ModuleCode != null && x.ModuleCode.ToLower() == moduleCode.ToLower())
+                .Take(2).ToListAsync(cancellationToken)
+            : await query.Where(x => x.Code.ToLower() == sourceMenuCode.ToLower())
+                .Take(2).ToListAsync(cancellationToken);
+        if (!string.IsNullOrWhiteSpace(sourceMenuCode) &&
+            (matches.Count != 1 || !ApprovalSourceMenuBinding.Matches(
+                matches[0].Code, matches[0].ModuleCode, moduleCode)))
+            throw new InvalidOperationException(
+                "測試報告的來源功能設定無法唯一判定，上傳已停止；請聯絡系統管理員確認「驗證申請專區」選單設定。");
         if (matches.Count != 1 || string.IsNullOrWhiteSpace(matches[0].Code))
             throw new InvalidOperationException("來源 Menu Code 無法唯一判定，主管審核已停止。");
         var duplicateCodes = await db.MenuItems.AsNoTracking()

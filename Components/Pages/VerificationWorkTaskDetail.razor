@@ -21,19 +21,6 @@ else if (_item is not null)
         <div><span>申請編號</span><strong>@_item.ApplicationNo</strong></div>
         <div><span>分類</span><strong>@_item.SelectedItem.Category</strong></div>
     </section>
-    <section class="surface-card task-parameters">
-        <h4>原申請測試參數</h4>
-        @if (_item.SelectedItem.Parameters.Count == 0) { <p>原申請未填寫測試參數。</p> }
-        else
-        {
-            <dl>
-                @foreach (var parameter in _item.SelectedItem.Parameters)
-                {
-                    <dt>@parameter.Name</dt><dd>@string.Join("、", parameter.Values)</dd>
-                }
-            </dl>
-        }
-    </section>
     @if (_item.DeletionStatus is null or "Prepared")
     {
         <VerificationWorkTaskCard RecordId="RecordId" Task="_item.Task" Engineers="_engineers" OnChanged="ReloadAsync" />

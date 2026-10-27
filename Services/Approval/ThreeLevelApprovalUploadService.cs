@@ -61,9 +61,17 @@ public sealed class ThreeLevelApprovalUploadService(
             return new ThreeLevelUploadResult(ApprovalUploadDecisionKind.DirectCommit, files.Count);
         }
 
+        var sourceMenuCode = string.Equals(moduleCode, ApprovalSourceMenuBinding.VerificationModule,
+                StringComparison.OrdinalIgnoreCase) &&
+            target.Kind is (ThreeLevelUploadKind.TestReport or ThreeLevelUploadKind.TestReportByTaskNo
+                or ThreeLevelUploadKind.TestReportVersion)
+            ? ApprovalSourceMenuBinding.ValidationRequestApplications
+            : null;
         var decision = await policy.ResolveAsync(new ApprovalSourceIdentity(moduleCode,
-            target.ContextType, target.ContextId, null, null, null, null), uploader, cancellationToken);
-        if (!string.Equals(decision.MenuCode, moduleCode, StringComparison.OrdinalIgnoreCase))
+            target.ContextType, target.ContextId, null, null, null, null), uploader, cancellationToken,
+            sourceMenuCode);
+        var expectedMenuCode = sourceMenuCode ?? moduleCode;
+        if (!string.Equals(decision.MenuCode, expectedMenuCode, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("ThreeLevel Menu Code mapping changed; upload was stopped.");
         if (resubmissionOfId.HasValue && decision.Kind != ApprovalUploadDecisionKind.Pending)
             throw new InvalidOperationException("此來源目前不需主管審核，請從原項目重新上傳。");

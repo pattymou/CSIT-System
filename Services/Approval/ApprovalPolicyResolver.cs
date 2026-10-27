@@ -15,11 +15,12 @@ public sealed class ApprovalPolicyResolver(
     IAuthorizationService authorization)
 {
     public async Task<ApprovalUploadDecision> ResolveAsync(ApprovalSourceIdentity source,
-        ClaimsPrincipal uploader, CancellationToken cancellationToken = default)
+        ClaimsPrincipal uploader, CancellationToken cancellationToken = default,
+        string? sourceMenuCode = null)
     {
         if (!(await authorization.AuthorizeAsync(uploader, SystemAuthorization.Policies.BusinessWrite)).Succeeded)
             throw new UnauthorizedAccessException("This account has read-only data access.");
-        var menu = await menus.ResolveAsync(source.ModuleCode, cancellationToken);
+        var menu = await menus.ResolveAsync(source.ModuleCode, sourceMenuCode, cancellationToken);
         if (!menu.RequiresSupervisorApproval)
             return new ApprovalUploadDecision(ApprovalUploadDecisionKind.DirectCommit, menu.Code, source.ModuleCode);
         handlers.Resolve(source.ModuleCode);

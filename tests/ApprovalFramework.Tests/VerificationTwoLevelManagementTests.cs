@@ -315,9 +315,27 @@ public sealed class VerificationTwoLevelManagementTests
         Assert.DoesNotContain("Progress%", list);
         Assert.Contains("VerificationWorkTaskCard", task);
         Assert.Contains("/api/verification-work/{RecordId}/tasks/{TaskId}", task);
+        Assert.DoesNotContain("原申請測試參數", task);
+        Assert.DoesNotContain("原申請未填寫測試參數", task);
         Assert.Contains("x.TaskId is null", historical);
         Assert.DoesNotContain("VerificationWorkTaskCard", historical);
         Assert.DoesNotContain("UploadFilesAsync", historical);
+    }
+
+    [Fact]
+    public void TaskReportUploadLayoutKeepsActionOnOneLine()
+    {
+        var card = File.ReadAllText(Path.Combine(RepositoryRoot(), "Components", "Shared",
+            "VerificationWorkTaskCard.razor"));
+        var styles = File.ReadAllText(Path.Combine(RepositoryRoot(), "Components", "Shared",
+            "VerificationWorkTaskCard.razor.css"));
+
+        Assert.Contains("上傳測試報告", card);
+        Assert.Contains("_reportError", card);
+        Assert.Contains("white-space:nowrap", styles);
+        Assert.Contains("min-width:8.5rem", styles);
+        Assert.Contains("text-overflow:ellipsis", styles);
+        Assert.Contains("min-width:0", styles);
     }
 
     private static ValidationRequestSubmissionDto Submission(string[] selected)

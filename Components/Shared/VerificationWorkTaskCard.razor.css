@@ -1,4 +1,8 @@
 .work-task-card .report-panel { border-top-color:rgba(120,160,185,.22); }
+.work-task-card .upload-box { display:flex; align-items:center; gap:.75rem; min-width:0; overflow:hidden; }
+.work-task-card .upload-box ::deep input[type="file"] { flex:1 1 auto; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.work-task-card .upload-box .table-chip-btn { flex:0 0 auto; min-width:8.5rem; padding-inline:1rem; white-space:nowrap; }
+.work-task-card .report-message { margin-bottom:.75rem; }
 .work-task-card .project-table { min-width:0; table-layout:fixed; }
 .work-task-card .project-table th,
 .work-task-card .project-table td { padding:13px 10px; white-space:normal; overflow-wrap:anywhere; }

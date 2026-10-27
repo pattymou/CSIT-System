@@ -11,6 +11,22 @@ public sealed record ApprovalSourceIdentity(
     string ModuleCode, string ContextType, string ContextId,
     string? ContextDisplay, string? Department, Guid? TeamOptionId, string? TeamCode);
 
+public static class ApprovalSourceMenuBinding
+{
+    public const string ValidationRequestApplications = "validation_request_applications";
+    public const string VerificationModule = "verification";
+
+    public static string? EffectiveModuleCode(string menuCode, string? configuredModuleCode) =>
+        !string.IsNullOrWhiteSpace(configuredModuleCode) ? configuredModuleCode
+        : string.Equals(menuCode, ValidationRequestApplications, StringComparison.OrdinalIgnoreCase)
+            ? VerificationModule
+            : null;
+
+    public static bool Matches(string menuCode, string? configuredModuleCode, string moduleCode) =>
+        string.Equals(EffectiveModuleCode(menuCode, configuredModuleCode), moduleCode,
+            StringComparison.OrdinalIgnoreCase);
+}
+
 public sealed record ApprovalCommitResult(string ResultKey);
 
 public interface IThreeLevelFormalUploadService

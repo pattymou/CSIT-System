@@ -32,11 +32,12 @@ public sealed class ApprovalSubmissionService(
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var menus = await db.MenuItems.AsNoTracking()
-            .Where(x => x.IsEnabled && x.RequiresSupervisorApproval && x.ModuleCode != null)
+            .Where(x => x.IsEnabled && x.RequiresSupervisorApproval)
             .OrderBy(x => x.SortOrder).ThenBy(x => x.Title).ThenBy(x => x.Code)
             .Select(x => new { x.Code, x.Title, x.SortOrder, x.ModuleCode })
             .ToListAsync(cancellationToken);
-        return menus.Where(x => handlers.HasHandler(x.ModuleCode))
+        return menus.Where(x => handlers.HasHandler(
+                ApprovalSourceMenuBinding.EffectiveModuleCode(x.Code, x.ModuleCode)))
             .Select(x => new ApprovalSourceDto(x.Code, x.Title, x.SortOrder)).ToList();
     }
 
@@ -186,7 +187,7 @@ public sealed class ApprovalSubmissionService(
         var menu = await db.MenuItems.AsNoTracking().Where(x => x.Code == decision.MenuCode)
             .Take(2).ToListAsync(cancellationToken);
         if (menu.Count != 1 || !menu[0].IsEnabled || !menu[0].RequiresSupervisorApproval
-            || !string.Equals(menu[0].ModuleCode, source.ModuleCode, StringComparison.OrdinalIgnoreCase))
+            || !ApprovalSourceMenuBinding.Matches(menu[0].Code, menu[0].ModuleCode, source.ModuleCode))
             throw new InvalidOperationException("Approval source configuration changed; submission was stopped.");
         var reportTarget = source.ContextType is nameof(ThreeLevelUploadKind.TestReport)
             or nameof(ThreeLevelUploadKind.TestReportByTaskNo)

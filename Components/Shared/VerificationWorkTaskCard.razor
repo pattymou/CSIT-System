@@ -17,6 +17,7 @@
 
     <div class="report-panel">
         <h3>測試報告</h3>
+        @if (_reportError is not null) { <div class="error-text report-message" role="alert">@_reportError</div> }
         @if (!Task.Reports.Any())
         {
             <div class="upload-box" @ref="_newReportContainer"><InputFile OnChange="e => _newSelected = e.FileCount == 1" /><button class="table-chip-btn" @onclick="UploadReportAsync" disabled="@(!_newSelected || _busy)">上傳測試報告</button></div>
@@ -46,7 +47,7 @@
     [Parameter] public EventCallback OnChanged { get; set; }
     private string? _engineer; private string _status = "Open"; private DateOnly? _completionDate; private string? _note;
     private ElementReference _newReportContainer; private ElementReference _versionContainer;
-    private bool _newSelected; private bool _versionSelected; private bool _busy; private string? _error;
+    private bool _newSelected; private bool _versionSelected; private bool _busy; private string? _error; private string? _reportError;
 
     protected override void OnParametersSet() { _engineer = Task.AssignEngineer; _status = Task.Status; _completionDate = Task.ActualCompletionDate; _note = Task.Note; }
     private async Task SaveAsync()
@@ -62,17 +63,17 @@
     }
     private async Task UploadReportAsync()
     {
-        _busy = true; _error = null;
+        _busy = true; _error = null; _reportError = null;
         try { var response = await Api.UploadFilesAsync($"/api/tasks/{Task.Id}/test-reports", _newReportContainer); response.EnsureSuccess(); _newSelected = false; await OnChanged.InvokeAsync(); }
-        catch (Exception ex) { _error = ex.Message; }
+        catch (Exception ex) { _reportError = ex.Message; }
         finally { _busy = false; }
     }
     private async Task UploadVersionAsync()
     {
         var latest = Task.Reports.OrderByDescending(x => x.VersionNo).First();
-        _busy = true; _error = null;
+        _busy = true; _error = null; _reportError = null;
         try { var response = await Api.UploadFilesAsync($"/api/files/{latest.Id}/versions", _versionContainer); response.EnsureSuccess(); _versionSelected = false; await OnChanged.InvokeAsync(); }
-        catch (Exception ex) { _error = ex.Message; }
+        catch (Exception ex) { _reportError = ex.Message; }
         finally { _busy = false; }
     }
     private static string EngineerText(AssignableEngineerDto value) => string.IsNullOrWhiteSpace(value.DisplayName) ? value.Account : $"{value.DisplayName} ({value.Account})";

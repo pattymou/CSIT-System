@@ -106,7 +106,8 @@ public class MenuManagementService : IMenuManagementService
 
         ValidateTemplateRule(templateType, code, routePath, moduleCode);
         if (request.RequiresSupervisorApproval)
-            await _approvalEnableGuard.DemandReadyAsync(moduleCode);
+            await _approvalEnableGuard.DemandReadyAsync(
+                ApprovalSourceMenuBinding.EffectiveModuleCode(code, moduleCode));
         await ValidateDuplicateAsync(
             db: db,
             currentId: null,
@@ -162,7 +163,8 @@ public class MenuManagementService : IMenuManagementService
 
         ValidateTemplateRule(templateType, code, routePath, moduleCode);
         if (request.RequiresSupervisorApproval)
-            await _approvalEnableGuard.DemandReadyAsync(moduleCode);
+            await _approvalEnableGuard.DemandReadyAsync(
+                ApprovalSourceMenuBinding.EffectiveModuleCode(code, moduleCode));
         if (entity.RequiresSupervisorApproval && (!request.RequiresSupervisorApproval || !request.IsEnabled)
             && await db.PendingSubmissions.AnyAsync(x => x.SourceMenuCode == entity.Code &&
                 (x.Status == ApprovalStatus.Pending || x.Status == ApprovalStatus.ApprovedPendingCommit ||
