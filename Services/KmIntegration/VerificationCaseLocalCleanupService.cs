@@ -29,17 +29,14 @@ public sealed class VerificationCaseLocalCleanupService(
         if (!deletionOptions.Value.Enabled)
             throw new InvalidOperationException("Case deletion is not enabled.");
         await businessWrite.DemandAsync(cancellationToken);
+        if (!(await authorization.AuthorizeAsync(user, SystemAuthorization.Policies.Administration)).Succeeded)
+            throw new UnauthorizedAccessException("Local deletion cleanup requires Administration approval.");
         await using var transaction = db.Database.IsRelational()
             ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
         await VerificationCaseDeletionWriteGuard.LockRecordAsync(db, recordId, cancellationToken);
         var job = await db.VerificationCaseDeletionJobs.Include(x => x.Targets)
             .SingleAsync(x => x.RecordId == recordId, cancellationToken);
-        if (job.Status is "Completed" or "LocalCleanup")
-        {
-            if (!(await authorization.AuthorizeAsync(user, SystemAuthorization.Policies.Administration)).Succeeded)
-                throw new UnauthorizedAccessException("Local deletion cleanup requires Administration approval.");
-            return job;
-        }
+        if (job.Status is "Completed" or "LocalCleanup") return job;
         if (job.Status is not ("LocalReady" or "KmVerified") ||
             job.Targets.Any(x => x.Status is not ("NotDispatched" or "Completed")) ||
             job.Targets.Any(x => x.Status == "Completed" && x.KmVerifiedAt is null))
@@ -50,10 +47,6 @@ public sealed class VerificationCaseLocalCleanupService(
         VerificationApplicationSecurity.EnsureAcceptedManagerAccess(application, user);
         var reports = await db.ModuleCaseFiles.AsNoTracking().Where(x => x.RecordId == recordId)
             .ToListAsync(cancellationToken);
-        if (reports.Any(x => x.FileKind == ModuleCaseFileKinds.TestReport &&
-                (x.ReviewStatus == TestReportReviewStatuses.Approved || x.IsFinal)) &&
-            !(await authorization.AuthorizeAsync(user, SystemAuthorization.Policies.Administration)).Succeeded)
-            throw new UnauthorizedAccessException("Approved test report retention requires Administration approval.");
         if ((await archive.ReadPendingAsync(cancellationToken)).Any(x => x.ApplicationId == job.ApplicationId))
             throw new InvalidOperationException("Attachment archive work is still pending.");
 

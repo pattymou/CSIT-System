@@ -5,7 +5,9 @@ using SIT.DepartmentSystem.Web.Data;
 
 namespace SIT.DepartmentSystem.Web.Services.KmIntegration;
 
-// Explicitly invoked only after the deletion gate is enabled. No hosted worker is registered.
+// Integration seam pending Anderson KM v1.2 acceptance. There is deliberately no controller,
+// hosted worker, scheduler, or other production caller. Keep KmDeletion.Enabled=false until the
+// external deletion API and end-to-end callback flow have passed integration acceptance.
 public sealed class KmDeletionDispatchService(
     IDbContextFactory<AppDbContext> dbFactory,
     IKmDeletionClient client,
