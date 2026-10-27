@@ -16,7 +16,7 @@
     <div class="form-actions"><button class="btn-primary" @onclick="SaveAsync" disabled="@_busy">儲存測試項目</button></div>
 
     <div class="report-panel">
-        <h3>測試報告</h3>
+        <div class="report-heading"><h3>測試報告</h3><button type="button" class="table-chip-btn" @onclick="RefreshReportsAsync" disabled="@_refreshing">@(_refreshing ? "重新整理中..." : "重新整理狀態")</button></div>
         @if (_reportError is not null) { <div class="error-text report-message" role="alert">@_reportError</div> }
         @if (!Task.Reports.Any())
         {
@@ -25,10 +25,10 @@
         else
         {
             <div class="upload-box" @ref="_versionContainer"><InputFile OnChange="e => _versionSelected = e.FileCount == 1" /><button class="table-chip-btn" @onclick="UploadVersionAsync" disabled="@(!_versionSelected || _busy)">上傳新版</button></div>
-            <div class="project-table-wrap"><table class="project-table"><thead><tr><th>版本</th><th>檔名</th><th>審核</th><th>上傳時間</th><th>操作</th></tr></thead><tbody>
+            <div class="project-table-wrap"><table class="project-table"><thead><tr><th>版本</th><th>檔名</th><th>審核</th><th>正式入庫</th><th>KM 分析</th><th>上傳時間</th><th>操作</th></tr></thead><tbody>
             @foreach (var report in Task.Reports.OrderByDescending(x => x.VersionNo))
             {
-                <tr><td>@($"v{report.VersionNo}")</td><td>@report.FileName</td><td>@(report.IsFinal ? "Final" : report.ReviewStatus ?? "—")</td><td>@report.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td><td><a class="table-link-btn" href="@($"/api/files/{report.Id}/download")" target="_blank">下載</a></td></tr>
+                <tr><td>@($"v{report.VersionNo}")</td><td>@report.FileName</td><td>@(report.IsFinal ? "Final" : report.ReviewStatus ?? "—")</td><td><span class="report-status @StatusClass(report.FormalArchiveStatus)">@report.FormalArchiveStatusDisplay</span></td><td><span class="report-status @StatusClass(report.KmAnalysisStatus)" title="@report.KmAnalysisError">@report.KmAnalysisStatusDisplay</span></td><td>@report.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td><td><a class="table-link-btn" href="@($"/api/files/{report.Id}/download")" target="_blank">下載</a></td></tr>
             }
             </tbody></table></div>
         }
@@ -47,7 +47,7 @@
     [Parameter] public EventCallback OnChanged { get; set; }
     private string? _engineer; private string _status = "Open"; private DateOnly? _completionDate; private string? _note;
     private ElementReference _newReportContainer; private ElementReference _versionContainer;
-    private bool _newSelected; private bool _versionSelected; private bool _busy; private string? _error; private string? _reportError;
+    private bool _newSelected; private bool _versionSelected; private bool _busy; private bool _refreshing; private string? _error; private string? _reportError;
 
     protected override void OnParametersSet() { _engineer = Task.AssignEngineer; _status = Task.Status; _completionDate = Task.ActualCompletionDate; _note = Task.Note; }
     private async Task SaveAsync()
@@ -76,5 +76,20 @@
         catch (Exception ex) { _reportError = ex.Message; }
         finally { _busy = false; }
     }
+    private async Task RefreshReportsAsync()
+    {
+        _refreshing = true;
+        try { await OnChanged.InvokeAsync(); }
+        finally { _refreshing = false; }
+    }
+    private static string StatusClass(string status) => status switch
+    {
+        "Completed" => "completed",
+        "Failed" => "failed",
+        "Processing" or "Dispatching" => "processing",
+        "PendingApproval" or "Pending" or "Sent" => "waiting",
+        "MissingOutbox" => "warning",
+        _ => string.Empty
+    };
     private static string EngineerText(AssignableEngineerDto value) => string.IsNullOrWhiteSpace(value.DisplayName) ? value.Account : $"{value.DisplayName} ({value.Account})";
 }

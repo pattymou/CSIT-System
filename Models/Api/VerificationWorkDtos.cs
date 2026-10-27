@@ -71,6 +71,11 @@ public sealed class VerificationWorkReportDto
     public int VersionNo { get; set; }
     public string? ReviewStatus { get; set; }
     public bool IsFinal { get; set; }
+    public string FormalArchiveStatus { get; set; } = "NotCommitted";
+    public string FormalArchiveStatusDisplay { get; set; } = "尚未正式入庫";
+    public string KmAnalysisStatus { get; set; } = "NotSent";
+    public string KmAnalysisStatusDisplay { get; set; } = "尚未送 KM";
+    public string? KmAnalysisError { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 

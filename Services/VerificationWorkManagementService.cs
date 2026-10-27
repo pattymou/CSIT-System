@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Security.Claims;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
@@ -22,7 +23,8 @@ public interface IVerificationWorkManagementService
 public sealed class VerificationWorkManagementService(
     AppDbContext db,
     IAssignableEngineerDirectory engineerDirectory,
-    IBusinessWriteAuthorizationGuard businessWrite) : IVerificationWorkManagementService
+    IBusinessWriteAuthorizationGuard businessWrite,
+    IOptions<KmIntegrationOptions>? kmOptions = null) : IVerificationWorkManagementService
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private static readonly HashSet<string> Statuses = new(StringComparer.OrdinalIgnoreCase)
@@ -56,6 +58,15 @@ public sealed class VerificationWorkManagementService(
                         x.FileKind == ModuleCaseFileKinds.TestReport)
             .OrderByDescending(x => x.VersionNo)
             .ToListAsync(cancellationToken);
+        var reportIds = reports.Select(x => x.Id).ToList();
+        var pendingByReport = await db.PendingSubmissions.AsNoTracking()
+            .Where(x => reportIds.Contains(x.Id))
+            .ToDictionaryAsync(x => x.Id, x => x.Status, cancellationToken);
+        var kmByReport = await db.KmIntegrationOutbox.AsNoTracking()
+            .Where(x => reportIds.Contains(x.SourceEntityId) &&
+                        x.EventType == KmIntegrationEventTypes.TestReportCommitted &&
+                        x.SourceEntityType == KmIntegrationSourceEntityTypes.TestReport)
+            .ToDictionaryAsync(x => x.SourceEntityId, cancellationToken);
         var reportsByTask = reports.GroupBy(x => x.TaskId!.Value).ToDictionary(x => x.Key, x => x.ToList());
         var deletionStatus = await db.VerificationCaseDeletionJobs.AsNoTracking()
             .Where(x => x.RecordId == recordId).Select(x => x.Status)
@@ -102,10 +113,85 @@ public sealed class VerificationWorkManagementService(
                                 VersionNo = file.VersionNo,
                                 ReviewStatus = file.ReviewStatus,
                                 IsFinal = file.IsFinal,
+                                FormalArchiveStatus = FormalArchiveStatus(file, pendingByReport),
+                                FormalArchiveStatusDisplay = FormalArchiveText(file, pendingByReport),
+                                KmAnalysisStatus = KmStatus(file, pendingByReport, kmByReport),
+                                KmAnalysisStatusDisplay = KmText(file, pendingByReport, kmByReport,
+                                    kmOptions?.Value.Enabled == true),
+                                KmAnalysisError = kmByReport.TryGetValue(file.Id, out var km) &&
+                                    km.Status == KmIntegrationStatus.Failed
+                                        ? SafeKmError(km.LastErrorCode, km.LastErrorMessage) : null,
                                 CreatedAt = file.CreatedAt
                             }).ToList()
                     })).ToList()
         };
+    }
+
+    private static bool IsFormal(ModuleCaseFile file,
+        IReadOnlyDictionary<Guid, ApprovalStatus> pendingByReport) =>
+        file.ReviewStatus == TestReportReviewStatuses.Approved && file.IsRawDataExported &&
+        (!pendingByReport.TryGetValue(file.Id, out var approval) || approval == ApprovalStatus.Committed);
+
+    private static string FormalArchiveStatus(ModuleCaseFile file,
+        IReadOnlyDictionary<Guid, ApprovalStatus> pendingByReport)
+    {
+        if (pendingByReport.TryGetValue(file.Id, out var approval))
+        {
+            if (approval is ApprovalStatus.Pending or ApprovalStatus.ApprovedPendingCommit)
+                return approval == ApprovalStatus.Pending ? "PendingApproval" : "Processing";
+            if (approval == ApprovalStatus.CommitFailed) return "Failed";
+            if (approval is ApprovalStatus.Rejected or ApprovalStatus.Withdrawn) return "NotCommitted";
+        }
+        if (IsFormal(file, pendingByReport)) return "Completed";
+        if (file.ReviewStatus == TestReportReviewStatuses.Pending) return "PendingApproval";
+        if (file.ReviewStatus == TestReportReviewStatuses.Approved) return "Processing";
+        return "NotCommitted";
+    }
+
+    private static string FormalArchiveText(ModuleCaseFile file,
+        IReadOnlyDictionary<Guid, ApprovalStatus> pendingByReport) =>
+        FormalArchiveStatus(file, pendingByReport) switch
+        {
+            "PendingApproval" => "待主管審核",
+            "Processing" => "正式入庫處理中",
+            "Completed" => "正式入庫完成",
+            "Failed" => "正式入庫失敗",
+            _ => "尚未正式入庫"
+        };
+
+    private static string KmStatus(ModuleCaseFile file,
+        IReadOnlyDictionary<Guid, ApprovalStatus> pendingByReport,
+        IReadOnlyDictionary<Guid, KmIntegrationOutbox> kmByReport)
+    {
+        if (!IsFormal(file, pendingByReport)) return "NotSent";
+        return kmByReport.TryGetValue(file.Id, out var km) ? km.Status.ToString() : "MissingOutbox";
+    }
+
+    private static string KmText(ModuleCaseFile file,
+        IReadOnlyDictionary<Guid, ApprovalStatus> pendingByReport,
+        IReadOnlyDictionary<Guid, KmIntegrationOutbox> kmByReport,
+        bool kmEnabled)
+    {
+        var status = KmStatus(file, pendingByReport, kmByReport);
+        return status switch
+        {
+            "Pending" => kmEnabled ? "待同步" : "待同步（KM 未啟用）",
+            "Dispatching" => "同步中",
+            "Sent" => "KM 已接收",
+            "Processing" => "處理中",
+            "Completed" => "完成",
+            "Failed" => "失敗",
+            "MissingOutbox" => "尚未建立同步工作",
+            _ => "尚未送 KM"
+        };
+    }
+
+    private static string? SafeKmError(string? code, string? message)
+    {
+        var safeMessage = KmIntegrationManualRetryAudit.SafeErrorMessage(message);
+        var values = new[] { code, safeMessage }.Where(x => !string.IsNullOrWhiteSpace(x));
+        var result = string.Join("：", values);
+        return string.IsNullOrWhiteSpace(result) ? null : result;
     }
 
     public async Task<VerificationWorkTaskDetailDto?> GetTaskAsync(

@@ -1,4 +1,6 @@
 .work-task-card .report-panel { border-top-color:rgba(120,160,185,.22); }
+.work-task-card .report-heading { display:flex; align-items:center; justify-content:space-between; gap:.75rem; margin-bottom:.75rem; }
+.work-task-card .report-heading h3 { margin:0; }
 .work-task-card .upload-box { display:flex; align-items:center; gap:.75rem; min-width:0; overflow:hidden; }
 .work-task-card .upload-box ::deep input[type="file"] { flex:1 1 auto; min-width:0; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .work-task-card .upload-box .table-chip-btn { flex:0 0 auto; min-width:8.5rem; padding-inline:1rem; white-space:nowrap; }
@@ -6,6 +8,13 @@
 .work-task-card .project-table { min-width:0; table-layout:fixed; }
 .work-task-card .project-table th,
 .work-task-card .project-table td { padding:13px 10px; white-space:normal; overflow-wrap:anywhere; }
+.work-task-card .report-status { display:inline-block; white-space:nowrap; padding:3px 7px; border:1px solid rgba(148,163,184,.22); border-radius:999px; background:rgba(148,163,184,.14); color:#cbd5e1; font-size:.8rem; font-weight:700; }
+.work-task-card .report-status.completed { background:rgba(16,185,129,.16); border-color:rgba(52,211,153,.35); color:#99f6e4; }
+.work-task-card .report-status.failed { background:rgba(220,38,38,.16); border-color:rgba(248,113,113,.4); color:#fecaca; }
+.work-task-card .report-status.processing { background:rgba(59,130,246,.16); border-color:rgba(96,165,250,.4); color:#bfdbfe; }
+.work-task-card .report-status.waiting { background:rgba(8,145,178,.16); border-color:rgba(34,211,238,.35); color:#a5f3fc; }
+.work-task-card .report-status.warning { background:rgba(217,119,6,.16); border-color:rgba(251,191,36,.4); color:#fde68a; }
 @media(max-width:750px) {
-    .work-task-card .project-table { min-width:700px; }
+    .work-task-card .project-table { min-width:980px; }
+    .work-task-card .report-heading { align-items:flex-start; flex-direction:column; }
 }

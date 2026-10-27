@@ -1,10 +1,18 @@
 using System.Text.Json;
 using System.Security.Claims;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Microsoft.JSInterop;
+using SIT.DepartmentSystem.Web.Components.Shared;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace ApprovalFramework.Tests;
 
@@ -180,6 +188,94 @@ public sealed class VerificationTwoLevelManagementTests
     }
 
     [Fact]
+    public async Task Detail_ProjectsFormalArchiveAndKmStatusFromPersistedRowsInBatches()
+    {
+        await using var db = NewDb();
+        var (application, record, tasks) = AcceptedWork("VA-KM", "MODEL-KM", 1);
+        var now = DateTime.UtcNow;
+        ModuleCaseFile Report(string name, int version, string review, bool raw) => new()
+        {
+            Id = Guid.NewGuid(), RecordId = record.Id, CaseId = tasks[0].CaseId, CaseNo = "CASE",
+            TaskId = tasks[0].Id, TaskNo = tasks[0].TaskNo, FileName = name, FilePath = "x",
+            ContentType = "application/pdf", FileSize = 10, CreatedAt = now.AddMinutes(version),
+            UpdatedAt = now.AddMinutes(version), DocumentId = Guid.NewGuid(), VersionNo = version,
+            FileKind = ModuleCaseFileKinds.TestReport, ReviewStatus = review, IsRawDataExported = raw
+        };
+        var awaiting = Report("awaiting.pdf", 1, TestReportReviewStatuses.Pending, false);
+        var missing = Report("missing.pdf", 2, TestReportReviewStatuses.Approved, true);
+        var pending = Report("pending.pdf", 3, TestReportReviewStatuses.Approved, true);
+        var completed = Report("completed.pdf", 4, TestReportReviewStatuses.Approved, true);
+        var failed = Report("failed.pdf", 5, TestReportReviewStatuses.Approved, true);
+        var pendingOutbox = KmIntegrationOutbox.ForCommittedTestReport(pending, now);
+        var completedOutbox = KmIntegrationOutbox.ForCommittedTestReport(completed, now);
+        var failedOutbox = KmIntegrationOutbox.ForCommittedTestReport(failed, now);
+        var lease = Guid.NewGuid();
+        completedOutbox.Claim(lease, now, TimeSpan.FromMinutes(1));
+        completedOutbox.Sent(lease, "job-completed", now);
+        completedOutbox.CallbackCompleted(now);
+        lease = Guid.NewGuid();
+        failedOutbox.Claim(lease, now, TimeSpan.FromMinutes(1));
+        failedOutbox.Sent(lease, "job-failed", now);
+        failedOutbox.CallbackFailed("KM_FAILED", "Bearer secret must not be shown", now);
+        db.AddRange(application, record, awaiting, missing, pending, completed, failed,
+            pendingOutbox, completedOutbox, failedOutbox);
+        await db.SaveChangesAsync();
+        var service = new VerificationWorkManagementService(db, new FakeEngineerDirectory(), new AllowWrite(),
+            Options.Create(new KmIntegrationOptions { Enabled = false }));
+
+        var reports = (await service.GetAsync(record.Id))!.Tasks.Single().Reports
+            .ToDictionary(x => x.VersionNo);
+
+        Assert.Equal("待主管審核", reports[1].FormalArchiveStatusDisplay);
+        Assert.Equal("尚未送 KM", reports[1].KmAnalysisStatusDisplay);
+        Assert.Equal("正式入庫完成", reports[2].FormalArchiveStatusDisplay);
+        Assert.Equal("尚未建立同步工作", reports[2].KmAnalysisStatusDisplay);
+        Assert.Equal("待同步（KM 未啟用）", reports[3].KmAnalysisStatusDisplay);
+        Assert.Equal("完成", reports[4].KmAnalysisStatusDisplay);
+        Assert.Equal("失敗", reports[5].KmAnalysisStatusDisplay);
+        Assert.Equal("KM_FAILED：Sensitive error details redacted.", reports[5].KmAnalysisError);
+    }
+
+    [Fact]
+    public async Task TaskCard_RendersPersistedFormalAndKmStatuses()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddSingleton<IJSRuntime, NoOpJsRuntime>();
+        services.AddSingleton<BrowserApiClient>();
+        await using var provider = services.BuildServiceProvider();
+        await using var renderer = new HtmlRenderer(provider, provider.GetRequiredService<ILoggerFactory>());
+        var task = new VerificationWorkTaskDto
+        {
+            Id = Guid.NewGuid(), CaseId = Guid.NewGuid(), Name = "Wi-Fi", Category = "Radio", Status = "Open",
+            Reports =
+            [
+                new VerificationWorkReportDto { Id = Guid.NewGuid(), FileName = "done.pdf", VersionNo = 2,
+                    FormalArchiveStatus = "Completed", FormalArchiveStatusDisplay = "正式入庫完成",
+                    KmAnalysisStatus = "Completed", KmAnalysisStatusDisplay = "完成" },
+                new VerificationWorkReportDto { Id = Guid.NewGuid(), FileName = "waiting.pdf", VersionNo = 1,
+                    FormalArchiveStatus = "PendingApproval", FormalArchiveStatusDisplay = "待主管審核",
+                    KmAnalysisStatus = "NotSent", KmAnalysisStatusDisplay = "尚未送 KM" }
+            ]
+        };
+
+        var html = await renderer.Dispatcher.InvokeAsync(async () =>
+            (await renderer.RenderComponentAsync<VerificationWorkTaskCard>(ParameterView.FromDictionary(
+                new Dictionary<string, object?> { [nameof(VerificationWorkTaskCard.Task)] = task,
+                    [nameof(VerificationWorkTaskCard.RecordId)] = Guid.NewGuid() }))).ToHtmlString());
+
+        var decoded = System.Net.WebUtility.HtmlDecode(html);
+        Assert.Contains("v2", decoded);
+        Assert.Contains("report-status completed", html);
+        Assert.Contains("正式入庫完成", decoded);
+        Assert.Contains("完成", decoded);
+        Assert.Contains("report-status waiting", html);
+        Assert.Contains("待主管審核", decoded);
+        Assert.Contains("尚未送 KM", decoded);
+        Assert.True(decoded.IndexOf("v2", StringComparison.Ordinal) < decoded.IndexOf("v1", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Detail_UsesEachAcceptedApplicationSnapshotAndRejectsCrossRecordTaskAccess()
     {
         await using var db = NewDb();
@@ -336,6 +432,10 @@ public sealed class VerificationTwoLevelManagementTests
         Assert.Contains("min-width:8.5rem", styles);
         Assert.Contains("text-overflow:ellipsis", styles);
         Assert.Contains("min-width:0", styles);
+        Assert.Contains("正式入庫", card);
+        Assert.Contains("KM 分析", card);
+        Assert.Contains("重新整理狀態", card);
+        Assert.Contains("report-status", styles);
     }
 
     [Theory]
@@ -458,6 +558,15 @@ public sealed class VerificationTwoLevelManagementTests
     {
         public Task DemandAsync(CancellationToken cancellationToken = default) =>
             throw new UnauthorizedAccessException("read only");
+    }
+
+    private sealed class NoOpJsRuntime : IJSRuntime
+    {
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier, object?[]? args) =>
+            throw new NotSupportedException();
+
+        public ValueTask<TValue> InvokeAsync<TValue>(string identifier,
+            CancellationToken cancellationToken, object?[]? args) => throw new NotSupportedException();
     }
 
     private sealed class FakeEngineerDirectory(params string[] accounts) : IAssignableEngineerDirectory
