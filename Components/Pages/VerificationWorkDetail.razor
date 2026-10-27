@@ -82,7 +82,7 @@ else if (_item is not null)
             else if (_deletePreview.DeletionStatus is "LocalReady" or "KmVerified")
             {
                 <p>文件刪除條件已確認。本地清理需由管理員執行。</p>
-                @if (_canCleanup)
+                @if (_deletePreview.ExecutionEnabled && _canCleanup)
                 {
                     <label><input type="checkbox" @bind="_cleanupAcknowledged" /> 我再次確認要清理此案件的本地資料與檔案。</label>
                     <button type="button" class="btn-primary" disabled="@(!_cleanupAcknowledged || _deletionWorking)" @onclick="CleanLocalAsync">開始本地清理</button>

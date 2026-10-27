@@ -192,6 +192,7 @@ public sealed class VerificationCaseDeletionPreviewService(
             ApplicationNo = application.ApplicationNo,
             ModelName = record.CustomerProductName ?? application.ProductModel ?? string.Empty,
             Items = items, BlockingReasons = blockers,
+            ExecutionEnabled = enabled,
             CanExecute = enabled && blockers.Count == 0,
             DeletionStatus = deletionJob?.Status
         };

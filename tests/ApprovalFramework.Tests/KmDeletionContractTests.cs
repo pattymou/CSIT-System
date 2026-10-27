@@ -302,11 +302,14 @@ public sealed class KmDeletionContractTests
         { db.VerificationCaseDeletionJobs.Add(job); await db.SaveChangesAsync(); }
         var client = new SequenceClient();
         var options = Options.Create(new KmIntegrationOptions
-        { TimeoutSeconds = 10, LeaseSeconds = 60, MaxRetryCount = 3 });
+        { BaseUrl = "https://km.example.test/", TimeoutSeconds = 10,
+            LeaseSeconds = 60, MaxRetryCount = 3 });
+        var deletion = Options.Create(new KmDeletionOptions
+            { Enabled = true, Scope = "csit.document.delete" });
         Assert.False(await new KmDeletionDispatchService(factory, client,
-            Options.Create(new KmDeletionOptions { Enabled = true }), options).DispatchAsync(targetId));
+            deletion, options).DispatchAsync(targetId));
         Assert.True(await new KmDeletionDispatchService(factory, client,
-            Options.Create(new KmDeletionOptions { Enabled = true }), options).DispatchAsync(targetId));
+            deletion, options).DispatchAsync(targetId));
         Assert.Equal([targetId, targetId], client.RequestIds);
         await using var verify = factory.CreateDbContext();
         var target = await verify.VerificationCaseDeletionTargets.SingleAsync();

@@ -6,6 +6,7 @@ public sealed class VerificationCaseDeletionPreviewDto
     public Guid RecordId { get; set; }
     public string ApplicationNo { get; set; } = string.Empty;
     public string ModelName { get; set; } = string.Empty;
+    public bool ExecutionEnabled { get; set; }
     public bool CanExecute { get; set; }
     public string? DeletionStatus { get; set; }
     public IReadOnlyList<VerificationCaseDeletionInventoryItemDto> Items { get; set; } = [];

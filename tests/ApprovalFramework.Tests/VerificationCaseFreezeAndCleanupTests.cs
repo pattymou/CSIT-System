@@ -17,6 +17,50 @@ namespace ApprovalFramework.Tests;
 public sealed class VerificationCaseFreezeAndCleanupTests
 {
     [Fact]
+    public async Task DisabledDeletionBlocksFreezeAndBothLocalCleanupEntryPoints()
+    {
+        using var directory = new TestDirectory();
+        var factory = new Factory();
+        var (application, record) = Accepted("VA-DISABLED", "Model A");
+        await using (var seed = factory.CreateDbContext())
+        {
+            seed.VerificationApplications.Add(application);
+            seed.ModuleRecords.Add(record);
+            await seed.SaveChangesAsync();
+        }
+        await using (var db = factory.CreateDbContext())
+        {
+            var confirmation = new VerificationCaseDeletionConfirmationService(db,
+                new VerificationCaseDeletionPreparationService(db, new AllowWrite()),
+                Archive(factory, directory.Path), Options.Create(new KmDeletionOptions()));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => confirmation.ConfirmAsync(
+                record.Id, application.ApplicationNo, "Delete this accepted case", Manager()));
+            Assert.Empty(await db.VerificationCaseDeletionJobs.ToListAsync());
+        }
+
+        var job = VerificationCaseDeletionJob.Prepare(application.Id, record.Id,
+            "leader", "Synthetic disabled cleanup check", DateTime.UtcNow);
+        job.MarkLocalReady(DateTime.UtcNow);
+        await using (var seed = factory.CreateDbContext())
+        {
+            seed.VerificationCaseDeletionJobs.Add(job);
+            await seed.SaveChangesAsync();
+        }
+        await using (var db = factory.CreateDbContext())
+        {
+            var cleanup = Cleanup(db, factory, directory.Path, deletionEnabled: false);
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                cleanup.BeginAsync(record.Id, Admin()));
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                cleanup.ProcessAsync(record.Id, Admin()));
+            Assert.Equal("LocalReady",
+                (await db.VerificationCaseDeletionJobs.SingleAsync()).Status);
+            Assert.True(await db.VerificationApplications.AnyAsync(x => x.Id == application.Id));
+            Assert.True(await db.ModuleRecords.AnyAsync(x => x.Id == record.Id));
+        }
+    }
+
+    [Fact]
     public async Task ConfirmationFreezesExactAcceptedCaseAndRejectsLaterWrites()
     {
         using var directory = new TestDirectory();
@@ -707,9 +751,10 @@ public sealed class VerificationCaseFreezeAndCleanupTests
     };
 
     private static VerificationCaseLocalCleanupService Cleanup(AppDbContext db, Factory factory,
-        string root, IBusinessWriteAuthorizationGuard? businessWrite = null) =>
+        string root, IBusinessWriteAuthorizationGuard? businessWrite = null,
+        bool deletionEnabled = true) =>
         new(db, businessWrite ?? new AllowWrite(), new AdminAuthorization(),
-        Options.Create(new KmDeletionOptions { Enabled = true }),
+        Options.Create(new KmDeletionOptions { Enabled = deletionEnabled }),
         Options.Create(new DocumentStorageOptions { RootPath = root }),
         Options.Create(new DocumentStagingOptions { RootPath = root }),
         Options.Create(new RawDataSettings { NasRootPath = root }), Archive(factory, root));

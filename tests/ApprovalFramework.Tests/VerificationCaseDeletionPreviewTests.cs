@@ -6,6 +6,7 @@ using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Approval;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace ApprovalFramework.Tests;
 
@@ -77,6 +78,7 @@ public sealed class VerificationCaseDeletionPreviewTests
 
             Assert.Equal(first.Id, preview.ApplicationId);
             Assert.Equal(record.Id, preview.RecordId);
+            Assert.False(preview.ExecutionEnabled);
             Assert.False(preview.CanExecute);
             Assert.Equal([1, 2, 3], preview.Items.Where(x => x.Kind == "TestReport")
                 .Select(x => x.Version!.Value).OrderBy(x => x).ToArray());
@@ -94,6 +96,7 @@ public sealed class VerificationCaseDeletionPreviewTests
             Assert.DoesNotContain(preview.Items, x => x.Id == second.Id || x.Id == otherRecord.Id || x.Id == otherFile.Id);
             Assert.Equal(2, await db.VerificationApplications.CountAsync());
             Assert.Equal(4, await db.ModuleCaseFiles.CountAsync());
+            Assert.Empty(await db.VerificationCaseDeletionJobs.ToListAsync());
         }
         finally { File.Delete(localFile); }
     }
@@ -106,6 +109,10 @@ public sealed class VerificationCaseDeletionPreviewTests
         db.AddRange(application, record);
         await db.SaveChangesAsync();
         var preview = Service(db, Path.GetTempPath());
+        var enabled = await Service(db, Path.GetTempPath(), deletionEnabled: true)
+            .GetAsync(record.Id, Manager());
+        Assert.True(enabled.ExecutionEnabled);
+        Assert.True(enabled.CanExecute);
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => preview.GetAsync(record.Id, Manager("staff")));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => preview.GetAsync(record.Id, Manager("leader", scope: false)));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
@@ -169,10 +176,12 @@ public sealed class VerificationCaseDeletionPreviewTests
             SystemAuthorization.AccessScopes.CsitStaff)] : [new Claim("account", account)], "test"));
 
     private static IVerificationCaseDeletionPreviewService Service(
-        AppDbContext db, string root, bool allowWrite = true) => new VerificationCaseDeletionPreviewService(
+        AppDbContext db, string root, bool allowWrite = true, bool deletionEnabled = false) =>
+        new VerificationCaseDeletionPreviewService(
         db, allowWrite ? new AllowWrite() : new DenyWrite(),
         Options.Create(new DocumentStorageOptions { RootPath = root }),
-        Options.Create(new DocumentStagingOptions { RootPath = root }));
+        Options.Create(new DocumentStagingOptions { RootPath = root }),
+        Options.Create(new KmDeletionOptions { Enabled = deletionEnabled }));
 
     private static AppDbContext NewDb() => new(new DbContextOptionsBuilder<AppDbContext>()
         .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options);
