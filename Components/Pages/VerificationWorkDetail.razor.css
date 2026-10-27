@@ -37,12 +37,16 @@
 .work-item-copy small { display:block; margin-bottom:4px; color:#9db9cb; }
 .work-item-copy strong { overflow-wrap:anywhere; }
 .work-item-state { color:#a8dfe2; white-space:nowrap; font-size:.86rem; }
+.task-status-badge { display:inline-flex; align-items:center; justify-content:center; min-width:5.25rem; padding:5px 10px; border:1px solid transparent; border-radius:999px; font-size:.92rem; font-weight:700; line-height:1.2; text-align:center; }
+.task-status-open { color:#b9f3ff; background:rgba(8,145,178,.22); border-color:rgba(103,232,249,.55); }
+.task-status-hold { color:#fde68a; background:rgba(217,119,6,.22); border-color:rgba(251,191,36,.6); }
+.task-status-close { color:#bbf7d0; background:rgba(22,163,74,.22); border-color:rgba(74,222,128,.58); }
 @media(max-width:850px) {
     .work-summary { grid-template-columns:repeat(2,minmax(0,1fr)); }
 }
 @media(max-width:580px) {
     .work-summary { grid-template-columns:1fr; }
     .work-item-row { grid-template-columns:minmax(0,1fr) 12px; gap:10px; }
-    .work-item-state { grid-column:1; grid-row:2; }
+    .work-item-state { grid-column:1; grid-row:2; justify-self:start; }
     .work-status-edit { align-items:stretch; flex-direction:column; }
 }

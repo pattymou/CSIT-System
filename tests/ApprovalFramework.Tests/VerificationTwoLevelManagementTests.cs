@@ -338,6 +338,42 @@ public sealed class VerificationTwoLevelManagementTests
         Assert.Contains("min-width:0", styles);
     }
 
+    [Theory]
+    [InlineData(1, "v1")]
+    [InlineData(2, "v2")]
+    [InlineData(3, "v3")]
+    public void TaskReportVersionCellRendersNumericVersion(int versionNo, string expected)
+    {
+        var card = File.ReadAllText(Path.Combine(RepositoryRoot(), "Components", "Shared",
+            "VerificationWorkTaskCard.razor"));
+
+        Assert.Contains("<td>@($\"v{report.VersionNo}\")</td>", card);
+        Assert.DoesNotContain("<td>v@report.VersionNo</td>", card);
+        Assert.Equal($"<td>{expected}</td>", $"<td>v{versionNo}</td>");
+    }
+
+    [Fact]
+    public void TaskStatusBadgeStylesOnlyApplyToTaskStatusBranch()
+    {
+        var page = File.ReadAllText(Path.Combine(RepositoryRoot(), "Components", "Pages",
+            "VerificationWorkDetail.razor"));
+        var styles = File.ReadAllText(Path.Combine(RepositoryRoot(), "Components", "Pages",
+            "VerificationWorkDetail.razor.css"));
+
+        Assert.Contains("class=\"work-item-state @TaskStatusClass(selected.TaskStatus)\"", page);
+        Assert.Contains("\"OPEN\" => \"task-status-badge task-status-open\"", page);
+        Assert.Contains("\"HOLD\" => \"task-status-badge task-status-hold\"", page);
+        Assert.Contains("\"CLOSE\" => \"task-status-badge task-status-close\"", page);
+        Assert.Contains("_ => string.Empty", page);
+        Assert.Contains("min-width:5.25rem", styles);
+        Assert.Contains("font-weight:700", styles);
+        Assert.Contains("border-radius:999px", styles);
+        Assert.Contains(".task-status-open", styles);
+        Assert.Contains(".task-status-hold", styles);
+        Assert.Contains(".task-status-close", styles);
+        Assert.Contains("justify-self:start", styles);
+    }
+
     private static ValidationRequestSubmissionDto Submission(string[] selected)
     {
         var version = Guid.NewGuid();

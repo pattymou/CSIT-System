@@ -165,7 +165,7 @@ else if (_item is not null)
                     {
                         <a class="work-item-row" href="@TaskHref(taskId)">
                             <span class="work-item-copy"><small>@selected.Category</small><strong>@selected.Name</strong></span>
-                            <span class="work-item-state">@selected.TaskStatus</span><span aria-hidden="true">›</span>
+                            <span class="work-item-state @TaskStatusClass(selected.TaskStatus)">@selected.TaskStatus</span><span aria-hidden="true">›</span>
                         </a>
                     }
                     else if (_canManage && !_blockedItemCodes.Contains(selected.Code))
@@ -224,6 +224,13 @@ else if (_item is not null)
     private readonly HashSet<string> _blockedItemCodes = new(StringComparer.OrdinalIgnoreCase);
     private string? _actionMessage;
     private bool _actionError;
+    private static string TaskStatusClass(string? status) => status?.Trim().ToUpperInvariant() switch
+    {
+        "OPEN" => "task-status-badge task-status-open",
+        "HOLD" => "task-status-badge task-status-hold",
+        "CLOSE" => "task-status-badge task-status-close",
+        _ => string.Empty
+    };
     private bool CanClose => _item is { TotalTasks: > 0 } && _item.CompletedTasks == _item.TotalTasks;
     private bool CanSaveStatus => _canManage && !_saving && _item is not null &&
         !string.Equals(_recordStatus, _item.Status, StringComparison.OrdinalIgnoreCase) &&

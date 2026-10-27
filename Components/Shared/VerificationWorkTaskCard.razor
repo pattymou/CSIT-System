@@ -28,7 +28,7 @@
             <div class="project-table-wrap"><table class="project-table"><thead><tr><th>版本</th><th>檔名</th><th>審核</th><th>上傳時間</th><th>操作</th></tr></thead><tbody>
             @foreach (var report in Task.Reports.OrderByDescending(x => x.VersionNo))
             {
-                <tr><td>v@report.VersionNo</td><td>@report.FileName</td><td>@(report.IsFinal ? "Final" : report.ReviewStatus ?? "—")</td><td>@report.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td><td><a class="table-link-btn" href="@($"/api/files/{report.Id}/download")" target="_blank">下載</a></td></tr>
+                <tr><td>@($"v{report.VersionNo}")</td><td>@report.FileName</td><td>@(report.IsFinal ? "Final" : report.ReviewStatus ?? "—")</td><td>@report.CreatedAt.ToLocalTime().ToString("yyyy-MM-dd HH:mm")</td><td><a class="table-link-btn" href="@($"/api/files/{report.Id}/download")" target="_blank">下載</a></td></tr>
             }
             </tbody></table></div>
         }
