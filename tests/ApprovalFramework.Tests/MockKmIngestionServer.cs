@@ -17,6 +17,9 @@ namespace ApprovalFramework.Tests;
 internal sealed class MockKmIngestionServer : IAsyncDisposable
 {
     private readonly WebApplication app;
+    private readonly object responseLock = new();
+    private HttpStatusCode? nextFailure;
+    private TimeSpan? nextDelay;
 
     private MockKmIngestionServer(WebApplication app)
     {
@@ -25,8 +28,17 @@ internal sealed class MockKmIngestionServer : IAsyncDisposable
 
     public HttpClient Client { get; private set; } = null!;
     public KmIngestionRequest? LastRequest { get; private set; }
-    public int RequestCount { get; private set; }
-    public string JobId { get; } = "mock-job-001";
+    public string JobId { get; private set; } = "mock-job-unassigned";
+
+    public void FailNext(HttpStatusCode status)
+    {
+        lock (responseLock) nextFailure = status;
+    }
+
+    public void DelayNext(TimeSpan delay)
+    {
+        lock (responseLock) nextDelay = delay;
+    }
 
     public static async Task<MockKmIngestionServer> StartAsync()
     {
@@ -34,15 +46,28 @@ internal sealed class MockKmIngestionServer : IAsyncDisposable
         builder.WebHost.UseTestServer();
         var app = builder.Build();
         var server = new MockKmIngestionServer(app);
-        app.MapPost(KmIntegrationClient.IngestionPath, (HttpRequest request, KmIngestionRequest payload) =>
+        app.MapPost(KmIntegrationClient.IngestionPath, async (HttpRequest request, KmIngestionRequest payload) =>
         {
             if (!string.Equals(request.Headers.Authorization, "Bearer mock-csit-token", StringComparison.Ordinal))
                 return Results.Unauthorized();
             if (!Guid.TryParse(request.Headers["Idempotency-Key"], out var key) || key != payload.EventId)
                 return Results.BadRequest(new { error = "invalid_idempotency_key" });
-            server.RequestCount++;
+            Interlocked.Increment(ref server.requestCount);
             server.LastRequest = payload;
-            return Results.Json(new KmIngestionResponse(server.JobId, payload.SourceSystem,
+            HttpStatusCode? failure;
+            TimeSpan? delay;
+            lock (server.responseLock)
+            {
+                failure = server.nextFailure;
+                delay = server.nextDelay;
+                server.nextFailure = null;
+                server.nextDelay = null;
+            }
+            if (delay.HasValue) await Task.Delay(delay.Value, request.HttpContext.RequestAborted);
+            if (failure.HasValue) return Results.StatusCode((int)failure.Value);
+            var jobId = "mock-job-" + payload.EventId.ToString("N");
+            server.JobId = jobId;
+            return Results.Json(new KmIngestionResponse(jobId, payload.SourceSystem,
                 payload.DocumentId, payload.Version, "Accepted"), statusCode: (int)HttpStatusCode.Accepted);
         });
         await app.StartAsync();
@@ -50,6 +75,9 @@ internal sealed class MockKmIngestionServer : IAsyncDisposable
         server.Client.BaseAddress = new Uri("https://mock-km.test/");
         return server;
     }
+
+    private int requestCount;
+    public int RequestCount => Volatile.Read(ref requestCount);
 
     public async ValueTask DisposeAsync()
     {
