@@ -12,6 +12,8 @@
 @inject NavigationManager Nav
 @inject IMenuManagementService MenuService
 @inject IJSRuntime JS
+@inject SIT.DepartmentSystem.Web.Services.Approval.ApprovalContextUploads ContextUploads
+@inject AuthenticationStateProvider AuthProvider
 
 <h3>@PageTitle</h3>
 
@@ -67,10 +69,33 @@
             <input @bind="_form.PartNo" />
         </div>
 
-        <div class="form-row">
-            <label>廠商(中/英文)</label>
-            <input @bind="_form.Manufacturer" />
-        </div>
+        @if (IsEquipment)
+        {
+            <div class="form-row">
+                <label>廠商 *</label>
+                <select required @bind="_form.VendorId">
+                    <option value="">請選擇啟用中的廠商</option>
+                    @foreach (var vendor in _vendorOptions)
+                    {
+                        <option value="@vendor.Id">@vendor.Name@(!vendor.IsActive ? "（已停用，僅保留歷史關聯）" : "")</option>
+                    }
+                </select>
+            </div>
+            @if (_isEdit && !_form.VendorId.HasValue && !string.IsNullOrWhiteSpace(_form.Manufacturer))
+            {
+                <div class="form-row">
+                    <label>舊廠商文字（尚未連結）</label>
+                    <input value="@_form.Manufacturer" readonly />
+                </div>
+            }
+        }
+        else
+        {
+            <div class="form-row">
+                <label>廠商(中/英文)</label>
+                <input @bind="_form.Manufacturer" />
+            </div>
+        }
 
         <div class="form-row">
             <label>廠商貨品編號</label>
@@ -327,8 +352,6 @@
     </div>
 }
 
-@if (_isEdit)
-{
 <div id="apparatus-file-upload" class="form-card">
     <div class="case-card-head">
         <div>
@@ -336,16 +359,19 @@
             <h3>@PageFileTitle</h3>
         </div>
 
-        <button class="primary-btn"
-                @onclick="UploadFilesAsync"
-                disabled="@(_selectedFiles.Count == 0 || _uploading)">
-            @(_uploading ? "上傳中..." : "開始上傳")
-        </button>
+        @if (IsPersisted)
+        {
+            <button class="primary-btn"
+                    @onclick="UploadFilesAsync"
+                    disabled="@(_selectedFiles.Count == 0 || _uploading)">
+                @(_uploading ? "提交中..." : "提交所選附件")
+            </button>
+        }
     </div>
 
     <div class="upload-box" @ref="_fileInputContainer">
         <InputFile OnChange="OnFilesSelected" multiple />
-        <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案。</span>
+        <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案。新增設備時會與基本資料由同一個「確定」動作提交。</span>
     </div>
 
     @if (_selectedFiles.Count > 0)
@@ -363,12 +389,22 @@
 
     @if (_files.Count > 0)
     {
-        <div class="apparatus-image-grid">
+        <div class="upload-list">
             @foreach (var file in _files)
             {
-                <div class="apparatus-image-card">
-                    <img src="@file.ImageUrl" alt="@file.FileName" />
-                    <div>@file.FileName</div>
+                <div class="upload-file-item">
+                    @if (file.IsImage)
+                    {
+                        <img class="apparatus-file-thumbnail" src="@file.ImageUrl" alt="@file.FileName" />
+                    }
+                    <div>
+                        <a href="@file.DownloadUrl" target="_blank" rel="noopener">@file.FileName</a>
+                        <small>@FormatSize(file.FileSize) · @ArchiveStatusText(file.ArchiveStatus)</small>
+                        @if (!string.IsNullOrWhiteSpace(file.Sha256))
+                        {
+                            <small>SHA256：@file.Sha256</small>
+                        }
+                    </div>
                     <button type="button" class="table-chip-btn danger" @onclick="() => DeleteFileAsync(file.Id)">
                         刪除
                     </button>
@@ -376,8 +412,8 @@
             }
         </div>
     }
+    <SIT.DepartmentSystem.Web.Components.Shared.OwnApprovalUploadList Items="_ownUploads" />
 </div>
-}
 
 <div class="form-actions">
     <button class="primary-btn" @onclick="SaveAsync" disabled="@_saving">
@@ -414,6 +450,7 @@
     private bool _loading = true;
     private bool _savingResourceCapabilities;
     private bool _savingEnvironmentPresence;
+    private string? _createdAssetId;
     private ApparatusEnvironmentAssignmentDto? _environmentAssignment;
     private List<ResourceMatchingCatalogValueDto> _resourceCatalog = new();
     private List<ApparatusResourceCapabilityInput> _resourceMappings = new();
@@ -426,9 +463,13 @@
 
     private List<SelectedUploadFile> _selectedFiles = new();
     private List<ApparatusFileDto> _files = new();
+    private IReadOnlyList<SIT.DepartmentSystem.Web.Services.Approval.OwnApprovalUploadDto> _ownUploads = [];
 
     private List<SystemOptionDto> _apparatusKindOptions = new();
+    private List<VendorOptionDto> _vendorOptions = new();
     private ApparatusOwnershipOptionsDto _ownershipOptions = new();
+    private bool IsPersisted => _isEdit || !string.IsNullOrWhiteSpace(_createdAssetId);
+    private string? CurrentAssetId => _createdAssetId ?? _form.Id;
     private IReadOnlyList<ApparatusOwnerTeamOptionDto> AllowedOwnerTeams => !_form.DepartmentOptionId.HasValue ? []
         : DepartmentTeamRules.GetAllowedTeamsForDepartment(
             _ownershipOptions.Departments.FirstOrDefault(x => x.Id == _form.DepartmentOptionId)?.Value,
@@ -487,11 +528,14 @@
         _form = new ApparatusUpsertRequest { ReservationStatus = "可借用" };
         _selectedFiles = new();
         _files = new();
+        _ownUploads = [];
         _apparatusKindOptions = new();
         _ownershipOptions = new();
         _resourceCatalog = new();
         _resourceMappings = new();
         _environmentAssignment = null;
+        _createdAssetId = null;
+        _vendorOptions = new();
 
         await LoadPageMetaAsync();
         await LoadOptionsAsync();
@@ -516,6 +560,7 @@
                     PartNo = detail.PartNo,
                     Manufacturer = detail.Manufacturer,
                     ManufacturerNumber = detail.ManufacturerNumber,
+                    VendorId = detail.VendorId,
                     Brand = detail.Brand,
                     Model = detail.Model,
                     Number = detail.Number,
@@ -541,6 +586,8 @@
                 };
 
                 _files = detail.Files ?? new();
+                await LoadFilesAsync();
+                if (IsEquipment) await LoadVendorOptionsAsync(detail.VendorId);
 
                 if (_ownershipOptions.Departments.All(x => x.Id != _form.DepartmentOptionId))
                 {
@@ -566,6 +613,7 @@
 
         _form.Id = newId?.Id ?? "";
         _form.ReservationStatus = string.IsNullOrWhiteSpace(_form.ReservationStatus) ? "可借用" : _form.ReservationStatus;
+        if (IsEquipment) await LoadVendorOptionsAsync();
 
         Console.WriteLine($"[ApparatusEdit] New asset id loaded. moduleCode={EffectiveModuleCode}, id={_form.Id}");
     }
@@ -659,16 +707,22 @@
             return;
         }
 
+        if (IsEquipment && !_isEdit && !IsPersisted && !_form.VendorId.HasValue)
+        {
+            _message = "新增設備必須選擇啟用中的廠商。";
+            return;
+        }
+
         _saving = true;
 
         try
         {
             BrowserApiResponse response;
 
-            if (_isEdit)
+            if (IsPersisted)
             {
-                Console.WriteLine($"[ApparatusEdit] Update start. moduleCode={EffectiveModuleCode}, id={_form.Id}, name={_form.Name}, kind={_form.Kind}");
-                response = await Api.PutJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}", _form);
+                Console.WriteLine($"[ApparatusEdit] Update start. moduleCode={EffectiveModuleCode}, id={CurrentAssetId}, name={_form.Name}, kind={_form.Kind}");
+                response = await Api.PutJsonAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(CurrentAssetId!)}", _form);
             }
             else
             {
@@ -681,7 +735,7 @@
             if (response.IsSuccessStatusCode)
             {
                 Console.WriteLine($"[ApparatusEdit] Save success. status={response.StatusCode}, body={body}");
-                if (!_isEdit)
+                if (!IsPersisted)
                 {
                     var createdId = _form.Id ?? string.Empty;
                     try
@@ -695,8 +749,14 @@
                     {
                         // The create endpoint normally returns the canonical id; use the preallocated id as fallback.
                     }
-
-                    Nav.NavigateTo($"/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(createdId)}/edit?focus=files");
+                    _createdAssetId = createdId;
+                    _form.Id = createdId;
+                    if (_selectedFiles.Count > 0 && !await UploadFilesForAssetAsync(createdId))
+                    {
+                        _message = $"設備已建立（ID：{createdId}），但附件提交失敗；請保留本頁並按『提交所選附件』安全重試。{_message}";
+                        return;
+                    }
+                    Nav.NavigateTo($"/assets/{Uri.EscapeDataString(EffectiveModuleCode)}");
                 }
                 else
                 {
@@ -738,14 +798,14 @@
 
     private async Task UploadFilesAsync()
     {
-        if (!_isEdit)
+        if (!IsPersisted)
         {
             _message = "請先儲存設備，再上傳檔案。";
             Console.WriteLine("[ApparatusEdit] Upload blocked. Asset is not saved.");
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_form.Id))
+        if (string.IsNullOrWhiteSpace(CurrentAssetId))
         {
             _message = "尚未取得 ID。";
             Console.WriteLine("[ApparatusEdit] Upload blocked. Asset id is empty.");
@@ -768,36 +828,34 @@
             return;
         }
 
+        await UploadFilesForAssetAsync(CurrentAssetId!);
+    }
+
+    private async Task<bool> UploadFilesForAssetAsync(string assetId)
+    {
         _uploading = true;
         _message = null;
-
         try
         {
-            Console.WriteLine($"[ApparatusEdit] Upload start. moduleCode={EffectiveModuleCode}, id={_form.Id}, count={_selectedFiles.Count}");
-
             var response = await Api.UploadFilesAsync(
-                $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files",
+                $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(assetId)}/files",
                 _fileInputContainer);
-            var responseText = response.Body;
-
-            if (response.IsSuccessStatusCode)
+            if (!response.IsSuccessStatusCode)
             {
-                _selectedFiles.Clear();
-                await LoadFilesAsync();
-                _message = response.StatusCode == 202
-                    ? "已送主管審核，核准後才會顯示正式檔案。"
-                    : "上傳成功。";
-                Console.WriteLine($"[ApparatusEdit] Upload success. id={_form.Id}, body={responseText}");
-                return;
+                _message = $"附件提交失敗：{response.StatusCode} {response.Body}";
+                return false;
             }
-
-            _message = $"上傳失敗：{response.StatusCode} {responseText}";
-            Console.WriteLine($"[ApparatusEdit] Upload failed. status={response.StatusCode}, body={responseText}");
+            _selectedFiles.Clear();
+            await LoadFilesAsync();
+            _message = response.StatusCode == 202
+                ? "附件已送主管審核，核准後才會建立正式檔案。"
+                : "附件已完成正式提交。";
+            return true;
         }
         catch (Exception ex)
         {
-            _message = $"上傳發生例外：{ex.Message}";
-            Console.WriteLine($"[ApparatusEdit] Upload exception: {ex}");
+            _message = $"附件提交發生例外：{ex.Message}";
+            return false;
         }
         finally
         {
@@ -807,7 +865,7 @@
 
     private async Task LoadFilesAsync()
     {
-        if (string.IsNullOrWhiteSpace(_form.Id))
+        if (string.IsNullOrWhiteSpace(CurrentAssetId))
         {
             _files = new();
             return;
@@ -816,7 +874,9 @@
         Console.WriteLine($"[ApparatusEdit] LoadFiles start. moduleCode={EffectiveModuleCode}, id={_form.Id}");
 
         _files = await Api.GetAsync<List<ApparatusFileDto>>(
-            $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{_form.Id}/files");
+            $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(CurrentAssetId!)}/files");
+        var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+        _ownUploads = await ContextUploads.ForAssetAsync(user, EffectiveModuleCode, CurrentAssetId!);
 
         Console.WriteLine($"[ApparatusEdit] LoadFiles done. id={_form.Id}, count={_files.Count}");
     }
@@ -851,6 +911,12 @@
         EnsureCurrentOption(_apparatusKindOptions, _form.Kind);
 
         Console.WriteLine($"[ApparatusEdit] LoadOptions done. kind={_apparatusKindOptions.Count}, teams={_ownershipOptions.Teams.Count}, users={_ownershipOptions.Users.Count}");
+    }
+
+    private async Task LoadVendorOptionsAsync(Guid? includeVendorId = null)
+    {
+        var suffix = includeVendorId.HasValue ? $"?includeVendorId={includeVendorId.Value}" : string.Empty;
+        _vendorOptions = await Api.GetAsync<List<VendorOptionDto>>($"/api/vendors/options{suffix}");
     }
 
     private async Task LoadEnvironmentAssignmentAsync()
@@ -997,6 +1063,14 @@
         return $"{size} B";
     }
 
+    private static string ArchiveStatusText(string? status) => status switch
+    {
+        "Archived" => "正式入庫",
+        "Failed" => "歸檔失敗，可安全重試",
+        "Pending" => "等待歸檔",
+        _ => "既有檔案"
+    };
+
     private class SelectedUploadFile
     {
         public string FileName { get; set; } = "";
@@ -1122,6 +1196,11 @@
         public string? ContentType { get; set; }
         public long FileSize { get; set; }
         public string ImageUrl { get; set; } = "";
+        public string DownloadUrl { get; set; } = "";
+        public bool IsImage { get; set; }
+        public string? Sha256 { get; set; }
+        public string? ArchiveStatus { get; set; }
+        public string? ArchiveError { get; set; }
         public DateTime CreatedAt { get; set; }
     }
 
@@ -1141,6 +1220,7 @@
         public string? PartNo { get; set; }
         public string? Manufacturer { get; set; }
         public string? ManufacturerNumber { get; set; }
+        public Guid? VendorId { get; set; }
         public string? Brand { get; set; }
         public string? Model { get; set; }
         public string? Number { get; set; }

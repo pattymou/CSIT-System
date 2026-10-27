@@ -8,6 +8,8 @@ public class ApparatusListItemDto
     public string Name { get; set; } = "";
     public string? Kind { get; set; }
     public string? Brand { get; set; }
+    public Guid? VendorId { get; set; }
+    public string? VendorName { get; set; }
     public string? Model { get; set; }
     public string? Number { get; set; }
     public string? ReservationStatus { get; set; }
@@ -39,6 +41,8 @@ public class ApparatusDetailDto
     public string? PartNo { get; set; }
     public string? Manufacturer { get; set; }
     public string? ManufacturerNumber { get; set; }
+    public Guid? VendorId { get; set; }
+    public string? VendorName { get; set; }
     public string? Brand { get; set; }
     public string? Model { get; set; }
     public string? Number { get; set; }
@@ -84,6 +88,7 @@ public class ApparatusUpsertRequest
     public string? PartNo { get; set; }
     public string? Manufacturer { get; set; }
     public string? ManufacturerNumber { get; set; }
+    public Guid? VendorId { get; set; }
     public string? Brand { get; set; }
     public string? Model { get; set; }
     public string? Number { get; set; }
@@ -113,9 +118,15 @@ public class ApparatusFileDto
     public Guid Id { get; set; }
     public string ApparatusId { get; set; } = "";
     public string FileName { get; set; } = "";
+    public string StoredFileName { get; set; } = "";
     public string? ContentType { get; set; }
     public long FileSize { get; set; }
     public string ImageUrl { get; set; } = "";
+    public string DownloadUrl { get; set; } = "";
+    public bool IsImage { get; set; }
+    public string? Sha256 { get; set; }
+    public string? ArchiveStatus { get; set; }
+    public string? ArchiveError { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 

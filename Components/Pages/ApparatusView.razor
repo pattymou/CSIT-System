@@ -42,7 +42,7 @@ else
 
             <div class="record-detail-item"><span>類別</span><strong>@Display(_item.Kind)</strong></div>
             <div class="record-detail-item"><span>料號</span><strong>@Display(_item.PartNo)</strong></div>
-            <div class="record-detail-item"><span>廠商(中/英文)</span><strong>@Display(_item.Manufacturer)</strong></div>
+            <div class="record-detail-item"><span>廠商</span><strong>@Display(_item.VendorName ?? _item.Manufacturer)</strong></div>
 
             <div class="record-detail-item"><span>廠商貨品編號</span><strong>@Display(_item.ManufacturerNumber)</strong></div>
             <div class="record-detail-item"><span>廠牌</span><strong>@Display(_item.Brand)</strong></div>
@@ -80,26 +80,32 @@ else
     <div class="form-card">
         <div class="case-card-head">
             <div>
-                <div class="case-kicker">APPARATUS PHOTOS</div>
-                <h3>設備照片</h3>
+                <div class="case-kicker">APPARATUS DOCUMENTS</div>
+                <h3>設備文件與照片</h3>
             </div>
         </div>
 
         @if (_item.Files.Count == 0)
         {
             <div class="record-empty-box">
-                <strong>目前沒有照片</strong>
-                <span>請到修改頁上傳設備照片。</span>
+                <strong>目前沒有文件</strong>
+                <span>請到修改頁選取並提交設備文件。</span>
             </div>
         }
         else
         {
-            <div class="apparatus-image-grid">
+            <div class="upload-list">
                 @foreach (var file in _item.Files)
                 {
-                    <div class="apparatus-image-card">
-                        <img src="@file.ImageUrl" alt="@file.FileName" />
-                        <div>@file.FileName</div>
+                    <div class="upload-file-item">
+                        @if (file.IsImage)
+                        {
+                            <img class="apparatus-view-thumbnail" src="@file.ImageUrl" alt="@file.FileName" />
+                        }
+                        <div>
+                            <a href="@file.DownloadUrl" target="_blank" rel="noopener">@file.FileName</a>
+                            <small>@FormatSize(file.FileSize) · @ArchiveStatusText(file.ArchiveStatus)</small>
+                        </div>
                     </div>
                 }
             </div>
@@ -218,4 +224,21 @@ else
     {
         return value?.ToString("yyyy/MM/dd") ?? "-";
     }
+
+    private static string FormatSize(long size) => size >= 1024 * 1024
+        ? $"{size / 1024d / 1024d:0.##} MB"
+        : size >= 1024 ? $"{size / 1024d:0.##} KB" : $"{size} B";
+
+    private static string ArchiveStatusText(string? value) => value switch
+    {
+        "Archived" => "正式入庫",
+        "Failed" => "歸檔失敗",
+        "Pending" => "等待歸檔",
+        _ => "既有檔案"
+    };
 }
+
+<style>
+    .apparatus-view-thumbnail { width:96px; height:72px; object-fit:cover; border-radius:8px; margin-right:.75rem; }
+    .upload-file-item small { display:block; color:var(--text-muted,#64748b); }
+</style>

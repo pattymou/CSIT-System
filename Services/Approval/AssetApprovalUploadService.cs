@@ -41,7 +41,7 @@ public sealed class AssetApprovalUploadService(
         {
             if (resubmissionOfId.HasValue)
                 throw new InvalidOperationException("此來源目前無法重新送審，請從原項目重新上傳。");
-            await formal.UploadFilesAsync(moduleCode, assetId, files, "SYSTEM");
+            await formal.UploadFilesAsync(moduleCode, assetId, files, Actor(uploader));
             return (ApprovalUploadDecisionKind.DirectCommit, null);
         }
 
@@ -54,7 +54,7 @@ public sealed class AssetApprovalUploadService(
         if (decision.Kind != ApprovalUploadDecisionKind.Pending)
         {
             // Keep the existing formal upload behavior when the menu flag is off.
-            await formal.UploadFilesAsync(moduleCode, assetId, files, "SYSTEM");
+            await formal.UploadFilesAsync(moduleCode, assetId, files, Actor(uploader));
             if (decision.Kind == ApprovalUploadDecisionKind.ApprovalBypassed)
                 foreach (var _ in files)
                     await submissions.RecordBypassAsync(Guid.NewGuid(), decision, uploader, cancellationToken);
@@ -97,4 +97,7 @@ public sealed class AssetApprovalUploadService(
         }
         return (ApprovalUploadDecisionKind.Pending, newId);
     }
+
+    private static string Actor(ClaimsPrincipal user) =>
+        user.FindFirstValue("account") ?? user.Identity?.Name ?? "SYSTEM";
 }

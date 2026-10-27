@@ -16,6 +16,9 @@ public class Apparatus
     public string? PartNo { get; set; }
     public string? Manufacturer { get; set; }
     public string? ManufacturerNumber { get; set; }
+    public Guid? VendorId { get; set; }
+    public Vendor? Vendor { get; set; }
+    public string? StorageFolderName { get; set; }
 
     public string? Brand { get; set; }
     public string? Model { get; set; }

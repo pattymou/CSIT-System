@@ -1,0 +1,338 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.AspNetCore.Http;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Diagnostics;
+using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
+using SIT.DepartmentSystem.Web.Data;
+using SIT.DepartmentSystem.Web.Entities;
+using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Models.Config;
+using SIT.DepartmentSystem.Web.Services;
+using SIT.DepartmentSystem.Web.Services.Implementations;
+using SIT.DepartmentSystem.Web.Services.Interfaces;
+
+namespace ApprovalFramework.Tests;
+
+public sealed class EquipmentVendorManagementTests
+{
+    [Fact]
+    [Trait("Category", "PostgreSqlIntegration")]
+    public async Task PostgreSqlMigration_EnforcesConstraints_AndRunsVendorArchiveRoundTrip()
+    {
+        var connection = Environment.GetEnvironmentVariable("CSIT_EQUIPMENT_VENDOR_TEST_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connection)) return;
+        var info = new NpgsqlConnectionStringBuilder(connection);
+        Assert.StartsWith("csit_equipment_vendor_", info.Database, StringComparison.Ordinal);
+        Assert.True(info.Host is "localhost" or "127.0.0.1");
+        var options = new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(connection).Options;
+        await using var db = new AppDbContext(options);
+        Assert.Contains("20261027080940_AddEquipmentVendorManagement", await db.Database.GetAppliedMigrationsAsync());
+        Assert.True(await db.MenuItems.AnyAsync(x => x.Code == "vendors" && x.RoutePath == "/vendors"));
+
+        var root = NewRoot();
+        try
+        {
+            await SeedRootAsync(db, root);
+            var service = new VendorService(db, new ManagedAssetFileStorage(db));
+            var id = await service.CreateAsync(new VendorUpsertRequest
+                { Name = "PostgreSQL Vendor", Types = [], IsActive = true }, "pg-test");
+            await service.UploadFilesAsync(id, [File("manual.pdf", "application/pdf", "pg-content")], "pg-test");
+            var detail = Assert.IsType<VendorDetailDto>(await service.GetAsync(id));
+            Assert.Equal(FileArchiveStatuses.Archived, Assert.Single(detail.Files).ArchiveStatus);
+
+            db.Vendors.Add(new Vendor
+            {
+                Id = Guid.NewGuid(), Name = "Duplicate physical row", NormalizedName = "POSTGRESQL VENDOR",
+                StorageFolderName = "Different folder", Types = [], CreatedBy = "pg-test", UpdatedBy = "pg-test",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+            db.ChangeTracker.Clear();
+
+            db.Vendors.Add(new Vendor
+            {
+                Id = Guid.NewGuid(), Name = "Invalid Type", NormalizedName = "INVALID TYPE",
+                StorageFolderName = "Invalid Type", Types = ["NotAllowed"], CreatedBy = "pg-test",
+                UpdatedBy = "pg-test", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await Assert.ThrowsAsync<DbUpdateException>(() => db.SaveChangesAsync());
+        }
+        finally { DeleteRoot(root); }
+    }
+
+    [Fact]
+    public async Task VendorCrud_NormalizesDuplicate_DisablesOptions_AndProtectsReferences()
+    {
+        await using var db = NewDb();
+        var root = NewRoot();
+        try
+        {
+            await SeedRootAsync(db, root);
+            var service = new VendorService(db, new ManagedAssetFileStorage(db));
+            var id = await service.CreateAsync(new VendorUpsertRequest
+            {
+                Name = "  Acme   Instruments  ", Types = [], IsActive = true
+            }, "tester");
+            var detail = Assert.IsType<VendorDetailDto>(await service.GetAsync(id));
+            Assert.Equal("Acme Instruments", detail.Name);
+            Assert.Empty(detail.Types);
+
+            var duplicate = await Assert.ThrowsAsync<InvalidOperationException>(() => service.CreateAsync(
+                new VendorUpsertRequest { Name = "acme instruments", IsActive = true }, "tester"));
+            Assert.Contains("相同名稱", duplicate.Message);
+
+            await service.UpdateAsync(id, new VendorUpsertRequest
+            {
+                Name = detail.Name, Types = ["Manufacturer", "Supplier"], IsActive = false,
+                RowVersion = detail.RowVersion
+            }, "editor");
+            Assert.DoesNotContain(await service.OptionsAsync(), x => x.Id == id);
+            Assert.Contains(await service.OptionsAsync(id), x => x.Id == id && !x.IsActive);
+
+            db.Apparatuses.Add(new Apparatus
+            {
+                Id = "EQ-REF", ModuleCode = "equipment", Name = "Referenced", Kind = "Tester",
+                VendorId = id, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+            var referenced = await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteAsync(id));
+            Assert.Contains("設備引用", referenced.Message);
+        }
+        finally { DeleteRoot(root); }
+    }
+
+    [Fact]
+    public async Task VendorFiles_UseThreeLevelStableFolder_AndVerifiedSha256AcrossRename()
+    {
+        await using var db = NewDb();
+        var root = NewRoot();
+        try
+        {
+            await SeedRootAsync(db, root);
+            var service = new VendorService(db, new ManagedAssetFileStorage(db));
+            var id = await service.CreateAsync(new VendorUpsertRequest
+                { Name = "Keysight", Types = ["Manufacturer"], IsActive = true }, "tester");
+            var files = new[]
+            {
+                File("manual.pdf", "application/pdf", "pdf-content"),
+                File("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx-content"),
+                File("photo.png", "image/png", "png-content")
+            };
+            await service.UploadFilesAsync(id, files, "tester");
+
+            var before = Assert.IsType<VendorDetailDto>(await service.GetAsync(id));
+            Assert.Equal(3, before.Files.Count);
+            Assert.All(before.Files, file =>
+            {
+                Assert.Equal(FileArchiveStatuses.Archived, file.ArchiveStatus);
+                Assert.Equal(64, file.Sha256!.Length);
+            });
+            Assert.True(before.Files.Single(x => x.FileName == "photo.png").IsImage);
+            Assert.False(before.Files.Single(x => x.FileName == "manual.pdf").IsImage);
+            var vendorFolder = Path.Combine(root, "設備儀器管理", "廠商資訊", "Keysight");
+            Assert.True(Directory.Exists(vendorFolder));
+
+            await service.UpdateAsync(id, new VendorUpsertRequest
+            {
+                Name = "Keysight Technologies", Types = ["Manufacturer"], IsActive = true,
+                RowVersion = before.RowVersion
+            }, "editor");
+            Assert.True(Directory.Exists(vendorFolder));
+            Assert.False(Directory.Exists(Path.Combine(root, "設備儀器管理", "廠商資訊", "Keysight Technologies")));
+            var downloaded = await service.DownloadAsync(before.Files.Single(x => x.FileName == "manual.pdf").Id);
+            Assert.Equal("pdf-content", Encoding.UTF8.GetString(downloaded.Content));
+        }
+        finally { DeleteRoot(root); }
+    }
+
+    [Fact]
+    public async Task Equipment_RequiresActiveVendorForNewRecords_PreservesLegacy_AndArchivesApprovedFormats()
+    {
+        await using var db = NewDb();
+        var root = NewRoot();
+        try
+        {
+            var ownership = await SeedRootAndOwnershipAsync(db, root);
+            var vendorService = new VendorService(db, new ManagedAssetFileStorage(db));
+            var vendorId = await vendorService.CreateAsync(new VendorUpsertRequest
+                { Name = "Anritsu", Types = ["Manufacturer"], IsActive = true }, "tester");
+            var raw = Options.Create(new RawDataSettings { Enabled = false });
+            var rawExport = new CapturingRawDataExportService();
+            var apparatus = new ApparatusService(db, Options.Create(new ApparatusSettings()), raw,
+                rawExport, ProvisioningClient(), new ManagedAssetFileStorage(db));
+            var request = Request(vendorId, ownership.DepartmentId, ownership.TeamId);
+            var equipmentId = await apparatus.CreateAsync("equipment", request);
+            var stored = await db.Apparatuses.SingleAsync(x => x.Id == equipmentId);
+            Assert.Equal(vendorId, stored.VendorId);
+            Assert.Equal("Anritsu", stored.Manufacturer);
+
+            var approvedFiles = new[]
+            {
+                File("manual.pdf", "application/pdf", "manual"),
+                File("datasheet.docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "word"),
+                File("sop.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation", "ppt"),
+                File("front.jpg", "image/jpeg", "image")
+            };
+            foreach (var file in approvedFiles)
+                await apparatus.UploadFilesAsync("equipment", equipmentId, [file], "approver", Guid.NewGuid());
+            var detail = Assert.IsType<ApparatusDetailDto>(await apparatus.GetByIdAsync("equipment", equipmentId));
+            Assert.Equal(4, detail.Files.Count);
+            Assert.All(detail.Files, file => Assert.Equal(FileArchiveStatuses.Archived, file.ArchiveStatus));
+            Assert.NotNull(rawExport.LastLatestPackage);
+            Assert.Empty(rawExport.LastLatestPackage.Files);
+            Assert.Contains(Path.Combine("設備儀器管理", "設備資訊", "Wi-Fi 7 Tester_ASSET-1234"),
+                (await db.ApparatusFiles.FirstAsync()).FilePath);
+
+            var vendor = await db.Vendors.SingleAsync(x => x.Id == vendorId);
+            vendor.IsActive = false;
+            await db.SaveChangesAsync();
+            await Assert.ThrowsAsync<InvalidOperationException>(() => apparatus.CreateAsync("equipment",
+                Request(vendorId, ownership.DepartmentId, ownership.TeamId, "ASSET-5678")));
+
+            db.Apparatuses.Add(new Apparatus
+            {
+                Id = "LEGACY-EQ", ModuleCode = "equipment", Name = "Legacy", Kind = "Tester",
+                Manufacturer = "Legacy Text Vendor", DepartmentOptionId = ownership.DepartmentId,
+                OwnerTeamOptionId = ownership.TeamId, CustodianAccount = "tester",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+            var legacyRequest = Request(null, ownership.DepartmentId, ownership.TeamId, null);
+            legacyRequest.Id = "LEGACY-EQ";
+            legacyRequest.Name = "Legacy Updated";
+            legacyRequest.Manufacturer = "Legacy Text Vendor";
+            Assert.True(await apparatus.UpdateAsync("equipment", "LEGACY-EQ", legacyRequest));
+            Assert.Equal("Legacy Text Vendor", (await db.Apparatuses.SingleAsync(x => x.Id == "LEGACY-EQ")).Manufacturer);
+        }
+        finally { DeleteRoot(root); }
+    }
+
+    [Fact]
+    public async Task ManagedStorage_RejectsTraversal_UnsupportedFiles_AndConflictingRetry()
+    {
+        await using var db = NewDb();
+        var root = NewRoot();
+        try
+        {
+            await SeedRootAsync(db, root);
+            var storage = new ManagedAssetFileStorage(db);
+            Assert.Throws<InvalidOperationException>(() => ManagedAssetFileStorage.ValidateOriginalFileName("../secret.pdf", 1));
+            Assert.Throws<InvalidOperationException>(() => ManagedAssetFileStorage.ValidateOriginalFileName("tool.exe", 1));
+            var folder = await storage.VendorFolderAsync("Safe");
+            await using var first = new MemoryStream(Encoding.UTF8.GetBytes("one"));
+            var hash = await storage.ArchiveAsync(first, folder, "fixed.pdf");
+            Assert.Equal(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("one"))), hash);
+            await using var conflict = new MemoryStream(Encoding.UTF8.GetBytes("two"));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => storage.ArchiveAsync(conflict, folder, "fixed.pdf"));
+        }
+        finally { DeleteRoot(root); }
+    }
+
+    private static AppDbContext NewDb() => new(new DbContextOptionsBuilder<AppDbContext>()
+        .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+        .ConfigureWarnings(x => x.Ignore(InMemoryEventId.TransactionIgnoredWarning)).Options);
+
+    private static string NewRoot() => Path.Combine(Path.GetTempPath(), "csit-equipment-vendor-tests", Guid.NewGuid().ToString("N"));
+    private static void DeleteRoot(string root) { if (Directory.Exists(root)) Directory.Delete(root, true); }
+
+    private static async Task SeedRootAsync(AppDbContext db, string root)
+    {
+        Directory.CreateDirectory(root);
+        db.SystemOptions.Add(new SystemOption
+        {
+            Id = Guid.NewGuid(), Category = "AssetRootPath", Name = "equipment", Value = root,
+            IsEnabled = true, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+    }
+
+    private static async Task<(Guid DepartmentId, Guid TeamId)> SeedRootAndOwnershipAsync(AppDbContext db, string root)
+    {
+        await SeedRootAsync(db, root);
+        var departmentId = Guid.NewGuid();
+        var teamId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+        db.SystemOptions.AddRange(
+            new SystemOption { Id = departmentId, Category = SystemOptionCategories.Department, Name = "台北", Value = "TW", IsEnabled = true, CreatedAt = now, UpdatedAt = now },
+            new SystemOption { Id = teamId, Category = SystemOptionCategories.Team, Name = "Lab", Value = "LAB", IsEnabled = true, CreatedAt = now, UpdatedAt = now });
+        await db.SaveChangesAsync();
+        return (departmentId, teamId);
+    }
+
+    private static ApparatusUpsertRequest Request(Guid? vendorId, Guid departmentId, Guid teamId,
+        string? productsId = "ASSET-1234") => new()
+    {
+        ProductsId = productsId, Name = "Wi-Fi 7 Tester", Kind = "Tester", VendorId = vendorId,
+        Manufacturer = "untrusted legacy input", DepartmentOptionId = departmentId,
+        OwnerTeamOptionId = teamId, CustodianAccount = "tester", ReservationStatus = "可借用"
+    };
+
+    private static FormFile File(string name, string contentType, string content)
+    {
+        var bytes = Encoding.UTF8.GetBytes(content);
+        return new FormFile(new MemoryStream(bytes), 0, bytes.Length, "files", name)
+            { Headers = new HeaderDictionary(), ContentType = contentType };
+    }
+
+    private static SharedIdentityProvisioningClient ProvisioningClient()
+    {
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["SharedIdentity:ProvisioningClientId"] = "test-client",
+            ["SharedIdentity:ProvisioningClientSecret"] = "test-secret"
+        }).Build();
+        return new SharedIdentityProvisioningClient(new TestHttpClientFactory(), configuration,
+            NullLogger<SharedIdentityProvisioningClient>.Instance);
+    }
+
+    private sealed class TestHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new IdentityHandler())
+            { BaseAddress = new Uri("http://identity.test/") };
+    }
+
+    private sealed class IdentityHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            object body = request.RequestUri!.AbsolutePath.EndsWith("/connect/token", StringComparison.Ordinal)
+                ? new { access_token = "test-token" }
+                : new[]
+                {
+                    new
+                    {
+                        identityUserId = Guid.NewGuid(), employeeNo = "T001", account = "tester",
+                        displayName = "Tester", department = "TW", teamCode = "LAB", position = "Engineer",
+                        extension = (string?)null, email = "tester@askey.com", csitRole = "CsitStaff",
+                        dataAccessLevel = "Editor", accountStatus = "Active", systemAccessStatus = "Active",
+                        createdAt = DateTimeOffset.UtcNow, createdByIdentityUserId = (Guid?)null,
+                        createdByAccount = (string?)null, canReissueTemporaryPassword = false
+                    }
+                };
+            return Task.FromResult(new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(JsonSerializer.Serialize(body), Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class CapturingRawDataExportService : IRawDataExportService
+    {
+        public RawDataLatestPackageRequest? LastLatestPackage { get; private set; }
+        public Task<RawDataExportResult> ExportAsync(RawDataExportRequest request) =>
+            Task.FromResult(new RawDataExportResult { Success = true });
+        public Task<RawDataExportResult> ExportLatestPackageAsync(RawDataLatestPackageRequest request)
+        {
+            LastLatestPackage = request;
+            return Task.FromResult(new RawDataExportResult { Success = true });
+        }
+        public Task<bool> DeleteLatestPackageAsync(string sourceType, string moduleCode, string entityId) =>
+            Task.FromResult(true);
+    }
+}

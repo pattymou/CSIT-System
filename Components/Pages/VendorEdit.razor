@@ -1,0 +1,206 @@
+@page "/vendors/new"
+@page "/vendors/{Id:guid}/edit"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using global::System.Text.Json
+@using Microsoft.AspNetCore.Components.Forms
+@using SIT.DepartmentSystem.Web.Models.Api
+@inject BrowserApiClient Api
+@inject NavigationManager Nav
+
+<div class="case-title-row">
+    <div><div class="case-kicker">EQUIPMENT / VENDOR</div><h3>@(IsEdit ? "編輯廠商" : "新增廠商")</h3></div>
+    <button class="btn-secondary" @onclick="Back">返回廠商清單</button>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="form-card error-text">@_message</div>
+}
+
+@if (_loading)
+{
+    <div class="form-card">載入中...</div>
+}
+else
+{
+    <div class="form-card">
+        <div class="case-card-head"><div><div class="case-kicker">MASTER DATA</div><h3>基本資料</h3></div></div>
+        <div class="form-grid">
+            <div class="form-row"><label>廠商名稱 *</label><input maxlength="200" @bind="_form.Name" /></div>
+            <div class="form-row"><label>英文名稱／別名</label><input maxlength="500" @bind="_form.Aliases" /></div>
+            <div class="form-row full-width">
+                <label>廠商類型（可複選、可不選）</label>
+                <div class="vendor-type-options">
+                    @foreach (var type in VendorTypes)
+                    {
+                        <label><input type="checkbox" checked="@HasType(type.Code)" @onchange="e => ToggleType(type.Code, e)" /> @type.Label</label>
+                    }
+                </div>
+            </div>
+            <div class="form-row"><label>官方網站</label><input maxlength="500" @bind="_form.Website" /></div>
+            <div class="form-row"><label>聯絡人</label><input maxlength="200" @bind="_form.ContactPerson" /></div>
+            <div class="form-row"><label>聯絡電話</label><input maxlength="100" @bind="_form.Phone" /></div>
+            <div class="form-row"><label>E-mail</label><input type="email" maxlength="320" @bind="_form.Email" /></div>
+            <div class="form-row full-width"><label>地址</label><input maxlength="1000" @bind="_form.Address" /></div>
+            <div class="form-row full-width"><label>備註</label><textarea rows="4" maxlength="4000" @bind="_form.Notes"></textarea></div>
+            <div class="form-row"><label><input type="checkbox" @bind="_form.IsActive" /> 啟用（停用後不可供新設備選取）</label></div>
+        </div>
+    </div>
+
+    <div class="form-card">
+        <div class="case-card-head">
+            <div><div class="case-kicker">FORMAL FILES</div><h3>廠商附件</h3></div>
+            @if (IsPersisted)
+            {
+                <button class="primary-btn" disabled="@(_selectedFiles.Count == 0 || _saving)" @onclick="UploadOnlyAsync">提交所選附件</button>
+            }
+        </div>
+        <div class="upload-box" @ref="_fileInputContainer">
+            <InputFile OnChange="OnFilesSelected" multiple />
+            <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案。新增廠商時會和主檔由同一個「儲存」動作提交。</span>
+        </div>
+        @if (_selectedFiles.Count > 0)
+        {
+            <div class="upload-list">@foreach (var file in _selectedFiles) { <div class="upload-file-item"><span>@file.Name</span><strong>@FormatSize(file.Size)</strong></div> }</div>
+        }
+        @if (_files.Count > 0)
+        {
+            <div class="upload-list">
+                @foreach (var file in _files)
+                {
+                    <div class="upload-file-item">
+                        @if (file.IsImage) { <img class="vendor-thumbnail" src="@file.DownloadUrl" alt="@file.FileName" /> }
+                        <div><a href="@file.DownloadUrl" target="_blank" rel="noopener">@file.FileName</a><small>@FormatSize(file.FileSize) · @ArchiveStatusText(file.ArchiveStatus)</small>@if (!string.IsNullOrWhiteSpace(file.Sha256)) { <small>SHA256：@file.Sha256</small> }</div>
+                        <button class="table-chip-btn danger" @onclick="() => DeleteFileAsync(file.Id)">刪除</button>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+
+    <div class="form-actions">
+        <button class="primary-btn" disabled="@_saving" @onclick="SaveAsync">@(_saving ? "處理中..." : "儲存")</button>
+        <button class="btn-secondary" @onclick="Back">取消</button>
+    </div>
+}
+
+@code {
+    [Parameter] public Guid? Id { get; set; }
+    private static readonly (string Code, string Label)[] VendorTypes =
+    [
+        ("Manufacturer", "製造商"), ("Agent", "代理商"), ("Supplier", "供應商"),
+        ("MaintenanceProvider", "維修服務商")
+    ];
+    private VendorUpsertRequest _form = new();
+    private List<VendorFileDto> _files = [];
+    private List<(string Name, long Size)> _selectedFiles = [];
+    private ElementReference _fileInputContainer;
+    private Guid? _createdId;
+    private bool _loading = true;
+    private bool _saving;
+    private string? _message;
+    private bool IsEdit => Id.HasValue;
+    private bool IsPersisted => Id.HasValue || _createdId.HasValue;
+    private Guid? CurrentId => Id ?? _createdId;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        try
+        {
+            if (Id.HasValue)
+            {
+                var detail = await Api.GetAsync<VendorDetailDto>($"/api/vendors/{Id.Value}");
+                _form = new VendorUpsertRequest
+                {
+                    Name = detail.Name, Aliases = detail.Aliases, Types = detail.Types,
+                    Website = detail.Website, ContactPerson = detail.ContactPerson, Phone = detail.Phone,
+                    Email = detail.Email, Address = detail.Address, Notes = detail.Notes,
+                    IsActive = detail.IsActive, RowVersion = detail.RowVersion
+                };
+                _files = detail.Files;
+            }
+        }
+        catch (Exception ex) { _message = $"載入廠商失敗：{ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private bool HasType(string type) => _form.Types.Contains(type, StringComparer.Ordinal);
+    private void ToggleType(string type, ChangeEventArgs args)
+    {
+        var values = _form.Types.ToHashSet(StringComparer.Ordinal);
+        if (args.Value is true) values.Add(type); else values.Remove(type);
+        _form.Types = values.ToArray();
+    }
+
+    private void OnFilesSelected(InputFileChangeEventArgs args) => _selectedFiles = args.GetMultipleFiles(20)
+        .Select(x => (x.Name, x.Size)).ToList();
+
+    private async Task SaveAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_form.Name)) { _message = "廠商名稱為必填。"; return; }
+        _saving = true;
+        try
+        {
+            BrowserApiResponse response;
+            if (IsPersisted)
+                response = await Api.PutJsonAsync($"/api/vendors/{CurrentId!.Value}", _form);
+            else
+                response = await Api.PostJsonAsync("/api/vendors", _form);
+            if (!response.IsSuccessStatusCode) { _message = $"儲存失敗：{response.Body}"; return; }
+            if (!IsPersisted)
+            {
+                var created = JsonSerializer.Deserialize<CreateVendorResponse>(response.Body,
+                    new JsonSerializerOptions(JsonSerializerDefaults.Web));
+                _createdId = created?.Id ?? throw new InvalidOperationException("伺服器未回傳廠商 ID。");
+            }
+            if (_selectedFiles.Count > 0 && !await UploadAsync(CurrentId!.Value))
+            {
+                _message = $"廠商已儲存（ID：{CurrentId}），但附件歸檔失敗；請保留本頁後安全重試。{_message}";
+                return;
+            }
+            Nav.NavigateTo("/vendors");
+        }
+        catch (Exception ex) { _message = $"儲存失敗：{ex.Message}"; }
+        finally { _saving = false; }
+    }
+
+    private async Task UploadOnlyAsync()
+    {
+        if (!CurrentId.HasValue || _selectedFiles.Count == 0) return;
+        _saving = true;
+        try { await UploadAsync(CurrentId.Value); }
+        finally { _saving = false; }
+    }
+
+    private async Task<bool> UploadAsync(Guid id)
+    {
+        var response = await Api.UploadFilesAsync($"/api/vendors/{id}/files", _fileInputContainer);
+        if (!response.IsSuccessStatusCode) { _message = $"附件歸檔失敗：{response.Body}"; return false; }
+        _selectedFiles.Clear();
+        var detail = await Api.GetAsync<VendorDetailDto>($"/api/vendors/{id}");
+        _files = detail.Files;
+        _form.RowVersion = detail.RowVersion;
+        _message = "附件已完成正式歸檔。";
+        return true;
+    }
+
+    private async Task DeleteFileAsync(Guid fileId)
+    {
+        var response = await Api.DeleteAsync($"/api/vendors/files/{fileId}");
+        if (!response.IsSuccessStatusCode) { _message = $"刪除附件失敗：{response.Body}"; return; }
+        if (CurrentId.HasValue) _files = (await Api.GetAsync<VendorDetailDto>($"/api/vendors/{CurrentId.Value}")).Files;
+    }
+
+    private void Back() => Nav.NavigateTo("/vendors");
+    private static string FormatSize(long size) => size >= 1024 * 1024 ? $"{size / 1024d / 1024d:0.##} MB" : size >= 1024 ? $"{size / 1024d:0.##} KB" : $"{size} B";
+    private static string ArchiveStatusText(string value) => value switch { "Archived" => "正式入庫", "Failed" => "歸檔失敗，可安全重試", "Pending" => "等待歸檔", _ => value };
+    private sealed class CreateVendorResponse { public Guid Id { get; set; } }
+}
+
+<style>
+    .vendor-type-options { display:flex; flex-wrap:wrap; gap:1rem; }
+    .vendor-thumbnail { width:72px; height:54px; object-fit:cover; border-radius:6px; margin-right:.75rem; }
+    .upload-file-item small { display:block; overflow-wrap:anywhere; }
+</style>

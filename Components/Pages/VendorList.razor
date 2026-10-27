@@ -1,0 +1,138 @@
+@page "/vendors"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using SIT.DepartmentSystem.Web.Models.Api
+@inject BrowserApiClient Api
+@inject NavigationManager Nav
+
+<div class="case-title-row">
+    <div>
+        <div class="case-kicker">EQUIPMENT / VENDORS</div>
+        <h3>廠商資訊管理</h3>
+    </div>
+    <div class="form-actions">
+        <button class="btn-secondary" @onclick="BackToEquipment">返回設備管理</button>
+        <button class="primary-btn" @onclick="Create">+ 新增廠商</button>
+    </div>
+</div>
+
+<div class="form-card">
+    <div class="form-grid">
+        <div class="form-row">
+            <label>關鍵字</label>
+            <input value="@_keyword" @oninput="OnKeywordChanged" placeholder="廠商名稱或英文名稱／別名" />
+        </div>
+        <div class="form-row">
+            <label><input type="checkbox" @bind="_includeDisabled" @bind:after="LoadAsync" /> 顯示已停用廠商</label>
+        </div>
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="form-card error-text">@_message</div>
+}
+
+<div class="form-card">
+    @if (_loading)
+    {
+        <div class="record-empty-box"><strong>載入中...</strong></div>
+    }
+    else if (_items.Count == 0)
+    {
+        <div class="record-empty-box"><strong>目前沒有符合條件的廠商</strong></div>
+    }
+    else
+    {
+        <div class="project-table-wrap">
+            <table class="project-table">
+                <thead>
+                    <tr><th>廠商名稱</th><th>英文名稱／別名</th><th>類型</th><th>聯絡資訊</th><th>設備數</th><th>狀態</th><th>操作</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var item in _items)
+                    {
+                        <tr>
+                            <td><strong>@item.Name</strong></td>
+                            <td>@Display(item.Aliases)</td>
+                            <td>@DisplayTypes(item.Types)</td>
+                            <td>@DisplayContact(item)</td>
+                            <td>@item.EquipmentCount</td>
+                            <td>@(item.IsActive ? "啟用" : "停用")</td>
+                            <td class="action-cell">
+                                <button class="table-chip-btn" @onclick="() => Edit(item.Id)">編輯</button>
+                                <button class="table-chip-btn danger" @onclick="() => DeleteAsync(item.Id)">刪除</button>
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private readonly Dictionary<string, string> _typeLabels = new()
+    {
+        ["Manufacturer"] = "製造商", ["Agent"] = "代理商", ["Supplier"] = "供應商",
+        ["MaintenanceProvider"] = "維修服務商"
+    };
+    private List<VendorListItemDto> _items = [];
+    private string? _keyword;
+    private string? _message;
+    private bool _includeDisabled = true;
+    private bool _loading = true;
+    private CancellationTokenSource? _searchCts;
+
+    protected override async Task OnInitializedAsync() => await LoadAsync();
+
+    private async Task LoadAsync()
+    {
+        _loading = true;
+        try
+        {
+            _items = await Api.GetAsync<List<VendorListItemDto>>(
+                $"/api/vendors?keyword={Uri.EscapeDataString(_keyword ?? string.Empty)}&includeDisabled={_includeDisabled.ToString().ToLowerInvariant()}");
+            _message = null;
+        }
+        catch (Exception ex) { _message = $"載入廠商失敗：{ex.Message}"; }
+        finally { _loading = false; }
+    }
+
+    private async Task OnKeywordChanged(ChangeEventArgs args)
+    {
+        _keyword = args.Value?.ToString();
+        _searchCts?.Cancel();
+        _searchCts?.Dispose();
+        _searchCts = new CancellationTokenSource();
+        try
+        {
+            await Task.Delay(250, _searchCts.Token);
+            await LoadAsync();
+        }
+        catch (TaskCanceledException) { }
+    }
+
+    private void Edit(Guid id) => Nav.NavigateTo($"/vendors/{id}/edit");
+    private void Create() => Nav.NavigateTo("/vendors/new");
+    private void BackToEquipment() => Nav.NavigateTo("/assets/equipment");
+
+    private async Task DeleteAsync(Guid id)
+    {
+        var response = await Api.DeleteAsync($"/api/vendors/{id}");
+        if (!response.IsSuccessStatusCode)
+        {
+            _message = $"刪除失敗：{response.Body}";
+            return;
+        }
+        _message = "廠商已刪除。";
+        await LoadAsync();
+    }
+
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private string DisplayTypes(IEnumerable<string> types) => string.Join("、", types.Select(x =>
+        _typeLabels.TryGetValue(x, out var label) ? label : x)) is { Length: > 0 } value ? value : "—";
+    private static string DisplayContact(VendorListItemDto item) =>
+        string.Join(" / ", new[] { item.ContactPerson, item.Phone }.Where(x => !string.IsNullOrWhiteSpace(x)))
+        is { Length: > 0 } value ? value : "—";
+}

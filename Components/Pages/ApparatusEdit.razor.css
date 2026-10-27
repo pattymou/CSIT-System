@@ -23,3 +23,15 @@
     }
     .environment-membership-grid { grid-template-columns:1fr; }
 }
+.apparatus-file-thumbnail {
+    width: 72px;
+    height: 54px;
+    object-fit: cover;
+    border-radius: 6px;
+    margin-right: .75rem;
+}
+
+.upload-file-item small {
+    display: block;
+    overflow-wrap: anywhere;
+}

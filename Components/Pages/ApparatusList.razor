@@ -17,6 +17,9 @@
     <div class="apparatus-page-actions">
         @if (string.Equals(EffectiveModuleCode, "equipment", StringComparison.OrdinalIgnoreCase))
         {
+            <button type="button" class="btn-secondary" @onclick="OpenVendors">
+                廠商資訊管理
+            </button>
             <button type="button" class="btn-secondary" @onclick="OpenTestEnvironmentSettings">
                 測試環境群組設定
             </button>
@@ -74,6 +77,7 @@
                         <th>廠牌</th>
                         <th>型號</th>
                         <th>名稱</th>
+                        @if (IsEquipment) { <th>廠商</th> }
                         <th>保管人</th>
                         <th>狀態</th>
                         @if (IsEquipment) { <th>測試環境</th> }
@@ -89,6 +93,7 @@
                             <td>@Display(item.Brand)</td>
                             <td>@Display(item.Model)</td>
                             <td>@item.Name</td>
+                            @if (IsEquipment) { <td>@Display(item.VendorName)</td> }
                             <td>@Display(item.Custodian)</td>
                             <td>@Display(item.ReservationStatus)</td>
                             @if (IsEquipment)
@@ -241,6 +246,11 @@
     private void OpenTestEnvironmentSettings()
     {
         Nav.NavigateTo("/test-environment-settings");
+    }
+
+    private void OpenVendors()
+    {
+        Nav.NavigateTo("/vendors");
     }
 
     private void View(string id)

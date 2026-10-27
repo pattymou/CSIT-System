@@ -17,19 +17,22 @@ public class ApparatusService : IApparatusService
     private readonly RawDataSettings _rawDataSettings;
     private readonly IRawDataExportService _rawDataExportService;
     private readonly SharedIdentityProvisioningClient _provisioningClient;
+    private readonly ManagedAssetFileStorage _managedStorage;
 
     public ApparatusService(
         AppDbContext db,
         IOptions<ApparatusSettings> options,
         IOptions<RawDataSettings> rawDataOptions,
         IRawDataExportService rawDataExportService,
-        SharedIdentityProvisioningClient provisioningClient)
+        SharedIdentityProvisioningClient provisioningClient,
+        ManagedAssetFileStorage? managedStorage = null)
     {
         _db = db;
         _settings = options.Value;
         _rawDataSettings = rawDataOptions.Value;
         _rawDataExportService = rawDataExportService;
         _provisioningClient = provisioningClient;
+        _managedStorage = managedStorage ?? new ManagedAssetFileStorage(db);
     }
 
     public async Task<string> GenerateNewIdAsync()
@@ -123,6 +126,8 @@ public class ApparatusService : IApparatusService
                 (x.ProductsId ?? "").Contains(keyword) ||
                 x.Name.Contains(keyword) ||
                 (x.Brand ?? "").Contains(keyword) ||
+                (x.Manufacturer ?? "").Contains(keyword) ||
+                (x.Vendor != null && x.Vendor.Name.Contains(keyword)) ||
                 (x.Model ?? "").Contains(keyword));
         }
 
@@ -138,6 +143,8 @@ public class ApparatusService : IApparatusService
                 Name = x.Name,
                 Kind = x.Kind,
                 Brand = x.Brand,
+                VendorId = x.VendorId,
+                VendorName = x.Vendor == null ? null : x.Vendor.Name,
                 Model = x.Model,
                 Number = x.Number,
                 ReservationStatus = x.ReservationStatus,
@@ -188,6 +195,7 @@ public class ApparatusService : IApparatusService
             .Include(x => x.Files)
             .Include(x => x.DepartmentOption)
             .Include(x => x.OwnerTeamOption)
+            .Include(x => x.Vendor)
             .Include(x => x.EnvironmentGroupDevices).ThenInclude(x => x.EquipmentGroup)
             .FirstOrDefaultAsync(x => x.ModuleCode == moduleCode && x.Id == id);
 
@@ -208,6 +216,7 @@ public class ApparatusService : IApparatusService
         moduleCode = NormalizeModuleCode(moduleCode);
 
         ValidateUpsert(request);
+        var selectedVendor = await ValidateNewEquipmentVendorAsync(moduleCode, request);
         var ownership = await ValidateOwnershipAsync(
             request,
             CancellationToken.None);
@@ -231,8 +240,12 @@ public class ApparatusService : IApparatusService
             NameEn = request.NameEn,
             Kind = request.Kind!.Trim(),
             PartNo = request.PartNo,
-            Manufacturer = request.Manufacturer,
+            Manufacturer = selectedVendor?.Name ?? request.Manufacturer,
             ManufacturerNumber = request.ManufacturerNumber,
+            VendorId = moduleCode == "equipment" ? request.VendorId : null,
+            StorageFolderName = moduleCode == "equipment" && !string.IsNullOrWhiteSpace(request.ProductsId)
+                ? ManagedAssetFileStorage.SafeFolderName($"{request.Name.Trim()}_{request.ProductsId.Trim()}")
+                : null,
             Brand = request.Brand,
             Model = request.Model,
             Number = request.Number,
@@ -262,8 +275,10 @@ public class ApparatusService : IApparatusService
         _db.Apparatuses.Add(entity);
         await _db.SaveChangesAsync();
 
-        var folder = await GetApparatusFolderAsync(moduleCode, id);
-        Directory.CreateDirectory(folder);
+        var folder = moduleCode == "equipment"
+            ? "(managed equipment folder is created on approved archive)"
+            : await GetApparatusFolderAsync(moduleCode, id);
+        if (moduleCode != "equipment") Directory.CreateDirectory(folder);
 
         await RebuildLatestRawDataAsync(moduleCode, id);
 
@@ -282,6 +297,7 @@ public class ApparatusService : IApparatusService
         }
 
         ValidateUpsert(request);
+        var selectedVendor = await ValidateEquipmentVendorUpdateAsync(moduleCode, entity, request);
         var ownership = await ValidateOwnershipAsync(
             request,
             CancellationToken.None);
@@ -293,8 +309,9 @@ public class ApparatusService : IApparatusService
         entity.NameEn = request.NameEn;
         entity.Kind = request.Kind!.Trim();
         entity.PartNo = request.PartNo;
-        entity.Manufacturer = request.Manufacturer;
+        entity.Manufacturer = selectedVendor?.Name ?? request.Manufacturer;
         entity.ManufacturerNumber = request.ManufacturerNumber;
+        if (moduleCode == "equipment") entity.VendorId = request.VendorId;
         entity.Brand = request.Brand;
         entity.Model = request.Model;
         entity.Number = request.Number;
@@ -394,8 +411,8 @@ public class ApparatusService : IApparatusService
     {
         moduleCode = NormalizeModuleCode(moduleCode);
 
-        var exists = await _db.Apparatuses.AnyAsync(x => x.ModuleCode == moduleCode && x.Id == apparatusId);
-        if (!exists)
+        var apparatus = await _db.Apparatuses.SingleOrDefaultAsync(x => x.ModuleCode == moduleCode && x.Id == apparatusId);
+        if (apparatus is null)
         {
             return new();
         }
@@ -419,10 +436,16 @@ public class ApparatusService : IApparatusService
         if (approvalFileId.HasValue && (approvalFileId.Value == Guid.Empty || files.Count != 1))
             throw new InvalidOperationException("Approved Asset submission must contain exactly one file.");
 
-        var exists = await _db.Apparatuses.AnyAsync(x => x.ModuleCode == moduleCode && x.Id == apparatusId);
-        if (!exists)
+        var apparatus = await _db.Apparatuses.SingleOrDefaultAsync(x => x.ModuleCode == moduleCode && x.Id == apparatusId);
+        if (apparatus is null)
         {
             throw new InvalidOperationException($"找不到資產：moduleCode={moduleCode}, id={apparatusId}");
+        }
+
+        if (moduleCode == "equipment")
+        {
+            await UploadManagedEquipmentFilesAsync(apparatus, files, uploadEmp, approvalFileId);
+            return;
         }
 
         var folder = await GetApparatusFolderAsync(moduleCode, apparatusId);
@@ -520,6 +543,8 @@ public class ApparatusService : IApparatusService
         {
             throw new FileNotFoundException("找不到檔案資料");
         }
+        if (file.ArchiveStatus is not null && file.ArchiveStatus != FileArchiveStatuses.Archived)
+            throw new FileNotFoundException("檔案尚未完成正式歸檔");
 
         var fullPath = Path.Combine(file.FilePath, file.FileName);
 
@@ -529,7 +554,7 @@ public class ApparatusService : IApparatusService
         }
 
         var bytes = await File.ReadAllBytesAsync(fullPath);
-        return (bytes, file.FileName, file.ContentType ?? "application/octet-stream");
+        return (bytes, file.OriginalFileName ?? file.FileName, file.ContentType ?? "application/octet-stream");
     }
 
     public async Task<bool> DeleteFileAsync(Guid fileId)
@@ -564,6 +589,7 @@ public class ApparatusService : IApparatusService
 
         var entity = await _db.Apparatuses
             .Include(x => x.Files)
+            .Include(x => x.Vendor)
             .FirstOrDefaultAsync(x => x.ModuleCode == moduleCode && x.Id == apparatusId);
 
         if (entity == null)
@@ -574,7 +600,11 @@ public class ApparatusService : IApparatusService
 
         var folder = await GetApparatusFolderAsync(moduleCode, apparatusId);
 
+        // New equipment documents already live in the managed three-level formal archive.
+        // Keep RAW latest-package behavior only for legacy files so the formal NAS tree is
+        // not mirrored a second time or allowed to escape the legacy local-root boundary.
         var files = entity.Files
+            .Where(x => moduleCode != "equipment" || x.ArchiveStatus is null)
             .OrderBy(x => x.CreatedAt)
             .Select(x => new RawDataLatestPackageFile
             {
@@ -598,6 +628,8 @@ public class ApparatusService : IApparatusService
             kind = entity.Kind,
             partNo = entity.PartNo,
             manufacturer = entity.Manufacturer,
+            vendorId = entity.VendorId,
+            vendorName = entity.Vendor?.Name,
             manufacturerNumber = entity.ManufacturerNumber,
             brand = entity.Brand,
             model = entity.Model,
@@ -637,6 +669,8 @@ public class ApparatusService : IApparatusService
 
         foreach (var file in entity.Files)
         {
+            if (moduleCode == "equipment" && file.ArchiveStatus is not null)
+                continue;
             if (result.Success)
             {
                 file.NasFolderPath = result.NasFolderPath;
@@ -769,6 +803,9 @@ public class ApparatusService : IApparatusService
             Console.WriteLine($"[ApparatusService] Local file not found, skipped: {fullPath}");
         }
 
+        var pendingPath = fullPath + ".pending";
+        if (File.Exists(pendingPath)) File.Delete(pendingPath);
+
         TryDeleteEmptyDirectory(file.FilePath);
     }
 
@@ -811,6 +848,8 @@ public class ApparatusService : IApparatusService
             PartNo = x.PartNo,
             Manufacturer = x.Manufacturer,
             ManufacturerNumber = x.ManufacturerNumber,
+            VendorId = x.VendorId,
+            VendorName = x.Vendor?.Name,
             Brand = x.Brand,
             Model = x.Model,
             Number = x.Number,
@@ -855,12 +894,122 @@ public class ApparatusService : IApparatusService
         {
             Id = x.Id,
             ApparatusId = x.ApparatusId,
-            FileName = x.FileName,
+            FileName = x.OriginalFileName ?? x.FileName,
+            StoredFileName = x.FileName,
             ContentType = x.ContentType,
             FileSize = x.FileSize,
             CreatedAt = x.CreatedAt,
-            ImageUrl = $"/api/assets/files/{x.Id}/content"
+            ImageUrl = $"/api/assets/files/{x.Id}/content",
+            DownloadUrl = $"/api/assets/files/{x.Id}/content",
+            IsImage = ManagedAssetFileStorage.IsImage(x.ContentType, x.OriginalFileName ?? x.FileName),
+            Sha256 = x.Sha256,
+            ArchiveStatus = x.ArchiveStatus,
+            ArchiveError = x.ArchiveError
         };
+    }
+
+    private async Task<Vendor?> ValidateNewEquipmentVendorAsync(string moduleCode, ApparatusUpsertRequest request)
+    {
+        if (moduleCode != "equipment") return null;
+        if (!request.VendorId.HasValue)
+            throw new InvalidOperationException("新增設備必須選擇有效且啟用中的廠商。");
+        return await _db.Vendors.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == request.VendorId.Value && x.IsActive)
+            ?? throw new InvalidOperationException("新增設備必須選擇有效且啟用中的廠商。");
+    }
+
+    private async Task<Vendor?> ValidateEquipmentVendorUpdateAsync(string moduleCode, Apparatus entity,
+        ApparatusUpsertRequest request)
+    {
+        if (moduleCode != "equipment") return null;
+        if (request.VendorId == entity.VendorId)
+            return request.VendorId.HasValue
+                ? await _db.Vendors.AsNoTracking().SingleOrDefaultAsync(x => x.Id == request.VendorId.Value)
+                : null; // Historical links remain valid after a vendor is disabled.
+        if (!request.VendorId.HasValue)
+        {
+            if (entity.VendorId.HasValue) throw new InvalidOperationException("不可清除設備既有的正式廠商關聯。");
+            return null;
+        }
+        return await _db.Vendors.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == request.VendorId.Value && x.IsActive)
+            ?? throw new InvalidOperationException("只能選擇啟用中的廠商。");
+    }
+
+    private async Task UploadManagedEquipmentFilesAsync(Apparatus apparatus, IReadOnlyList<IFormFile> files,
+        string? uploadEmp, Guid? approvalFileId)
+    {
+        if (string.IsNullOrWhiteSpace(apparatus.ProductsId))
+            throw new InvalidOperationException("此設備缺少資產編號，請補齊後再正式歸檔附件；系統不會產生假資產編號。");
+        apparatus.StorageFolderName ??= ManagedAssetFileStorage.SafeFolderName(
+            $"{apparatus.Name}_{apparatus.ProductsId}");
+        await _db.SaveChangesAsync();
+        var folder = await _managedStorage.EquipmentFolderAsync(apparatus.StorageFolderName);
+        var archived = 0;
+        var failures = new List<string>();
+        var validated = files.Select(file => new
+        {
+            File = file,
+            OriginalName = ManagedAssetFileStorage.ValidateOriginalFileName(file.FileName, file.Length)
+        }).ToList();
+        foreach (var item in validated)
+        {
+            var file = item.File;
+            var original = item.OriginalName;
+            var fileId = approvalFileId ?? Guid.NewGuid();
+            var existing = approvalFileId.HasValue
+                ? await _db.ApparatusFiles.SingleOrDefaultAsync(x => x.Id == fileId)
+                : null;
+            if (existing is not null)
+            {
+                if (existing.ApparatusId != apparatus.Id || existing.OriginalFileName != original ||
+                    existing.FileSize != file.Length)
+                    throw new InvalidOperationException("Approved Asset file identity changed during retry.");
+                if (existing.ArchiveStatus == FileArchiveStatuses.Archived &&
+                    File.Exists(Path.Combine(existing.FilePath, existing.FileName)))
+                {
+                    archived++;
+                    continue;
+                }
+            }
+            var now = DateTime.UtcNow;
+            var entity = existing ?? new ApparatusFile
+            {
+                Id = fileId, ApparatusId = apparatus.Id, OriginalFileName = original,
+                FileName = ManagedAssetFileStorage.StoredFileName(fileId, original), FilePath = folder,
+                ContentType = string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType,
+                FileSize = file.Length, UploadEmp = string.IsNullOrWhiteSpace(uploadEmp) ? "SYSTEM" : uploadEmp.Trim(),
+                CreatedAt = now, MetadataVerificationStatus = MetadataVerificationStatuses.NotApplicable
+            };
+            entity.ArchiveStatus = FileArchiveStatuses.Pending;
+            entity.ArchiveError = null;
+            entity.ArchiveAttemptCount++;
+            entity.ArchiveUpdatedAt = now;
+            if (existing is null) _db.ApparatusFiles.Add(entity);
+            await _db.SaveChangesAsync();
+            try
+            {
+                await using var source = file.OpenReadStream();
+                entity.Sha256 = await _managedStorage.ArchiveAsync(source, folder, entity.FileName);
+                entity.ArchiveStatus = FileArchiveStatuses.Archived;
+                entity.ArchiveNextRetryAt = null;
+                entity.ArchiveUpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync();
+                archived++;
+            }
+            catch (Exception ex)
+            {
+                entity.ArchiveStatus = FileArchiveStatuses.Failed;
+                entity.ArchiveError = ex.Message[..Math.Min(ex.Message.Length, 2000)];
+                entity.ArchiveNextRetryAt = DateTime.UtcNow.AddMinutes(5);
+                entity.ArchiveUpdatedAt = DateTime.UtcNow;
+                await _db.SaveChangesAsync();
+                failures.Add(original);
+            }
+        }
+        await RebuildLatestRawDataAsync("equipment", apparatus.Id);
+        if (failures.Count != 0)
+            throw new InvalidOperationException($"設備已建立／保留；附件已歸檔 {archived} 份，{failures.Count} 份失敗並已記錄：{string.Join("、", failures)}");
     }
 
     private static void ValidateUpsert(ApparatusUpsertRequest request)

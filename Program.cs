@@ -373,7 +373,9 @@ builder.Services.Configure<UploadSettings>(
 builder.Services.Configure<ApparatusSettings>(
     builder.Configuration.GetSection("Apparatus"));
 
+builder.Services.AddScoped<ManagedAssetFileStorage>();
 builder.Services.AddScoped<IApparatusService, ApparatusService>();
+builder.Services.AddScoped<IVendorService, VendorService>();
 builder.Services.AddScoped<IAssetFormalUploadService>(provider =>
     provider.GetRequiredService<IApparatusService>());
 builder.Services.AddScoped<ICaseFileService, CaseFileService>();

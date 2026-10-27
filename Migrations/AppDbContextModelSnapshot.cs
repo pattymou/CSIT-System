@@ -134,8 +134,17 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Property<string>("Spec")
                         .HasColumnType("text");
 
+                    b.Property<string>("StorageFolderName")
+                        .HasMaxLength(240)
+                        .HasColumnType("character varying(240)")
+                        .HasColumnName("storage_folder_name");
+
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("VendorId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("vendor_id");
 
                     b.Property<uint>("Xmin")
                         .IsConcurrencyToken()
@@ -154,6 +163,8 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.HasIndex("OwnerTeamOptionId");
 
+                    b.HasIndex("VendorId");
+
                     b.ToTable("apparatus", (string)null);
                 });
 
@@ -169,6 +180,30 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)")
                         .HasColumnName("ApparatusId");
+
+                    b.Property<int>("ArchiveAttemptCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("archive_attempt_count");
+
+                    b.Property<string>("ArchiveError")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("archive_error");
+
+                    b.Property<DateTime?>("ArchiveNextRetryAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archive_next_retry_at");
+
+                    b.Property<string>("ArchiveStatus")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("archive_status");
+
+                    b.Property<DateTime?>("ArchiveUpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archive_updated_at");
 
                     b.Property<string>("ContentType")
                         .HasColumnType("text")
@@ -198,6 +233,25 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("boolean")
                         .HasColumnName("is_raw_data_exported");
 
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata_json");
+
+                    b.Property<string>("MetadataSource")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("metadata_source");
+
+                    b.Property<string>("MetadataVerificationStatus")
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("metadata_verification_status");
+
+                    b.Property<string>("MetadataVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("metadata_version");
+
                     b.Property<string>("NasFilePath")
                         .HasColumnType("text")
                         .HasColumnName("nas_file_path");
@@ -205,6 +259,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Property<string>("NasFolderPath")
                         .HasColumnType("text")
                         .HasColumnName("nas_folder_path");
+
+                    b.Property<string>("OriginalFileName")
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("original_file_name");
 
                     b.Property<string>("RawDataExportError")
                         .HasColumnType("text")
@@ -218,6 +277,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("text")
                         .HasColumnName("raw_json_path");
 
+                    b.Property<string>("Sha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("sha256");
+
                     b.Property<string>("UploadEmp")
                         .HasColumnType("text")
                         .HasColumnName("UploadEmp");
@@ -226,7 +290,16 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.HasIndex("ApparatusId");
 
-                    b.ToTable("apparatus_files", (string)null);
+                    b.HasIndex("ArchiveStatus", "ArchiveNextRetryAt");
+
+                    b.ToTable("apparatus_files", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_apparatus_files_archive_result", "archive_status <> 'Archived' OR (sha256 IS NOT NULL AND length(sha256) = 64)");
+
+                            t.HasCheckConstraint("ck_apparatus_files_archive_status", "archive_status IS NULL OR archive_status IN ('Pending','Archived','Failed')");
+
+                            t.HasCheckConstraint("ck_apparatus_files_metadata_verification", "metadata_verification_status IS NULL OR metadata_verification_status IN ('NotApplicable','PendingVerification','Verified','Rejected')");
+                        });
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ApparatusResourceCapability", b =>
@@ -7159,6 +7232,233 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         });
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.Vendor", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("Address")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("address");
+
+                    b.Property<string>("Aliases")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("aliases");
+
+                    b.Property<string>("ContactPerson")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("contact_person");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("CreatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("created_by");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(320)
+                        .HasColumnType("character varying(320)")
+                        .HasColumnName("email");
+
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("boolean")
+                        .HasDefaultValue(true)
+                        .HasColumnName("is_active");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("name");
+
+                    b.Property<string>("NormalizedName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("normalized_name");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)")
+                        .HasColumnName("notes");
+
+                    b.Property<string>("Phone")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("phone");
+
+                    b.Property<string>("StorageFolderName")
+                        .IsRequired()
+                        .HasMaxLength(240)
+                        .HasColumnType("character varying(240)")
+                        .HasColumnName("storage_folder_name");
+
+                    b.PrimitiveCollection<string[]>("Types")
+                        .IsRequired()
+                        .HasColumnType("text[]")
+                        .HasColumnName("types");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<string>("UpdatedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("updated_by");
+
+                    b.Property<string>("Website")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("website");
+
+                    b.Property<uint>("Xmin")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("xid")
+                        .HasColumnName("xmin");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("NormalizedName")
+                        .IsUnique();
+
+                    b.HasIndex("StorageFolderName")
+                        .IsUnique();
+
+                    b.HasIndex("IsActive", "Name");
+
+                    b.ToTable("vendors", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_vendors_types", "types <@ ARRAY['Manufacturer','Agent','Supplier','MaintenanceProvider']::text[]");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VendorFile", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("ArchiveAttemptCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(0)
+                        .HasColumnName("archive_attempt_count");
+
+                    b.Property<string>("ArchiveError")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("archive_error");
+
+                    b.Property<DateTime?>("ArchiveNextRetryAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archive_next_retry_at");
+
+                    b.Property<string>("ArchiveStatus")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("archive_status");
+
+                    b.Property<DateTime>("ArchiveUpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archive_updated_at");
+
+                    b.Property<string>("ContentType")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("content_type");
+
+                    b.Property<long>("FileSize")
+                        .HasColumnType("bigint")
+                        .HasColumnName("file_size");
+
+                    b.Property<string>("FolderPath")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("folder_path");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata_json");
+
+                    b.Property<string>("MetadataSource")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("metadata_source");
+
+                    b.Property<string>("MetadataVerificationStatus")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("metadata_verification_status");
+
+                    b.Property<string>("MetadataVersion")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("metadata_version");
+
+                    b.Property<string>("OriginalFileName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("original_file_name");
+
+                    b.Property<string>("Sha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("sha256");
+
+                    b.Property<string>("StoredFileName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("stored_file_name");
+
+                    b.Property<DateTime>("UploadedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("uploaded_at");
+
+                    b.Property<string>("UploadedBy")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("uploaded_by");
+
+                    b.Property<Guid>("VendorId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("vendor_id");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("ArchiveStatus", "ArchiveNextRetryAt");
+
+                    b.HasIndex("VendorId", "UploadedAt");
+
+                    b.ToTable("vendor_files", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_vendor_files_archive_result", "archive_status <> 'Archived' OR (sha256 IS NOT NULL AND length(sha256) = 64)");
+
+                            t.HasCheckConstraint("ck_vendor_files_archive_status", "archive_status IN ('Pending','Archived','Failed')");
+
+                            t.HasCheckConstraint("ck_vendor_files_metadata_verification", "metadata_verification_status IN ('NotApplicable','PendingVerification','Verified','Rejected')");
+                        });
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationApplication", b =>
                 {
                     b.Property<Guid>("Id")
@@ -7823,9 +8123,16 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasForeignKey("OwnerTeamOptionId")
                         .OnDelete(DeleteBehavior.Restrict);
 
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.Vendor", "Vendor")
+                        .WithMany("Apparatuses")
+                        .HasForeignKey("VendorId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("DepartmentOption");
 
                     b.Navigation("OwnerTeamOption");
+
+                    b.Navigation("Vendor");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.ApparatusFile", b =>
@@ -8346,6 +8653,17 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("ParameterDefinition");
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VendorFile", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.Vendor", "Vendor")
+                        .WithMany("Files")
+                        .HasForeignKey("VendorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Vendor");
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationApplication", b =>
                 {
                     b.HasOne("SIT.DepartmentSystem.Web.Entities.ModuleRecord", "ModuleRecord")
@@ -8539,6 +8857,13 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("Children");
 
                     b.Navigation("Options");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.Vendor", b =>
+                {
+                    b.Navigation("Apparatuses");
+
+                    b.Navigation("Files");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VerificationApplication", b =>

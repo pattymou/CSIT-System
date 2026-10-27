@@ -222,7 +222,7 @@ public class ApparatusController : ControllerBase
         try
         {
             var file = await _service.GetFileContentAsync(fileId);
-            return File(file.Content, file.ContentType, enableRangeProcessing: true);
+            return File(file.Content, file.ContentType, file.FileName, enableRangeProcessing: true);
         }
         catch (Exception ex)
         {

@@ -19,6 +19,8 @@ public class AppDbContext : DbContext
     public DbSet<ModuleCaseFile> ModuleCaseFiles => Set<ModuleCaseFile>();
     public DbSet<Apparatus> Apparatuses => Set<Apparatus>();
     public DbSet<ApparatusFile> ApparatusFiles => Set<ApparatusFile>();
+    public DbSet<Vendor> Vendors => Set<Vendor>();
+    public DbSet<VendorFile> VendorFiles => Set<VendorFile>();
     public DbSet<SystemOption> SystemOptions => Set<SystemOption>();
     public DbSet<TeamRouting> TeamRoutings => Set<TeamRouting>();
     public DbSet<VerificationApplication> VerificationApplications => Set<VerificationApplication>();
@@ -594,6 +596,8 @@ public class AppDbContext : DbContext
             entity.Property(x => x.Kind).HasMaxLength(100).IsRequired();
             entity.Property(x => x.CustodianAccount).HasMaxLength(100);
             entity.Property(x => x.ReservationStatus).HasMaxLength(50);
+            entity.Property(x => x.VendorId).HasColumnName("vendor_id");
+            entity.Property(x => x.StorageFolderName).HasColumnName("storage_folder_name").HasMaxLength(240);
             entity.Property(x => x.Xmin).HasColumnName("xmin").HasColumnType("xid").ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
 
             entity.HasIndex(x => x.CustodianAccount);
@@ -603,21 +607,43 @@ public class AppDbContext : DbContext
                 .WithMany()
                 .HasForeignKey(x => x.OwnerTeamOptionId)
                 .OnDelete(DeleteBehavior.Restrict);
+            entity.HasIndex(x => x.VendorId);
+            entity.HasOne(x => x.Vendor).WithMany(x => x.Apparatuses).HasForeignKey(x => x.VendorId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
 
         modelBuilder.Entity<ApparatusFile>(entity =>
         {
-            entity.ToTable("apparatus_files");
+            entity.ToTable("apparatus_files", table =>
+            {
+                table.HasCheckConstraint("ck_apparatus_files_archive_status",
+                    "archive_status IS NULL OR archive_status IN ('Pending','Archived','Failed')");
+                table.HasCheckConstraint("ck_apparatus_files_archive_result",
+                    "archive_status <> 'Archived' OR (sha256 IS NOT NULL AND length(sha256) = 64)");
+                table.HasCheckConstraint("ck_apparatus_files_metadata_verification",
+                    "metadata_verification_status IS NULL OR metadata_verification_status IN ('NotApplicable','PendingVerification','Verified','Rejected')");
+            });
             entity.HasKey(x => x.Id);
 
             entity.Property(x => x.Id).HasColumnName("Id");
             entity.Property(x => x.ApparatusId).HasColumnName("ApparatusId").HasMaxLength(30).IsRequired();
             entity.Property(x => x.FileName).HasColumnName("FileName").HasMaxLength(300).IsRequired();
+            entity.Property(x => x.OriginalFileName).HasColumnName("original_file_name").HasMaxLength(300);
             entity.Property(x => x.FilePath).HasColumnName("FilePath").HasMaxLength(1000).IsRequired();
             entity.Property(x => x.ContentType).HasColumnName("ContentType");
             entity.Property(x => x.FileSize).HasColumnName("FileSize");
             entity.Property(x => x.UploadEmp).HasColumnName("UploadEmp");
             entity.Property(x => x.CreatedAt).HasColumnName("CreatedAt");
+            entity.Property(x => x.Sha256).HasColumnName("sha256").HasMaxLength(64);
+            entity.Property(x => x.ArchiveStatus).HasColumnName("archive_status").HasMaxLength(30);
+            entity.Property(x => x.ArchiveError).HasColumnName("archive_error").HasMaxLength(2000);
+            entity.Property(x => x.ArchiveAttemptCount).HasColumnName("archive_attempt_count").HasDefaultValue(0);
+            entity.Property(x => x.ArchiveNextRetryAt).HasColumnName("archive_next_retry_at");
+            entity.Property(x => x.ArchiveUpdatedAt).HasColumnName("archive_updated_at");
+            entity.Property(x => x.MetadataJson).HasColumnName("metadata_json").HasColumnType("jsonb");
+            entity.Property(x => x.MetadataSource).HasColumnName("metadata_source").HasMaxLength(100);
+            entity.Property(x => x.MetadataVersion).HasColumnName("metadata_version").HasMaxLength(100);
+            entity.Property(x => x.MetadataVerificationStatus).HasColumnName("metadata_verification_status").HasMaxLength(30);
 
             entity.Property(x => x.NasFolderPath).HasColumnName("nas_folder_path");
             entity.Property(x => x.NasFilePath).HasColumnName("nas_file_path");
@@ -630,6 +656,71 @@ public class AppDbContext : DbContext
                 .WithMany(x => x.Files)
                 .HasForeignKey(x => x.ApparatusId)
                 .OnDelete(DeleteBehavior.Cascade);
+            entity.HasIndex(x => new { x.ArchiveStatus, x.ArchiveNextRetryAt });
+        });
+
+        modelBuilder.Entity<Vendor>(entity =>
+        {
+            entity.ToTable("vendors", table => table.HasCheckConstraint("ck_vendors_types",
+                "types <@ ARRAY['Manufacturer','Agent','Supplier','MaintenanceProvider']::text[]"));
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.Name).HasColumnName("name").HasMaxLength(200).IsRequired();
+            entity.Property(x => x.NormalizedName).HasColumnName("normalized_name").HasMaxLength(200).IsRequired();
+            entity.Property(x => x.Aliases).HasColumnName("aliases").HasMaxLength(500);
+            entity.Property(x => x.Types).HasColumnName("types").HasColumnType("text[]").IsRequired();
+            entity.Property(x => x.Website).HasColumnName("website").HasMaxLength(500);
+            entity.Property(x => x.ContactPerson).HasColumnName("contact_person").HasMaxLength(200);
+            entity.Property(x => x.Phone).HasColumnName("phone").HasMaxLength(100);
+            entity.Property(x => x.Email).HasColumnName("email").HasMaxLength(320);
+            entity.Property(x => x.Address).HasColumnName("address").HasMaxLength(1000);
+            entity.Property(x => x.Notes).HasColumnName("notes").HasMaxLength(4000);
+            entity.Property(x => x.IsActive).HasColumnName("is_active").HasDefaultValue(true);
+            entity.Property(x => x.StorageFolderName).HasColumnName("storage_folder_name").HasMaxLength(240).IsRequired();
+            entity.Property(x => x.CreatedBy).HasColumnName("created_by").HasMaxLength(200).IsRequired();
+            entity.Property(x => x.CreatedAt).HasColumnName("created_at");
+            entity.Property(x => x.UpdatedBy).HasColumnName("updated_by").HasMaxLength(200).IsRequired();
+            entity.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            entity.Property(x => x.Xmin).HasColumnName("xmin").HasColumnType("xid").ValueGeneratedOnAddOrUpdate().IsConcurrencyToken();
+            entity.HasIndex(x => x.NormalizedName).IsUnique();
+            entity.HasIndex(x => x.StorageFolderName).IsUnique();
+            entity.HasIndex(x => new { x.IsActive, x.Name });
+        });
+
+        modelBuilder.Entity<VendorFile>(entity =>
+        {
+            entity.ToTable("vendor_files", table =>
+            {
+                table.HasCheckConstraint("ck_vendor_files_archive_status", "archive_status IN ('Pending','Archived','Failed')");
+                table.HasCheckConstraint("ck_vendor_files_archive_result",
+                    "archive_status <> 'Archived' OR (sha256 IS NOT NULL AND length(sha256) = 64)");
+                table.HasCheckConstraint("ck_vendor_files_metadata_verification",
+                    "metadata_verification_status IN ('NotApplicable','PendingVerification','Verified','Rejected')");
+            });
+            entity.HasKey(x => x.Id);
+            entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.VendorId).HasColumnName("vendor_id");
+            entity.Property(x => x.OriginalFileName).HasColumnName("original_file_name").HasMaxLength(300).IsRequired();
+            entity.Property(x => x.StoredFileName).HasColumnName("stored_file_name").HasMaxLength(300).IsRequired();
+            entity.Property(x => x.FolderPath).HasColumnName("folder_path").HasMaxLength(1000).IsRequired();
+            entity.Property(x => x.ContentType).HasColumnName("content_type").HasMaxLength(200);
+            entity.Property(x => x.FileSize).HasColumnName("file_size");
+            entity.Property(x => x.Sha256).HasColumnName("sha256").HasMaxLength(64);
+            entity.Property(x => x.ArchiveStatus).HasColumnName("archive_status").HasMaxLength(30).IsRequired();
+            entity.Property(x => x.ArchiveError).HasColumnName("archive_error").HasMaxLength(2000);
+            entity.Property(x => x.ArchiveAttemptCount).HasColumnName("archive_attempt_count").HasDefaultValue(0);
+            entity.Property(x => x.ArchiveNextRetryAt).HasColumnName("archive_next_retry_at");
+            entity.Property(x => x.ArchiveUpdatedAt).HasColumnName("archive_updated_at");
+            entity.Property(x => x.UploadedBy).HasColumnName("uploaded_by").HasMaxLength(200).IsRequired();
+            entity.Property(x => x.UploadedAt).HasColumnName("uploaded_at");
+            entity.Property(x => x.MetadataJson).HasColumnName("metadata_json").HasColumnType("jsonb");
+            entity.Property(x => x.MetadataSource).HasColumnName("metadata_source").HasMaxLength(100);
+            entity.Property(x => x.MetadataVersion).HasColumnName("metadata_version").HasMaxLength(100);
+            entity.Property(x => x.MetadataVerificationStatus).HasColumnName("metadata_verification_status").HasMaxLength(30).IsRequired();
+            entity.HasIndex(x => new { x.VendorId, x.UploadedAt });
+            entity.HasIndex(x => new { x.ArchiveStatus, x.ArchiveNextRetryAt });
+            entity.HasOne(x => x.Vendor).WithMany(x => x.Files).HasForeignKey(x => x.VendorId)
+                .OnDelete(DeleteBehavior.Restrict);
         });
     }
 }
