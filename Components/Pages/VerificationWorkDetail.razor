@@ -12,6 +12,7 @@
 @inject IValidationRequestConfigurationService ValidationService
 @inject ISystemOptionService SystemOptions
 @inject AuthenticationStateProvider AuthenticationStateProvider
+@inject IAuthorizationService AuthorizationService
 @inject NavigationManager Navigation
 
 <PageTitle>驗證案件資訊</PageTitle>
@@ -24,11 +25,11 @@
 else if (_loading) { <div class="surface-card">載入中...</div> }
 else if (_item is not null)
 {
-    @if (_canManage)
+    @if (_canViewDeletion)
     {
         <div class="work-delete-entry">
             <button type="button" class="btn-secondary" disabled="@_previewLoading" @onclick="LoadDeletionPreviewAsync">刪除案件</button>
-            <small>先查看精確範圍與阻擋原因；目前不執行刪除。</small>
+            <small>先查看精確範圍；確認後案件即凍結，KM 清理驗證完成後才能清理本地資料。</small>
         </div>
     }
     @if (_deleteError is not null) { <div class="surface-card error-text" role="alert">@_deleteError</div> }
@@ -69,7 +70,28 @@ else if (_item is not null)
                     </tbody>
                 </table>
             </div>
-            <button type="button" class="btn-primary" disabled="true">確認刪除（未開放）</button>
+            @if (_deletePreview.CanExecute)
+            {
+                <div class="form-actions">
+                    <label>刪除原因 <input @bind="_deleteReason" maxlength="500" /></label>
+                    <label>再次輸入申請編號 <input @bind="_deleteApplicationNo" /></label>
+                    <label><input type="checkbox" @bind="_deleteAcknowledged" /> 我已核對上列案件與文件，確認凍結此案件。</label>
+                    <button type="button" class="btn-primary" disabled="@(!CanConfirmDeletion)" @onclick="ConfirmDeletionAsync">@(_deletionWorking ? "處理中..." : "確認凍結案件")</button>
+                </div>
+            }
+            else if (_deletePreview.DeletionStatus is "LocalReady" or "KmVerified")
+            {
+                <p>文件刪除條件已確認。本地清理需由管理員執行。</p>
+                @if (_canCleanup)
+                {
+                    <label><input type="checkbox" @bind="_cleanupAcknowledged" /> 我再次確認要清理此案件的本地資料與檔案。</label>
+                    <button type="button" class="btn-primary" disabled="@(!_cleanupAcknowledged || _deletionWorking)" @onclick="CleanLocalAsync">開始本地清理</button>
+                }
+            }
+            else if (_deletePreview.DeletionStatus == "WaitingForKm")
+            {
+                <p>案件已凍結，等待 KM 刪除完成及七項清理驗證。</p>
+            }
         </section>
     }
     <section class="surface-card work-summary" aria-label="案件資訊">
@@ -184,6 +206,13 @@ else if (_item is not null)
     private bool _working;
     private bool _editing;
     private bool _canManage;
+    private bool _canViewDeletion;
+    private bool _canCleanup;
+    private bool _deletionWorking;
+    private bool _deleteAcknowledged;
+    private bool _cleanupAcknowledged;
+    private string _deleteReason = string.Empty;
+    private string _deleteApplicationNo = string.Empty;
     private bool _previewLoading;
     private VerificationCaseDeletionPreviewDto? _deletePreview;
     private string? _deleteError;
@@ -199,6 +228,9 @@ else if (_item is not null)
     private bool CanSaveStatus => _canManage && !_saving && _item is not null &&
         !string.Equals(_recordStatus, _item.Status, StringComparison.OrdinalIgnoreCase) &&
         (_recordStatus != "Close" || CanClose);
+    private bool CanConfirmDeletion => !_deletionWorking && _deletePreview?.CanExecute == true &&
+        _deleteAcknowledged && _deleteReason.Trim().Length is >= 5 and <= 500 &&
+        string.Equals(_deleteApplicationNo.Trim(), _deletePreview.ApplicationNo, StringComparison.Ordinal);
 
     protected override Task OnParametersSetAsync() => ReloadAsync();
     private async Task ReloadAsync()
@@ -207,6 +239,8 @@ else if (_item is not null)
         {
             _error = null;
             _canManage = false;
+            _canViewDeletion = false;
+            _canCleanup = false;
             _application = null;
             _blockedItemCodes.Clear();
             _deletePreview = null;
@@ -215,7 +249,10 @@ else if (_item is not null)
             var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
             _application = await Applications.GetForCsitAsync(_item.ApplicationId, user);
             if (_application is null) { _error = "找不到原申請單。"; return; }
-            _canManage = await Applications.CanManageAcceptedAsync(_application.Id, user);
+            _canViewDeletion = await Applications.CanManageAcceptedAsync(_application.Id, user);
+            _canManage = _canViewDeletion && (_item.DeletionStatus is null or "Prepared");
+            _canCleanup = (await AuthorizationService.AuthorizeAsync(user,
+                SystemAuthorization.Policies.Administration)).Succeeded;
             _recordStatus = _item.Status;
         }
         catch (Exception ex) { _error = ex.Message; }
@@ -242,7 +279,7 @@ else if (_item is not null)
 
     private async Task LoadDeletionPreviewAsync()
     {
-        if (!_canManage || _previewLoading) return;
+        if (!_canViewDeletion || _previewLoading) return;
         _previewLoading = true;
         _deleteError = null;
         try
@@ -255,6 +292,39 @@ else if (_item is not null)
     }
 
     private void CloseDeletionPreview() { _deletePreview = null; _deleteError = null; }
+
+    private async Task ConfirmDeletionAsync()
+    {
+        if (!CanConfirmDeletion) return;
+        _deletionWorking = true; _deleteError = null;
+        try
+        {
+            var response = await Api.PostJsonAsync(
+                $"/api/verification-work/{RecordId}/deletion-preview/confirm",
+                new { ApplicationNo = _deleteApplicationNo.Trim(), Reason = _deleteReason.Trim() });
+            response.EnsureSuccess();
+            _deleteAcknowledged = false;
+            await ReloadAsync();
+            await LoadDeletionPreviewAsync();
+        }
+        catch (Exception ex) { _deleteError = ex.Message; }
+        finally { _deletionWorking = false; }
+    }
+
+    private async Task CleanLocalAsync()
+    {
+        if (!_canCleanup || !_cleanupAcknowledged || _deletionWorking) return;
+        _deletionWorking = true; _deleteError = null;
+        try
+        {
+            var response = await Api.PostJsonAsync(
+                $"/api/verification-work/{RecordId}/deletion-preview/cleanup", new { });
+            response.EnsureSuccess();
+            Navigation.NavigateTo("/validation-request-applications");
+        }
+        catch (Exception ex) { _deleteError = ex.Message; }
+        finally { _deletionWorking = false; }
+    }
     private string TaskHref(Guid taskId) => $"/validation-request-applications/work/{RecordId}/tasks/{taskId}";
     private string ReadOnlyHref(SelectedVerificationTestItemDto item) =>
         $"/validation-request-applications/work/{RecordId}/selected/{Uri.EscapeDataString(item.Code)}";

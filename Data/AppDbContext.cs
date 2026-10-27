@@ -6,6 +6,7 @@ namespace SIT.DepartmentSystem.Web.Data;
 
 public class AppDbContext : DbContext
 {
+    internal Guid? CaseDeletionCleanupJobId { get; set; }
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
     public DbSet<ModuleEntity> Modules => Set<ModuleEntity>();
@@ -64,13 +65,40 @@ public class AppDbContext : DbContext
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
         RejectAuditMutation();
-        return base.SaveChanges(acceptAllChangesOnSuccess);
+        return SaveChangesGuardedAsync(acceptAllChangesOnSuccess, CancellationToken.None)
+            .GetAwaiter().GetResult();
     }
 
     public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
         RejectAuditMutation();
-        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        return SaveChangesGuardedAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private async Task<int> SaveChangesGuardedAsync(bool acceptAllChangesOnSuccess,
+        CancellationToken cancellationToken)
+    {
+        var recordIds = await VerificationCaseDeletionWriteGuard.AffectedRecordsAsync(this, cancellationToken);
+        if (recordIds.Count == 0)
+            return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+
+        var ownsTransaction = Database.CurrentTransaction is null && Database.IsRelational();
+        await using var transaction = ownsTransaction
+            ? await Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken)
+            : null;
+        foreach (var recordId in recordIds.Order())
+        {
+            await VerificationCaseDeletionWriteGuard.LockRecordAsync(this, recordId, cancellationToken);
+            if (await VerificationCaseDeletionJobs.AsNoTracking().AnyAsync(x => x.RecordId == recordId &&
+                (x.Status == "WaitingForKm" || x.Status == "KmVerified" ||
+                 x.Status == "LocalReady" || x.Status == "LocalCleanup" ||
+                 x.Status == "Completed") &&
+                !(x.Status == "LocalCleanup" && x.Id == CaseDeletionCleanupJobId), cancellationToken))
+                throw new InvalidOperationException("This verification case is frozen for deletion.");
+        }
+        var saved = await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return saved;
     }
 
     private void RejectAuditMutation()

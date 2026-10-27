@@ -56,6 +56,8 @@ public sealed class KmManualRetryService(IDbContextFactory<AppDbContext> dbFacto
                 cancellationToken);
         if (row is null)
             throw new KmManualRetryDocumentException("找不到該正式測試報告的 KM 事件。");
+        if (row.ProjectId is { } recordId)
+            await VerificationCaseDeletionHold.DemandWritableAsync(db, recordId, cancellationToken);
         var now = DateTime.UtcNow;
         if (!row.CanManualRetry(now))
             throw new KmManualRetryConflictException("KM 狀態已變更，或此事件不符合人工重試條件。");

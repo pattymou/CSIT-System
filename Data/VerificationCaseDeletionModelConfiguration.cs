@@ -19,6 +19,10 @@ public static class VerificationCaseDeletionModelConfiguration
             entity.Property(x => x.RequestedAt).HasColumnName("requested_at");
             entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(30);
             entity.Property(x => x.UpdatedAt).HasColumnName("updated_at");
+            entity.Property(x => x.CleanupManifestJson).HasColumnName("cleanup_manifest_json").HasColumnType("jsonb");
+            entity.Property(x => x.DbCleanedAt).HasColumnName("db_cleaned_at");
+            entity.Property(x => x.CompletedAt).HasColumnName("completed_at");
+            entity.Property(x => x.LastCleanupErrorCode).HasColumnName("last_cleanup_error_code").HasMaxLength(100);
             entity.HasIndex(x => x.RecordId).IsUnique();
             entity.HasMany(x => x.Targets).WithOne().HasForeignKey(x => x.JobId)
                 .OnDelete(DeleteBehavior.Restrict);

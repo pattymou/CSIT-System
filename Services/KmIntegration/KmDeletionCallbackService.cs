@@ -49,7 +49,8 @@ public sealed class KmDeletionCallbackService(IDbContextFactory<AppDbContext> db
         {
             var job = await db.VerificationCaseDeletionJobs.Include(x => x.Targets)
                 .SingleAsync(x => x.Id == target.JobId, cancellationToken);
-            if (job.Status == "WaitingForKm" && job.Targets.All(x => x.Status == "Completed"))
+            if (job.Status == "WaitingForKm" &&
+                job.Targets.All(x => x.Status is "Completed" or "NotDispatched"))
                 job.MarkKmVerified(DateTime.UtcNow);
         }
         try { await db.SaveChangesAsync(cancellationToken); }

@@ -34,7 +34,14 @@ else if (_item is not null)
             </dl>
         }
     </section>
-    <VerificationWorkTaskCard RecordId="RecordId" Task="_item.Task" Engineers="_engineers" OnChanged="ReloadAsync" />
+    @if (_item.DeletionStatus is null or "Prepared")
+    {
+        <VerificationWorkTaskCard RecordId="RecordId" Task="_item.Task" Engineers="_engineers" OnChanged="ReloadAsync" />
+    }
+    else
+    {
+        <section class="surface-card work-notice" role="status">案件已凍結，測試工作與報告操作已停止。</section>
+    }
 }
 
 @code {
@@ -54,8 +61,9 @@ else if (_item is not null)
             _item = await Api.GetOptionalAsync<VerificationWorkTaskDetailDto>(
                 $"/api/verification-work/{RecordId}/tasks/{TaskId}");
             if (_item is null) { _error = "找不到屬於此案件的可管理測試項目。"; return; }
-            _engineers = await Api.GetAsync<List<AssignableEngineerDto>>(
-                $"/api/records/{RecordId}/assignable-engineers");
+            if (_item.DeletionStatus is null or "Prepared")
+                _engineers = await Api.GetAsync<List<AssignableEngineerDto>>(
+                    $"/api/records/{RecordId}/assignable-engineers");
         }
         catch (Exception ex) { _error = ex.Message; }
         finally { _loading = false; }

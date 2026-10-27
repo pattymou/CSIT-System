@@ -270,6 +270,8 @@ builder.Services.AddHttpClient<IKmDeletionClient, KmDeletionClient>();
 builder.Services.AddScoped<KmDeletionCallbackService>();
 builder.Services.AddScoped<KmDeletionDispatchService>();
 builder.Services.AddScoped<VerificationCaseDeletionPreparationService>();
+builder.Services.AddScoped<VerificationCaseDeletionConfirmationService>();
+builder.Services.AddScoped<VerificationCaseLocalCleanupService>();
 builder.Services.AddScoped<KmSyncWorker>();
 builder.Services.AddScoped<KmManualRetryService>();
 builder.Services.AddScoped<KmSyncDiagnostics>();

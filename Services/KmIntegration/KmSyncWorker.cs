@@ -54,7 +54,7 @@ public sealed class KmSyncWorker(
                 WHERE event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND
                   NOT EXISTS (SELECT 1 FROM verification_case_deletion_jobs AS deletion
                     WHERE deletion.record_id = km_integration_outbox.project_id
-                    AND deletion.status IN ('WaitingForKm', 'KmVerified')) AND
+                    AND deletion.status IN ('WaitingForKm', 'KmVerified', 'LocalReady', 'LocalCleanup', 'Completed')) AND
                   (status = 'Pending' OR retry_count < @max) AND
                   (status = 'Pending' OR
                    (status = 'Failed' AND next_retry_at <= @now) OR
@@ -76,7 +76,9 @@ public sealed class KmSyncWorker(
                     x.SourceEntityType == KmIntegrationSourceEntityTypes.TestReport &&
                     !db.VerificationCaseDeletionJobs.Any(deletion =>
                         deletion.RecordId == x.ProjectId &&
-                        (deletion.Status == "WaitingForKm" || deletion.Status == "KmVerified")) &&
+                        (deletion.Status == "WaitingForKm" || deletion.Status == "KmVerified" ||
+                         deletion.Status == "LocalReady" || deletion.Status == "LocalCleanup" ||
+                         deletion.Status == "Completed")) &&
                     (x.Status == KmIntegrationStatus.Pending ||
                     x.RetryCount < options.MaxRetryCount) &&
                     (x.Status == KmIntegrationStatus.Pending ||

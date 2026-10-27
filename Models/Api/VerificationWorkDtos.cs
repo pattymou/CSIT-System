@@ -19,6 +19,7 @@ public class VerificationWorkListItemDto
 
 public sealed class VerificationWorkDetailDto : VerificationWorkListItemDto
 {
+    public string? DeletionStatus { get; set; }
     public IReadOnlyList<SelectedVerificationTestItemDto> SelectedTestItems { get; set; } = [];
     public string? SnapshotMessage { get; set; }
     public IReadOnlyList<VerificationWorkTaskDto> Tasks { get; set; } = [];
@@ -40,6 +41,7 @@ public sealed record VerificationTestParameterDto(string Name, IReadOnlyList<str
 
 public sealed class VerificationWorkTaskDetailDto
 {
+    public string? DeletionStatus { get; set; }
     public Guid RecordId { get; set; }
     public string ModelName { get; set; } = string.Empty;
     public string ApplicationNo { get; set; } = string.Empty;

@@ -4,6 +4,7 @@ using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
@@ -435,6 +436,10 @@ public class ModuleRecordService : IModuleRecordService
     public async Task<bool> DeleteAsync(Guid recordId)
     {
         await _businessWrite.DemandAsync();
+        await VerificationCaseDeletionHold.DemandWritableAsync(_db, recordId);
+        if (await _db.VerificationApplications.AsNoTracking().AnyAsync(x =>
+            x.ModuleRecordId == recordId && x.Status == VerificationApplicationStatus.Accepted))
+            throw new InvalidOperationException("Accepted verification cases require the case deletion workflow.");
         Console.WriteLine($"[ModuleRecordService] Delete record start. recordId={recordId}");
 
         var record = await _db.ModuleRecords

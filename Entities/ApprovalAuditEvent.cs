@@ -15,6 +15,10 @@ public static class ApprovalAuditActions
     public const string SubmitterDismissed = "SubmitterDismissed";
     public const string VerificationContentEdited = "VerificationContentEdited";
     public const string VerificationWorkCreated = "VerificationWorkCreated";
+    public const string CaseDeletionFrozen = "CaseDeletionFrozen";
+    public const string CaseDeletionCleanupStarted = "CaseDeletionCleanupStarted";
+    public const string CaseDeletionCleanupFailed = "CaseDeletionCleanupFailed";
+    public const string CaseDeletionCompleted = "CaseDeletionCompleted";
 }
 
 public sealed class ApprovalAuditEvent

@@ -311,6 +311,11 @@ public class CaseFileService : ICaseFileService
         Guid? approvalFileId = null,
         string? approvedBy = null)
     {
+        var sourceRecordId = await _db.ModuleCaseFiles.AsNoTracking()
+            .Where(x => x.Id == previousFileId).Select(x => (Guid?)x.RecordId)
+            .SingleOrDefaultAsync();
+        if (sourceRecordId is { } reportRecordId)
+            await VerificationCaseDeletionHold.DemandWritableAsync(_db, reportRecordId);
         if (file.Length <= 0)
             throw new InvalidOperationException("上傳檔案不可為空白。");
 
@@ -670,6 +675,11 @@ public class CaseFileService : ICaseFileService
 
     public async Task DeleteFilesByTaskIdAsync(Guid taskId)
     {
+        var recordId = await _db.ModuleRecordTasks.AsNoTracking()
+            .Where(x => x.Id == taskId).Select(x => (Guid?)x.Case.RecordId)
+            .SingleOrDefaultAsync();
+        if (recordId is { } currentRecordId)
+            await VerificationCaseDeletionHold.DemandWritableAsync(_db, currentRecordId);
         var files = await _db.ModuleCaseFiles
             .Where(x => x.TaskId == taskId)
             .ToListAsync();
@@ -688,6 +698,11 @@ public class CaseFileService : ICaseFileService
 
     public async Task DeleteFilesByCaseIdAsync(Guid caseId)
     {
+        var recordId = await _db.ModuleRecordCases.AsNoTracking()
+            .Where(x => x.Id == caseId).Select(x => (Guid?)x.RecordId)
+            .SingleOrDefaultAsync();
+        if (recordId is { } currentRecordId)
+            await VerificationCaseDeletionHold.DemandWritableAsync(_db, currentRecordId);
         var files = await _db.ModuleCaseFiles
             .Where(x => x.CaseId == caseId)
             .ToListAsync();
@@ -706,6 +721,7 @@ public class CaseFileService : ICaseFileService
 
     public async Task DeleteFilesByRecordIdAsync(Guid recordId)
     {
+        await VerificationCaseDeletionHold.DemandWritableAsync(_db, recordId);
         var projectFolder = await GetProjectFolderAsync(recordId);
 
         var files = await _db.ModuleCaseFiles
@@ -743,6 +759,7 @@ public class CaseFileService : ICaseFileService
         string? approvedBy = null)
     {
         ValidateSettings();
+        await VerificationCaseDeletionHold.DemandWritableAsync(_db, recordId);
 
         if (files.Count == 0)
             throw new InvalidOperationException("沒有收到任何檔案，已中止上傳。");
@@ -884,6 +901,7 @@ public class CaseFileService : ICaseFileService
 
     public async Task RebuildProjectRawDataAsync(Guid recordId)
     {
+        await VerificationCaseDeletionHold.DemandWritableAsync(_db, recordId);
         var record = await _db.ModuleRecords
             .Include(x => x.Module)
             .FirstOrDefaultAsync(x => x.Id == recordId);

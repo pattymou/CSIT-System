@@ -13,6 +13,10 @@ public sealed class VerificationCaseDeletionJob
     // A case is never marked deleted by a KM 202 or callback.
     public string Status { get; private set; } = "Prepared";
     public DateTime UpdatedAt { get; private set; }
+    public string? CleanupManifestJson { get; private set; }
+    public DateTime? DbCleanedAt { get; private set; }
+    public DateTime? CompletedAt { get; private set; }
+    public string? LastCleanupErrorCode { get; private set; }
     public List<VerificationCaseDeletionTarget> Targets { get; private set; } = [];
 
     private VerificationCaseDeletionJob() { }
@@ -45,18 +49,66 @@ public sealed class VerificationCaseDeletionJob
 
     public void MarkWaitingForKm(DateTime now)
     {
-        if (Status != "Prepared" || Targets.Count == 0)
-            throw new InvalidOperationException("No valid KM deletion targets were prepared.");
+        if (Status != "Prepared" || !Targets.Any(x => x.Status == "Pending") ||
+            Targets.Any(x => x.Status is not ("Pending" or "NotDispatched")))
+            throw new InvalidOperationException("The deletion request has already been confirmed.");
         Status = "WaitingForKm";
+        UpdatedAt = now;
+    }
+
+    public void MarkLocalReady(DateTime now)
+    {
+        if (Status != "Prepared" || Targets.Any(x => x.Status != "NotDispatched"))
+            throw new InvalidOperationException("KM delivery cannot be excluded.");
+        Status = "LocalReady";
         UpdatedAt = now;
     }
 
     public void MarkKmVerified(DateTime now)
     {
-        if (Status != "WaitingForKm" || Targets.Count == 0 ||
-            Targets.Any(x => x.Status != "Completed"))
+        if (Status != "WaitingForKm" ||
+            Targets.Any(x => x.Status is not ("Completed" or "NotDispatched")) ||
+            !Targets.Any(x => x.Status == "Completed"))
             throw new InvalidOperationException("KM deletion is not fully verified.");
         Status = "KmVerified";
+        UpdatedAt = now;
+    }
+
+    public void MarkLocalCleanup(string manifestJson, DateTime now)
+    {
+        if (Status is not ("LocalReady" or "KmVerified") ||
+            Targets.Any(x => x.Status is not ("NotDispatched" or "Completed")) ||
+            Targets.Any(x => x.Status == "Completed" && x.KmVerifiedAt is null) ||
+            string.IsNullOrWhiteSpace(manifestJson))
+            throw new InvalidOperationException("Deletion is not ready for local cleanup.");
+        CleanupManifestJson = manifestJson;
+        Status = "LocalCleanup";
+        UpdatedAt = now;
+    }
+
+    public void MarkDbCleaned(DateTime now)
+    {
+        if (Status != "LocalCleanup" || CleanupManifestJson is null)
+            throw new InvalidOperationException("Local cleanup was not prepared.");
+        DbCleanedAt ??= now;
+        UpdatedAt = now;
+    }
+
+    public void MarkCleanupFailed(string code, DateTime now)
+    {
+        if (Status != "LocalCleanup" || string.IsNullOrWhiteSpace(code) || code.Length > 100)
+            throw new InvalidOperationException("Invalid cleanup failure.");
+        LastCleanupErrorCode = code;
+        UpdatedAt = now;
+    }
+
+    public void MarkCompleted(DateTime now)
+    {
+        if (Status != "LocalCleanup" || DbCleanedAt is null)
+            throw new InvalidOperationException("Local cleanup is incomplete.");
+        Status = "Completed";
+        CompletedAt = now;
+        LastCleanupErrorCode = null;
         UpdatedAt = now;
     }
 }
@@ -101,6 +153,14 @@ public sealed class VerificationCaseDeletionTarget
     public KmDeletionRequest ToRequest() => new("1.0", "CSIT", "DocumentDeletionRequested",
         Id, new DateTimeOffset(DateTime.SpecifyKind(RequestedAt, DateTimeKind.Utc)),
         "VerificationApplicationDeleted", Resource);
+
+    public void MarkNotDispatched(DateTime now)
+    {
+        if (Status != "Pending" || AttemptCount != 0 || KmDeletionJobId is not null)
+            throw new InvalidOperationException("KM delivery cannot be excluded.");
+        Status = "NotDispatched";
+        UpdatedAt = now;
+    }
 
     public Guid ClaimDispatch(DateTime now, TimeSpan leaseDuration)
     {

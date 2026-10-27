@@ -1,0 +1,527 @@
+using System.Security.Claims;
+using System.Text.Json;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using SIT.DepartmentSystem.Web.Data;
+using SIT.DepartmentSystem.Web.Entities;
+using SIT.DepartmentSystem.Web.Models.Config;
+using SIT.DepartmentSystem.Web.Services;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
+using SIT.DepartmentSystem.Web.Services.Approval;
+
+namespace ApprovalFramework.Tests;
+
+public sealed class VerificationCaseFreezeAndCleanupTests
+{
+    [Fact]
+    public async Task ConfirmationFreezesExactAcceptedCaseAndRejectsLaterWrites()
+    {
+        using var directory = new TestDirectory();
+        var factory = new Factory();
+        var (application, record) = Accepted("VA-FREEZE", "Same Model");
+        var (_, other) = Accepted("VA-OTHER", "Same Model");
+        await using (var seed = factory.CreateDbContext())
+        {
+            seed.VerificationApplications.Add(application);
+            seed.ModuleRecords.AddRange(record, other);
+            await seed.SaveChangesAsync();
+        }
+        await using (var db = factory.CreateDbContext())
+        {
+            var archive = Archive(factory, directory.Path);
+            var confirmation = new VerificationCaseDeletionConfirmationService(db,
+                new VerificationCaseDeletionPreparationService(db, new AllowWrite()), archive,
+                Options.Create(new KmDeletionOptions { Enabled = true }));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => confirmation.ConfirmAsync(
+                record.Id, "VA-WRONG", "Delete this accepted case", Manager()));
+            Assert.Equal("Prepared", (await db.VerificationCaseDeletionJobs.SingleAsync()).Status);
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() => confirmation.ConfirmAsync(
+                record.Id, application.ApplicationNo, "Delete this accepted case", Manager("staff")));
+            var job = await confirmation.ConfirmAsync(record.Id, application.ApplicationNo,
+                "Delete this accepted case", Manager());
+            Assert.Equal("LocalReady", job.Status);
+            Assert.Contains(await db.ApprovalAuditEvents.ToListAsync(), x =>
+                x.SubmissionId == job.Id && x.Action == ApprovalAuditActions.CaseDeletionFrozen &&
+                x.ActorAccount == "leader");
+        }
+        await using (var writer = factory.CreateDbContext())
+        {
+            var frozen = await writer.ModuleRecords.SingleAsync(x => x.Id == record.Id);
+            frozen.Status = "Hold";
+            await Assert.ThrowsAsync<InvalidOperationException>(() => writer.SaveChangesAsync());
+            writer.ChangeTracker.Clear();
+            writer.ModuleCaseFiles.Add(new ModuleCaseFile
+            {
+                Id = Guid.NewGuid(), RecordId = record.Id, FileName = "report.pdf",
+                FilePath = directory.Path, DocumentId = Guid.NewGuid(), VersionNo = 1
+            });
+            await Assert.ThrowsAsync<InvalidOperationException>(() => writer.SaveChangesAsync());
+            writer.ChangeTracker.Clear();
+            var unaffected = await writer.ModuleRecords.SingleAsync(x => x.Id == other.Id);
+            unaffected.Status = "Hold";
+            await writer.SaveChangesAsync();
+            Assert.Equal("Hold", (await writer.ModuleRecords.SingleAsync(x => x.Id == other.Id)).Status);
+        }
+    }
+
+    [Fact]
+    public async Task KmAcceptedIsNotLocalReadyAndOnlyVerifiedCallbackUnlocksCleanup()
+    {
+        var now = DateTime.UtcNow;
+        var job = VerificationCaseDeletionJob.Prepare(Guid.NewGuid(), Guid.NewGuid(),
+            "leader", "Delete this accepted case", now);
+        job.AddTarget(new KmDeletionResource("TestReport", null, Guid.NewGuid(), 1,
+            Guid.NewGuid(), job.ApplicationId, job.RecordId), now);
+        job.AddTarget(new KmDeletionResource("TestReport", null, Guid.NewGuid(), 2,
+            Guid.NewGuid(), job.ApplicationId, job.RecordId), now);
+        var local = job.Targets[0];
+        local.MarkNotDispatched(now);
+        job.MarkWaitingForKm(now);
+        Assert.Throws<InvalidOperationException>(() => job.MarkLocalCleanup("[]", now));
+        var remote = job.Targets[1];
+        var lease = remote.ClaimDispatch(now, TimeSpan.FromMinutes(2));
+        remote.DeliveryAccepted(lease, "KM-JOB-1", now);
+        Assert.Throws<InvalidOperationException>(() => job.MarkKmVerified(now));
+        var callback = new KmDeletionCallback("1.0", Guid.NewGuid(), "CSIT", remote.Id,
+            "KM-JOB-1", remote.Resource, "Completed",
+            new KmDeletionTimestamps(new DateTimeOffset(now), new DateTimeOffset(now.AddSeconds(2)), null),
+            new KmDeletionResult(true, new DateTimeOffset(now.AddSeconds(1)),
+                new KmDeletionCleanup("Deleted", "Deleted", "Deleted", "Deleted",
+                    "Deleted", "Deleted", "NotPresent")), null);
+        remote.ApplyCallback(callback, now.AddSeconds(2));
+        job.MarkKmVerified(now.AddSeconds(2));
+        Assert.Equal("KmVerified", job.Status);
+    }
+
+    [Fact]
+    public async Task FileFailureKeepsDurableCleanupAndRetryLeavesSameNameOtherCaseUntouched()
+    {
+        using var directory = new TestDirectory();
+        var firstPath = System.IO.Path.Combine(directory.Path, "first.txt");
+        var secondPath = System.IO.Path.Combine(directory.Path, "second.txt");
+        await File.WriteAllTextAsync(firstPath, "first case");
+        await File.WriteAllTextAsync(secondPath, "second case");
+        var file = await VerificationCaseDeletionPhysicalFiles.InspectAsync(
+            "ModuleCaseFile", Guid.NewGuid(), directory.Path, firstPath);
+        var factory = new Factory();
+        var (application, record) = Accepted("VA-FIRST", "Same Model");
+        var (otherApplication, otherRecord) = Accepted("VA-SECOND", "Same Model");
+        var job = VerificationCaseDeletionJob.Prepare(application.Id, record.Id,
+            "leader", "Delete this accepted case", DateTime.UtcNow);
+        job.MarkLocalReady(DateTime.UtcNow);
+        job.MarkLocalCleanup(JsonSerializer.Serialize(new[] { file },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)), DateTime.UtcNow);
+        await using (var seed = factory.CreateDbContext())
+        {
+            seed.VerificationApplications.AddRange(application, otherApplication);
+            seed.ModuleRecords.AddRange(record, otherRecord);
+            seed.Modules.AddRange(
+                new ModuleEntity { Id = record.ModuleId, Code = "verification", Name = "Verification" },
+                new ModuleEntity { Id = otherRecord.ModuleId, Code = "other", Name = "Other" });
+            seed.VerificationCaseDeletionJobs.Add(job);
+            await seed.SaveChangesAsync();
+        }
+        await File.WriteAllTextAsync(firstPath, "changed after freeze");
+        await using (var db = factory.CreateDbContext())
+        {
+            var cleanup = Cleanup(db, factory, directory.Path);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => cleanup.ProcessAsync(record.Id, Admin()));
+            Assert.Equal("LocalCleanup", (await db.VerificationCaseDeletionJobs.SingleAsync()).Status);
+            Assert.Null((await db.VerificationCaseDeletionJobs.SingleAsync()).DbCleanedAt);
+            Assert.Equal("FILE_PREFLIGHT_FAILED",
+                (await db.VerificationCaseDeletionJobs.SingleAsync()).LastCleanupErrorCode);
+            Assert.Contains(await db.ApprovalAuditEvents.ToListAsync(), x =>
+                x.Action == ApprovalAuditActions.CaseDeletionCleanupFailed);
+            Assert.True(await db.VerificationApplications.AnyAsync(x => x.Id == application.Id));
+            Assert.True(await db.VerificationApplications.AnyAsync(x => x.Id == otherApplication.Id));
+        }
+        await File.WriteAllTextAsync(firstPath, "first case");
+        await using (var retry = factory.CreateDbContext())
+        {
+            var completed = await Cleanup(retry, factory, directory.Path)
+                .ProcessAsync(record.Id, Admin());
+            Assert.Equal("Completed", completed.Status);
+            Assert.NotNull(completed.CompletedAt);
+            Assert.Contains(await retry.ApprovalAuditEvents.ToListAsync(), x =>
+                x.Action == ApprovalAuditActions.CaseDeletionCompleted && x.ActorAccount == "admin");
+            Assert.False(File.Exists(firstPath));
+            Assert.True(File.Exists(secondPath));
+            Assert.True(await retry.ModuleRecords.AnyAsync(x => x.Id == otherRecord.Id));
+        }
+    }
+
+    [Fact]
+    public async Task FileSafetyRejectsEscapeAndReplacedContent()
+    {
+        using var directory = new TestDirectory();
+        var path = System.IO.Path.Combine(directory.Path, "owned.txt");
+        await File.WriteAllTextAsync(path, "owned");
+        var entry = await VerificationCaseDeletionPhysicalFiles.InspectAsync(
+            "TestReport", Guid.NewGuid(), directory.Path, path);
+        Assert.Throws<InvalidOperationException>(() => VerificationCaseDeletionPhysicalFiles.Validate(
+            directory.Path, System.IO.Path.GetTempPath()));
+        await File.WriteAllTextAsync(path, "replaced");
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            VerificationCaseDeletionPhysicalFiles.DeleteAsync(entry));
+        Assert.True(File.Exists(path));
+    }
+
+    [Fact]
+    public async Task RestartAfterDatabaseCleanupFinishesFromDurableManifest()
+    {
+        using var directory = new TestDirectory();
+        var path = System.IO.Path.Combine(directory.Path, "remaining.pdf");
+        await File.WriteAllTextAsync(path, "remaining case file");
+        var entry = await VerificationCaseDeletionPhysicalFiles.InspectAsync(
+            "ModuleCaseFile", Guid.NewGuid(), directory.Path, path);
+        var factory = new Factory();
+        var job = VerificationCaseDeletionJob.Prepare(Guid.NewGuid(), Guid.NewGuid(),
+            "leader", "Delete this accepted case", DateTime.UtcNow);
+        job.MarkLocalReady(DateTime.UtcNow);
+        job.MarkLocalCleanup(JsonSerializer.Serialize(new[] { entry },
+            new JsonSerializerOptions(JsonSerializerDefaults.Web)), DateTime.UtcNow);
+        job.MarkDbCleaned(DateTime.UtcNow);
+        await using (var seed = factory.CreateDbContext())
+        {
+            seed.VerificationCaseDeletionJobs.Add(job);
+            await seed.SaveChangesAsync();
+        }
+        await using (var resumed = factory.CreateDbContext())
+        {
+            var completed = await Cleanup(resumed, factory, directory.Path)
+                .ProcessAsync(job.RecordId, Admin());
+            Assert.Equal("Completed", completed.Status);
+            Assert.False(File.Exists(path));
+            Assert.Contains(await resumed.ApprovalAuditEvents.ToListAsync(), x =>
+                x.Action == ApprovalAuditActions.CaseDeletionCompleted);
+        }
+    }
+
+    [Fact]
+    public async Task ConfirmationRefusesDispatchingAndLeavesCaseWritable()
+    {
+        using var directory = new TestDirectory();
+        var factory = new Factory();
+        var (application, record) = Accepted("VA-DISPATCH", "Model A");
+        var report = new ModuleCaseFile
+        {
+            Id = Guid.NewGuid(), RecordId = record.Id, FileName = "report.pdf",
+            FilePath = directory.Path, FileSize = 10, DocumentId = Guid.NewGuid(),
+            VersionNo = 1, FileKind = ModuleCaseFileKinds.TestReport,
+            ReviewStatus = TestReportReviewStatuses.Approved, IsRawDataExported = true
+        };
+        var outbox = KmIntegrationOutbox.ForCommittedTestReport(report, DateTime.UtcNow);
+        outbox.Claim(Guid.NewGuid(), DateTime.UtcNow, TimeSpan.FromMinutes(2));
+        await using (var seed = factory.CreateDbContext())
+        {
+            seed.VerificationApplications.Add(application);
+            seed.ModuleRecords.Add(record);
+            seed.ModuleCaseFiles.Add(report);
+            seed.KmIntegrationOutbox.Add(outbox);
+            await seed.SaveChangesAsync();
+        }
+        await using var db = factory.CreateDbContext();
+        var service = new VerificationCaseDeletionConfirmationService(db,
+            new VerificationCaseDeletionPreparationService(db, new AllowWrite()),
+            Archive(factory, directory.Path), Options.Create(new KmDeletionOptions { Enabled = true }));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.ConfirmAsync(record.Id,
+            application.ApplicationNo, "Delete this accepted case", Manager()));
+        Assert.Equal("Prepared", (await db.VerificationCaseDeletionJobs.SingleAsync()).Status);
+        db.ChangeTracker.Clear();
+        var writable = await db.ModuleRecords.SingleAsync(x => x.Id == record.Id);
+        writable.Status = "Hold";
+        await db.SaveChangesAsync();
+    }
+
+    [Fact]
+    public async Task ConfirmationRefusesPendingApprovalAndArchiveWork()
+    {
+        using var directory = new TestDirectory();
+        var factory = new Factory();
+        var (application, record) = Accepted("VA-PENDING", "Model A");
+        var recordCase = new ModuleRecordCase { Id = Guid.NewGuid(), RecordId = record.Id,
+            CaseNo = "RADIO", Name = "Radio" };
+        var pending = PendingSubmission.Create(Guid.NewGuid(), "test-submission", "verification",
+            "verification", "applicant", "RD", application.TeamOptionId!.Value, "TEAM-A",
+            nameof(ThreeLevelUploadKind.CaseAttachment),
+            new ThreeLevelUploadTarget(ThreeLevelUploadKind.CaseAttachment, recordCase.Id).ContextId,
+            "Case attachment", null, DateTime.UtcNow);
+        await using (var seed = factory.CreateDbContext())
+        {
+            seed.VerificationApplications.Add(application);
+            seed.ModuleRecords.Add(record);
+            seed.ModuleRecordCases.Add(recordCase);
+            seed.PendingSubmissions.Add(pending);
+            await seed.SaveChangesAsync();
+        }
+        await using (var db = factory.CreateDbContext())
+        {
+            var service = new VerificationCaseDeletionConfirmationService(db,
+                new VerificationCaseDeletionPreparationService(db, new AllowWrite()),
+                Archive(factory, directory.Path), Options.Create(new KmDeletionOptions { Enabled = true }));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.ConfirmAsync(record.Id,
+                application.ApplicationNo, "Delete this accepted case", Manager()));
+            Assert.Equal("Prepared", (await db.VerificationCaseDeletionJobs.SingleAsync()).Status);
+        }
+        await using (var db = factory.CreateDbContext())
+        {
+            db.PendingSubmissions.Remove(await db.PendingSubmissions.SingleAsync());
+            await db.SaveChangesAsync();
+        }
+        var archive = Archive(factory, directory.Path);
+        await archive.EnqueueApprovedApplicationAsync(application, DateTime.UtcNow, default);
+        // There is no attachment in this fixture; enqueue a synthetic exact attachment ID.
+        var journal = new VerificationAttachmentArchiveJournal(
+            Options.Create(new DocumentStagingOptions { RootPath = directory.Path }));
+        await journal.EnqueueAsync(application.Id, [Guid.NewGuid()], DateTime.UtcNow, default);
+        await using (var db = factory.CreateDbContext())
+        {
+            var service = new VerificationCaseDeletionConfirmationService(db,
+                new VerificationCaseDeletionPreparationService(db, new AllowWrite()),
+                Archive(factory, directory.Path), Options.Create(new KmDeletionOptions { Enabled = true }));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.ConfirmAsync(record.Id,
+                application.ApplicationNo, "Delete this accepted case", Manager()));
+            Assert.Equal("Prepared", (await db.VerificationCaseDeletionJobs.SingleAsync()).Status);
+        }
+    }
+
+    [Fact]
+    public async Task SharedPhysicalFileBlocksCleanupBeforeAnyDatabaseRemoval()
+    {
+        using var directory = new TestDirectory();
+        var path = System.IO.Path.Combine(directory.Path, "shared.pdf");
+        await File.WriteAllTextAsync(path, "shared");
+        var factory = new Factory();
+        var (application, record) = Accepted("VA-SHARED", "Model A");
+        var (otherApplication, otherRecord) = Accepted("VA-OTHER-SHARED", "Model A");
+        var job = VerificationCaseDeletionJob.Prepare(application.Id, record.Id,
+            "leader", "Delete this accepted case", DateTime.UtcNow);
+        job.MarkLocalReady(DateTime.UtcNow);
+        await using (var seed = factory.CreateDbContext())
+        {
+            seed.VerificationApplications.AddRange(application, otherApplication);
+            seed.ModuleRecords.AddRange(record, otherRecord);
+            seed.Modules.AddRange(
+                new ModuleEntity { Id = record.ModuleId, Code = "verification", Name = "Verification" },
+                new ModuleEntity { Id = otherRecord.ModuleId, Code = "other", Name = "Other" });
+            seed.SystemOptions.Add(new SystemOption { Id = Guid.NewGuid(),
+                Category = "ThreeLevelRootPath", Name = "verification", Value = directory.Path,
+                IsEnabled = true });
+            seed.ModuleCaseFiles.AddRange(
+                new ModuleCaseFile { Id = Guid.NewGuid(), RecordId = record.Id,
+                    FilePath = directory.Path, FileName = "shared.pdf", DocumentId = Guid.NewGuid(),
+                    VersionNo = 1, FileKind = ModuleCaseFileKinds.Attachment },
+                new ModuleCaseFile { Id = Guid.NewGuid(), RecordId = otherRecord.Id,
+                    FilePath = directory.Path, FileName = "shared.pdf", DocumentId = Guid.NewGuid(),
+                    VersionNo = 1, FileKind = ModuleCaseFileKinds.Attachment });
+            seed.VerificationCaseDeletionJobs.Add(job);
+            await seed.SaveChangesAsync();
+        }
+        await using var db = factory.CreateDbContext();
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            Cleanup(db, factory, directory.Path).BeginAsync(record.Id, Manager()));
+        Assert.Contains("shared", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("LocalReady", (await db.VerificationCaseDeletionJobs.SingleAsync()).Status);
+        Assert.True(await db.VerificationApplications.AnyAsync(x => x.Id == application.Id));
+        Assert.True(File.Exists(path));
+    }
+
+    [Fact]
+    public async Task RawDataAndKmManifestAreRemovedOnlyForTheirExactRecord()
+    {
+        using var directory = new TestDirectory();
+        var factory = new Factory();
+        var (application, record) = Accepted("VA-RAW", "Unique Project");
+        var job = VerificationCaseDeletionJob.Prepare(application.Id, record.Id,
+            "leader", "Delete this accepted case", DateTime.UtcNow);
+        job.MarkLocalReady(DateTime.UtcNow);
+        var localProject = System.IO.Path.Combine(directory.Path, "Unique Project");
+        var drive = System.IO.Path.GetPathRoot(localProject)!;
+        var nasProject = System.IO.Path.Combine(directory.Path,
+            localProject[drive.Length..].TrimStart(System.IO.Path.DirectorySeparatorChar));
+        Directory.CreateDirectory(nasProject);
+        var rawPath = System.IO.Path.Combine(nasProject, "rawdata.json");
+        var kmPath = System.IO.Path.Combine(nasProject, "km-manifest.json");
+        var content = JsonSerializer.Serialize(new { source = new { entityId = record.Id.ToString() },
+            project = new { id = record.Id } });
+        await File.WriteAllTextAsync(rawPath, content);
+        await File.WriteAllTextAsync(kmPath, content);
+        await using (var seed = factory.CreateDbContext())
+        {
+            seed.Modules.Add(new ModuleEntity { Id = record.ModuleId, Code = "verification",
+                Name = "Verification" });
+            seed.SystemOptions.Add(new SystemOption { Id = Guid.NewGuid(),
+                Category = "ThreeLevelRootPath", Name = "verification",
+                Value = directory.Path, IsEnabled = true });
+            seed.ModuleRecords.Add(record);
+            seed.VerificationApplications.Add(application);
+            seed.VerificationCaseDeletionJobs.Add(job);
+            await seed.SaveChangesAsync();
+        }
+        await using (var db = factory.CreateDbContext())
+        {
+            var cleanup = Cleanup(db, factory, directory.Path);
+            var prepared = await cleanup.BeginAsync(record.Id, Manager());
+            Assert.Contains("rawdata.json", prepared.CleanupManifestJson);
+            Assert.Contains("km-manifest.json", prepared.CleanupManifestJson);
+            Assert.Equal("Completed", (await cleanup.ProcessAsync(record.Id, Admin())).Status);
+        }
+        Assert.False(File.Exists(rawPath));
+        Assert.False(File.Exists(kmPath));
+    }
+
+    [Fact]
+    public async Task PostgreSqlCleanupHonorsForeignKeysAndKeepsSameNameOtherApplication()
+    {
+        var connection = Environment.GetEnvironmentVariable("CSIT_CASE_DELETE_TEST_DB");
+        if (connection is null) return;
+        if (!connection.Contains("Host=127.0.0.1;Port=55432;Database=csit_deletion_migration_test;",
+                StringComparison.Ordinal))
+            throw new InvalidOperationException("Only the isolated case deletion test database is allowed.");
+        using var directory = new TestDirectory();
+        var factory = new Factory(connection);
+        var (first, record) = Accepted("VA-PG-" + Guid.NewGuid().ToString("N")[..12], "Same Model");
+        var (second, other) = Accepted("VA-PG-" + Guid.NewGuid().ToString("N")[..12], "Same Model");
+        await using (var seed = factory.CreateDbContext())
+        {
+            seed.Modules.AddRange(new ModuleEntity { Id = record.ModuleId, Code = "test-" + record.Id.ToString("N"),
+                Name = "Test", DisplayName = "Test", RoutePrefix = "test" },
+                new ModuleEntity { Id = other.ModuleId, Code = "test-" + other.Id.ToString("N"),
+                    Name = "Test", DisplayName = "Test", RoutePrefix = "test" });
+            foreach (var app in new[] { first, second })
+            {
+                seed.SystemOptions.Add(new SystemOption { Id = app.RoutingDepartmentOptionId!.Value,
+                    Category = "Department", Name = "test-" + Guid.NewGuid().ToString("N"),
+                    Value = "RD", IsEnabled = true });
+                seed.SystemOptions.Add(new SystemOption { Id = app.TeamOptionId!.Value,
+                    Category = "Team", Name = "test-" + Guid.NewGuid().ToString("N"),
+                    Value = "TEAM-A", IsEnabled = true });
+            }
+            seed.ModuleRecords.AddRange(record, other);
+            seed.VerificationApplications.AddRange(first, second);
+            seed.SystemOptions.Add(new SystemOption { Id = Guid.NewGuid(),
+                Category = "ThreeLevelRootPath", Name = "test-" + record.Id.ToString("N"),
+                Value = directory.Path, IsEnabled = true });
+            await seed.SaveChangesAsync();
+        }
+        await using (var db = factory.CreateDbContext())
+        {
+            var archive = Archive(factory, directory.Path);
+            var confirmation = new VerificationCaseDeletionConfirmationService(db,
+                new VerificationCaseDeletionPreparationService(db, new AllowWrite()), archive,
+                Options.Create(new KmDeletionOptions { Enabled = true }));
+            Assert.Equal("LocalReady", (await confirmation.ConfirmAsync(record.Id,
+                first.ApplicationNo, "Delete exact test case", Manager())).Status);
+        }
+        await using (var db = factory.CreateDbContext())
+        {
+            var cleanup = Cleanup(db, factory, directory.Path);
+            await cleanup.BeginAsync(record.Id, Admin());
+            await using (var locker = factory.CreateDbContext())
+            {
+                await locker.Database.OpenConnectionAsync();
+                await using var command = locker.Database.GetDbConnection().CreateCommand();
+                command.CommandText = "SELECT pg_advisory_lock(@key)";
+                var parameter = command.CreateParameter();
+                parameter.ParameterName = "key";
+                parameter.Value = BitConverter.ToInt64(record.Id.ToByteArray(), 0) ^ 0x4353495444454C45L;
+                command.Parameters.Add(parameter);
+                await command.ExecuteScalarAsync();
+                await Assert.ThrowsAsync<InvalidOperationException>(() => cleanup.ProcessAsync(record.Id, Admin()));
+                command.CommandText = "SELECT pg_advisory_unlock(@key)";
+                await command.ExecuteScalarAsync();
+            }
+            Assert.Equal("Completed", (await cleanup.ProcessAsync(record.Id, Admin())).Status);
+        }
+        await using (var verify = factory.CreateDbContext())
+        {
+            Assert.False(await verify.VerificationApplications.AnyAsync(x => x.Id == first.Id));
+            Assert.False(await verify.ModuleRecords.AnyAsync(x => x.Id == record.Id));
+            Assert.True(await verify.VerificationApplications.AnyAsync(x => x.Id == second.Id));
+            Assert.True(await verify.ModuleRecords.AnyAsync(x => x.Id == other.Id));
+        }
+    }
+
+    private static VerificationCaseLocalCleanupService Cleanup(AppDbContext db, Factory factory,
+        string root) => new(db, new AllowWrite(), new AdminAuthorization(),
+        Options.Create(new KmDeletionOptions { Enabled = true }),
+        Options.Create(new DocumentStorageOptions { RootPath = root }),
+        Options.Create(new DocumentStagingOptions { RootPath = root }),
+        Options.Create(new RawDataSettings { NasRootPath = root }), Archive(factory, root));
+
+    private static VerificationAttachmentArchiveProcessor Archive(Factory factory, string root) =>
+        new(factory, Options.Create(new DocumentStorageOptions { RootPath = root }),
+            Options.Create(new DocumentStagingOptions { RootPath = root }),
+            new VerificationAttachmentArchiveJournal(
+                Options.Create(new DocumentStagingOptions { RootPath = root })),
+            NullLogger<VerificationAttachmentArchiveProcessor>.Instance);
+
+    private static (VerificationApplication, ModuleRecord) Accepted(string no, string name)
+    {
+        var record = new ModuleRecord { Id = Guid.NewGuid(), ModuleId = Guid.NewGuid(),
+            RecordNo = no, Name = name, Status = "Open" };
+        var department = Guid.NewGuid(); var team = Guid.NewGuid(); var now = DateTime.UtcNow;
+        var app = VerificationApplication.CreateDraft(Guid.NewGuid(), no, department, team,
+            "applicant", "Applicant", "applicant@example.test", "RD", null,
+            new VerificationApplicationContent { ProjectName = name, ProductModel = name, Customer = "Customer",
+                ValidationRequirement = "Validation", RequestedFinishDate = new DateOnly(2026, 11, 1) }, now);
+        app.Submit(new VerificationApplicationRouting(department, "RD", "RD", team,
+            "TEAM-A", "Team A", "verification", "leader", "Leader"), now);
+        app.Accept(record.Id, new DateOnly(2026, 11, 2), "leader", now);
+        return (app, record);
+    }
+
+    private static ClaimsPrincipal Manager(string account = "leader") => new(new ClaimsIdentity([
+        new Claim("account", account),
+        new Claim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff)
+    ], "test"));
+    private static ClaimsPrincipal Admin() => new(new ClaimsIdentity([
+        new Claim("account", "admin"), new Claim(ClaimTypes.Role, "Admin"),
+        new Claim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff)
+    ], "test"));
+
+    private sealed class AllowWrite : IBusinessWriteAuthorizationGuard
+    {
+        public Task DemandAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    }
+
+    private sealed class AdminAuthorization : IAuthorizationService
+    {
+        public Task<AuthorizationResult> AuthorizeAsync(ClaimsPrincipal user, object? resource,
+            IEnumerable<IAuthorizationRequirement> requirements) => Task.FromResult(
+                user.IsInRole("Admin") ? AuthorizationResult.Success() : AuthorizationResult.Failed());
+        public Task<AuthorizationResult> AuthorizeAsync(ClaimsPrincipal user, object? resource,
+            string policyName) => Task.FromResult(user.IsInRole("Admin")
+                ? AuthorizationResult.Success() : AuthorizationResult.Failed());
+    }
+
+    private sealed class Factory : IDbContextFactory<AppDbContext>
+    {
+        private readonly DbContextOptions<AppDbContext> options;
+        public Factory(string? connection = null)
+        {
+            var builder = new DbContextOptionsBuilder<AppDbContext>();
+            if (connection is null) builder.UseInMemoryDatabase(Guid.NewGuid().ToString("N"));
+            else builder.UseNpgsql(connection);
+            options = builder.Options;
+        }
+        public AppDbContext CreateDbContext() => new(options);
+    }
+
+    private sealed class TestDirectory : IDisposable
+    {
+        public string Path { get; } = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+            "csit-case-delete-test-" + Guid.NewGuid().ToString("N"));
+        public TestDirectory() => Directory.CreateDirectory(Path);
+        public void Dispose()
+        {
+            var full = System.IO.Path.GetFullPath(Path);
+            var temp = System.IO.Path.GetFullPath(System.IO.Path.GetTempPath());
+            if (!full.StartsWith(temp + "csit-case-delete-test-", StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Test cleanup escaped its temporary root.");
+            if (Directory.Exists(full)) Directory.Delete(full, recursive: true);
+        }
+    }
+}

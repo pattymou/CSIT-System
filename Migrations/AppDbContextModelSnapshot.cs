@@ -7422,6 +7422,23 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("application_id");
 
+                    b.Property<string>("CleanupManifestJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("cleanup_manifest_json");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTime?>("DbCleanedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("db_cleaned_at");
+
+                    b.Property<string>("LastCleanupErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("last_cleanup_error_code");
+
                     b.Property<string>("Reason")
                         .IsRequired()
                         .HasMaxLength(500)

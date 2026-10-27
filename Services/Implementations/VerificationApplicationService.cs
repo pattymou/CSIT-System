@@ -340,6 +340,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         {
             var entity = await LockedAcceptedAsync(id, cancellationToken);
             VerificationApplicationSecurity.EnsureAcceptedManagerAccess(entity, user);
+            await VerificationCaseDeletionHold.DemandWritableAsync(_db,
+                entity.ModuleRecordId!.Value, cancellationToken);
             var original = DeserializeValidationRequest(entity)
                 ?? throw new InvalidOperationException("原申請快照缺失，無法修改已核准內容。");
             var edited = request.ValidationRequest
@@ -444,6 +446,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         {
             var entity = await LockedAcceptedAsync(id, cancellationToken);
             VerificationApplicationSecurity.EnsureAcceptedManagerAccess(entity, user);
+            await VerificationCaseDeletionHold.DemandWritableAsync(_db,
+                entity.ModuleRecordId!.Value, cancellationToken);
             var request = DeserializeValidationRequest(entity)
                 ?? throw new InvalidOperationException("原申請快照缺失，不能建立測試工作。");
             ValidateSubmissionSnapshot(request);

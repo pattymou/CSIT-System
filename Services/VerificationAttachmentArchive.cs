@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Config;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Services;
 
@@ -208,10 +209,18 @@ public sealed class VerificationAttachmentArchiveProcessor(
             .ToListAsync(cancellationToken);
         foreach (var application in applications)
         {
+            await using var transaction = db.Database.IsRelational()
+                ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
+            if (application.ModuleRecordId is { } recordId)
+            {
+                await VerificationCaseDeletionWriteGuard.LockRecordAsync(db, recordId, cancellationToken);
+                await VerificationCaseDeletionHold.DemandWritableAsync(db, recordId, cancellationToken);
+            }
             var pending = application.Files
                 .Where(x => x.DocumentLibraryFile?.StorageArea != DocumentStorageAreas.Library)
                 .Select(x => x.Id);
             await journal.EnqueueAsync(application.Id, pending, DateTime.UtcNow, cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         }
     }
 
@@ -348,6 +357,8 @@ public sealed class VerificationAttachmentArchiveProcessor(
             ?? throw new InvalidOperationException("The approved verification application no longer exists.");
         if (application.Status != VerificationApplicationStatus.Accepted)
             throw new InvalidOperationException("The verification application approval has not committed.");
+        if (application.ModuleRecordId is { } recordId)
+            await VerificationCaseDeletionHold.DemandWritableAsync(readDb, recordId, cancellationToken);
         var attachment = application.Files.SingleOrDefault(x => x.Id == entry.AttachmentId)
             ?? throw new InvalidOperationException("The approved verification attachment no longer exists.");
 
@@ -399,6 +410,8 @@ public sealed class VerificationAttachmentArchiveProcessor(
                 .SingleAsync(x => x.Id == entry.ApplicationId, cancellationToken);
             if (lockedApplication.Status != VerificationApplicationStatus.Accepted)
                 throw new InvalidOperationException("The verification application is no longer accepted.");
+            if (lockedApplication.ModuleRecordId is { } lockedRecordId)
+                await VerificationCaseDeletionHold.DemandWritableAsync(db, lockedRecordId, cancellationToken);
             var lockedAttachment = lockedApplication.Files.Single(x => x.Id == entry.AttachmentId);
             var archivedAt = DateTime.UtcNow;
             var document = await VerificationApplicationAttachmentLinker.LinkFormalAsync(

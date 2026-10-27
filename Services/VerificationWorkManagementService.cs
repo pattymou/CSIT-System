@@ -5,6 +5,7 @@ using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Services;
 
@@ -56,11 +57,15 @@ public sealed class VerificationWorkManagementService(
             .OrderByDescending(x => x.VersionNo)
             .ToListAsync(cancellationToken);
         var reportsByTask = reports.GroupBy(x => x.TaskId!.Value).ToDictionary(x => x.Key, x => x.ToList());
+        var deletionStatus = await db.VerificationCaseDeletionJobs.AsNoTracking()
+            .Where(x => x.RecordId == recordId).Select(x => x.Status)
+            .SingleOrDefaultAsync(cancellationToken);
         var list = ToListItem(application);
         var (selectedItems, snapshotMessage) = SelectedItems(application, tasks);
         return new VerificationWorkDetailDto
         {
             ApplicationId = list.ApplicationId,
+            DeletionStatus = deletionStatus,
             RecordId = list.RecordId,
             ApplicationNo = list.ApplicationNo,
             ModelName = list.ModelName,
@@ -114,6 +119,7 @@ public sealed class VerificationWorkManagementService(
         task.Category = selected.Category;
         return new VerificationWorkTaskDetailDto
         {
+            DeletionStatus = detail!.DeletionStatus,
             RecordId = recordId,
             ModelName = detail!.ModelName,
             ApplicationNo = detail.ApplicationNo,
@@ -138,6 +144,7 @@ public sealed class VerificationWorkManagementService(
         CancellationToken cancellationToken = default)
     {
         await businessWrite.DemandAsync(cancellationToken);
+        await VerificationCaseDeletionHold.DemandWritableAsync(db, recordId, cancellationToken);
         var status = NormalizeStatus(request.Status);
         if (!user.HasClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff))
             throw new UnauthorizedAccessException("CSIT staff access is required.");
@@ -168,6 +175,7 @@ public sealed class VerificationWorkManagementService(
             .Include(x => x.Case).ThenInclude(x => x.Record).ThenInclude(x => x.Cases).ThenInclude(x => x.Tasks)
             .SingleOrDefaultAsync(x => x.Id == taskId, cancellationToken)
             ?? throw new KeyNotFoundException("The verification test item was not found.");
+        await VerificationCaseDeletionHold.DemandWritableAsync(db, task.Case.RecordId, cancellationToken);
         var accepted = await db.VerificationApplications.AnyAsync(x =>
             x.Status == VerificationApplicationStatus.Accepted && x.ModuleRecordId == task.Case.RecordId,
             cancellationToken);
