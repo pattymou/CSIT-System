@@ -476,12 +476,92 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.ToTable("document_files", (string)null);
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentProcessingCallbackReceipt", b =>
+                {
+                    b.Property<Guid>("CallbackId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("callback_id");
+
+                    b.Property<Guid>("DocumentProcessingJobId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("document_processing_job_id");
+
+                    b.Property<string>("PayloadSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("payload_sha256");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.HasKey("CallbackId");
+
+                    b.HasIndex("DocumentProcessingJobId", "ReceivedAt")
+                        .HasDatabaseName("ix_document_callbacks_job_received");
+
+                    b.ToTable("document_processing_callbacks", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_document_processing_callbacks_status", "status IN ('Processing', 'Completed', 'Failed')");
+                        });
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentProcessingJob", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uuid")
                         .HasColumnName("id");
+
+                    b.Property<int>("ArchiveAttemptCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("archive_attempt_count");
+
+                    b.Property<DateTime?>("ArchiveLastAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archive_last_attempt_at");
+
+                    b.Property<string>("ArchiveLastError")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("archive_last_error");
+
+                    b.Property<DateTime?>("ArchiveLeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archive_lease_expires_at");
+
+                    b.Property<Guid?>("ArchiveLeaseToken")
+                        .HasColumnType("uuid")
+                        .HasColumnName("archive_lease_token");
+
+                    b.Property<DateTime?>("ArchiveNextRetryAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archive_next_retry_at");
+
+                    b.Property<string>("ArchiveSha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("archive_sha256");
+
+                    b.Property<string>("ArchiveStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasDefaultValue("NotStarted")
+                        .HasColumnName("archive_status");
+
+                    b.Property<DateTime?>("ArchivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("archived_at");
 
                     b.Property<int>("AttemptCount")
                         .HasColumnType("integer")
@@ -495,6 +575,32 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("document_file_id");
 
+                    b.Property<DateTime?>("KmCompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("km_completed_at");
+
+                    b.Property<string>("KmErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("km_error_code");
+
+                    b.Property<string>("KmErrorMessage")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("km_error_message");
+
+                    b.Property<bool?>("KmErrorRetryable")
+                        .HasColumnType("boolean")
+                        .HasColumnName("km_error_retryable");
+
+                    b.Property<DateTime?>("KmFailedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("km_failed_at");
+
+                    b.Property<DateTime?>("KmStartedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("km_started_at");
+
                     b.Property<DateTime?>("LastAttemptAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("last_attempt_at");
@@ -503,6 +609,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasMaxLength(2000)
                         .HasColumnType("character varying(2000)")
                         .HasColumnName("last_error");
+
+                    b.Property<string>("MetadataJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("metadata_json");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -519,11 +629,23 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.HasIndex("DocumentFileId")
                         .IsUnique();
 
+                    b.HasIndex("ArchiveStatus", "ArchiveLeaseExpiresAt")
+                        .HasDatabaseName("ix_document_jobs_archive_claim");
+
                     b.HasIndex("Status", "CreatedAt");
+
+                    b.HasIndex("Status", "ArchiveStatus", "ArchiveNextRetryAt")
+                        .HasDatabaseName("ix_document_jobs_archive_retry");
 
                     b.ToTable("document_processing_jobs", null, t =>
                         {
-                            t.HasCheckConstraint("ck_document_processing_jobs_status", "status IN ('Pending', 'Processing', 'Completed', 'Failed')");
+                            t.HasCheckConstraint("ck_document_processing_jobs_archive_result", "archive_status <> 'Completed' OR (archived_at IS NOT NULL AND archive_sha256 IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_document_processing_jobs_archive_status", "archive_status IN ('NotStarted', 'Pending', 'Archiving', 'Completed', 'Failed')");
+
+                            t.HasCheckConstraint("ck_document_processing_jobs_metadata", "status <> 'Completed' OR metadata_json IS NOT NULL OR (archive_status = 'NotStarted' AND km_completed_at IS NULL)");
+
+                            t.HasCheckConstraint("ck_document_processing_jobs_status", "status IN ('Pending', 'Accepted', 'Processing', 'Completed', 'Failed')");
                         });
                 });
 
@@ -927,7 +1049,7 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         {
                             t.HasCheckConstraint("ck_km_outbox_sent_job", "status NOT IN ('Sent', 'Processing', 'Completed') OR km_job_id IS NOT NULL");
 
-                            t.HasCheckConstraint("ck_km_outbox_supported_event", "source_system = 'CSIT' AND ((event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND project_id IS NOT NULL) OR (event_type = 'VerificationApplicationAttachmentArchived' AND source_entity_type = 'VerificationApplicationFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL))");
+                            t.HasCheckConstraint("ck_km_outbox_supported_event", "source_system = 'CSIT' AND ((event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND project_id IS NOT NULL) OR (event_type = 'VerificationApplicationAttachmentArchived' AND source_entity_type = 'VerificationApplicationFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL))");
 
                             t.HasCheckConstraint("ck_km_outbox_version_size", "version > 0 AND size_bytes > 0");
                         });
@@ -7749,6 +7871,18 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("Folder");
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentProcessingCallbackReceipt", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.DocumentProcessingJob", "DocumentProcessingJob")
+                        .WithMany("CallbackReceipts")
+                        .HasForeignKey("DocumentProcessingJobId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired()
+                        .HasConstraintName("fk_document_callbacks_job");
+
+                    b.Navigation("DocumentProcessingJob");
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentProcessingJob", b =>
                 {
                     b.HasOne("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFile", "DocumentFile")
@@ -8282,6 +8416,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFile", b =>
                 {
                     b.Navigation("ProcessingJob");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentProcessingJob", b =>
+                {
+                    b.Navigation("CallbackReceipts");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentGroup", b =>

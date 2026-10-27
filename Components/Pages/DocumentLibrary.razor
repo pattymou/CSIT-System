@@ -188,7 +188,7 @@
                                     {
                                         <tr>
                                             <td><strong>@file.OriginalFileName</strong><small>@file.StandardFileName</small></td>
-                                            <td><span class="processing-status @file.ProcessingStatus.ToLowerInvariant()">@file.ProcessingStatusDisplay</span></td>
+                                            <td><span class="processing-status @file.ProcessingStatusCssClass" title="@StatusDetails(file)">@file.ProcessingStatusDisplay</span></td>
                                             <td>@FormatSize(file.FileSize)</td>
                                             <td>@file.UploadedBy</td>
                                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
@@ -295,4 +295,6 @@
     private static string FormatSize(long bytes) => bytes >= 1_000_000
         ? $"{bytes / 1_000_000d:0.##} MB"
         : bytes >= 1_000 ? $"{bytes / 1_000d:0.##} KB" : $"{bytes} B";
+    private static string StatusDetails(DocumentLibraryFileDto file) =>
+        file.ArchiveError ?? file.ProcessingError ?? file.ProcessingStatusDisplay;
 }

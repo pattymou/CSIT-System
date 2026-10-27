@@ -22,6 +22,8 @@ public sealed class DocumentFolderUpsertRequest
 public sealed class DocumentLibraryFileDto
 {
     public Guid Id { get; set; }
+    public Guid? CsitJobId { get; set; }
+    public string? KmJobId { get; set; }
     public Guid FolderId { get; set; }
     public string OriginalFileName { get; set; } = string.Empty;
     public string StandardFileName { get; set; } = string.Empty;
@@ -32,6 +34,11 @@ public sealed class DocumentLibraryFileDto
     public string Sha256 { get; set; } = string.Empty;
     public string ProcessingStatus { get; set; } = string.Empty;
     public string ProcessingStatusDisplay { get; set; } = string.Empty;
+    public string ProcessingStatusCssClass { get; set; } = string.Empty;
+    public string ArchiveStatus { get; set; } = string.Empty;
+    public string? ProcessingError { get; set; }
+    public string? ArchiveError { get; set; }
+    public bool MetadataAvailable { get; set; }
 }
 
 public sealed class DocumentUploadBatchResultDto

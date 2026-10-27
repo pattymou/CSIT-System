@@ -92,6 +92,36 @@ public sealed class KmIntegrationOutbox
         };
     }
 
+    public static KmIntegrationOutbox ForDocumentLibraryFile(
+        DocumentLibraryFile document,
+        DocumentProcessingJob job,
+        DateTime now)
+    {
+        if (job.Id == Guid.Empty || document.Id == Guid.Empty || job.DocumentFileId != document.Id ||
+            job.Status != DocumentProcessingStatuses.Pending ||
+            document.StorageArea != DocumentStorageAreas.Staging || document.FileSize <= 0 ||
+            string.IsNullOrWhiteSpace(document.OriginalFileName) ||
+            string.IsNullOrWhiteSpace(document.StandardFileName) ||
+            document.Sha256.Length != 64)
+            throw new InvalidOperationException(
+                "Only a staged document library file with a pending job can enter the KM outbox.");
+
+        return new KmIntegrationOutbox
+        {
+            Id = Guid.NewGuid(), EventId = job.Id,
+            EventType = KmIntegrationEventTypes.DocumentLibraryFileUploaded,
+            SourceSystem = "CSIT",
+            SourceEntityType = KmIntegrationSourceEntityTypes.DocumentLibraryFile,
+            SourceEntityId = document.Id, DocumentId = document.Id, Version = 1,
+            ProjectId = null, CaseId = null, TaskId = null,
+            FileName = document.OriginalFileName,
+            ContentType = string.IsNullOrWhiteSpace(document.ContentType)
+                ? "application/octet-stream" : document.ContentType,
+            SizeBytes = document.FileSize, CommittedAt = job.CreatedAt,
+            Status = KmIntegrationStatus.Pending, CreatedAt = now, UpdatedAt = now
+        };
+    }
+
     public void Claim(Guid lease, DateTime now, TimeSpan duration)
     {
         if (lease == Guid.Empty || duration <= TimeSpan.Zero ||
@@ -196,6 +226,7 @@ public sealed class KmIntegrationOutbox
 public static class KmIntegrationEventTypes
 {
     public const string TestReportCommitted = "TestReportCommitted";
+    public const string DocumentLibraryFileUploaded = "DocumentLibraryFileUploaded";
     public const string VerificationApplicationAttachmentArchived =
         "VerificationApplicationAttachmentArchived";
 }
@@ -203,5 +234,6 @@ public static class KmIntegrationEventTypes
 public static class KmIntegrationSourceEntityTypes
 {
     public const string TestReport = "TestReport";
+    public const string DocumentLibraryFile = "DocumentLibraryFile";
     public const string VerificationApplicationFile = "VerificationApplicationFile";
 }

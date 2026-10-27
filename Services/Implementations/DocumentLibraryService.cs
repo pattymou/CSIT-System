@@ -214,11 +214,20 @@ public sealed class DocumentLibraryService(
             ?? throw new KeyNotFoundException("找不到資料夾。");
         if (folder.Level != DocumentLibraryRules.MaximumLevel)
             throw new InvalidOperationException("只有第三層資料夾可顯示文件清單。");
-        return await db.DocumentLibraryFiles.AsNoTracking()
+        var files = await db.DocumentLibraryFiles.AsNoTracking()
+            .Include(x => x.ProcessingJob)
             .Where(x => x.FolderId == folderId)
             .OrderByDescending(x => x.UploadedAt)
-            .Select(x => ToDto(x, x.ProcessingJob == null ? null : x.ProcessingJob.Status))
             .ToListAsync(cancellationToken);
+        var jobIds = files.Where(x => x.ProcessingJob is not null)
+            .Select(x => x.ProcessingJob!.Id).ToList();
+        var kmJobs = await db.KmIntegrationOutbox.AsNoTracking()
+            .Where(x => jobIds.Contains(x.EventId) &&
+                x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded)
+            .ToDictionaryAsync(x => x.EventId, x => x.KmJobId, cancellationToken);
+        return files.Select(x => ToDto(x, x.ProcessingJob,
+            x.ProcessingJob is not null && kmJobs.TryGetValue(x.ProcessingJob.Id, out var kmJobId)
+                ? kmJobId : null)).ToList();
     }
 
     public async Task<DocumentLibraryFileDto> UploadAsync(
@@ -289,8 +298,9 @@ public sealed class DocumentLibraryService(
             };
             db.DocumentLibraryFiles.Add(entity);
             db.DocumentProcessingJobs.Add(job);
+            db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForDocumentLibraryFile(entity, job, now));
             await db.SaveChangesAsync(cancellationToken);
-            return ToDto(entity, job.Status);
+            return ToDto(entity, job, null);
         }
         catch
         {
@@ -349,9 +359,14 @@ public sealed class DocumentLibraryService(
         return description;
     }
 
-    private static DocumentLibraryFileDto ToDto(DocumentLibraryFile entity, string? processingStatus) => new()
+    private static DocumentLibraryFileDto ToDto(
+        DocumentLibraryFile entity,
+        DocumentProcessingJob? job,
+        string? kmJobId) => new()
     {
         Id = entity.Id,
+        CsitJobId = job?.Id,
+        KmJobId = kmJobId,
         FolderId = entity.FolderId,
         OriginalFileName = entity.OriginalFileName,
         StandardFileName = entity.StandardFileName,
@@ -360,13 +375,37 @@ public sealed class DocumentLibraryService(
         UploadedAt = entity.UploadedAt,
         FileSize = entity.FileSize,
         Sha256 = entity.Sha256,
-        ProcessingStatus = processingStatus ?? string.Empty,
-        ProcessingStatusDisplay = processingStatus switch
+        ProcessingStatus = job?.Status ?? string.Empty,
+        ArchiveStatus = job?.ArchiveStatus ?? string.Empty,
+        ProcessingError = job?.KmErrorMessage ?? job?.LastError,
+        ArchiveError = job?.ArchiveLastError,
+        MetadataAvailable = !string.IsNullOrWhiteSpace(job?.MetadataJson),
+        ProcessingStatusCssClass = job?.Status switch
         {
+            DocumentProcessingStatuses.Pending => "pending",
+            DocumentProcessingStatuses.Accepted or DocumentProcessingStatuses.Processing => "processing",
+            DocumentProcessingStatuses.Completed when job.ArchiveStatus == DocumentArchiveStatuses.Failed => "failed",
+            DocumentProcessingStatuses.Completed when job.ArchiveStatus != DocumentArchiveStatuses.Completed => "processing",
+            DocumentProcessingStatuses.Completed => "completed",
+            DocumentProcessingStatuses.Failed => "failed",
+            _ => string.Empty
+        },
+        ProcessingStatusDisplay = job?.Status switch
+        {
+            DocumentProcessingStatuses.Pending when !string.IsNullOrWhiteSpace(job.LastError) => "KM 派送失敗／待重試",
             DocumentProcessingStatuses.Pending => "已接收／待 KM 處理",
-            DocumentProcessingStatuses.Processing => "處理中",
-            DocumentProcessingStatuses.Completed => "已完成",
-            DocumentProcessingStatuses.Failed => "處理失敗",
+            DocumentProcessingStatuses.Accepted => "KM 已接受／等待處理",
+            DocumentProcessingStatuses.Processing => "KM 處理中",
+            DocumentProcessingStatuses.Completed when job.ArchiveStatus == DocumentArchiveStatuses.Pending =>
+                "AI 完成／待 NAS 歸檔",
+            DocumentProcessingStatuses.Completed when job.ArchiveStatus == DocumentArchiveStatuses.Archiving =>
+                "NAS 歸檔中",
+            DocumentProcessingStatuses.Completed when job.ArchiveStatus == DocumentArchiveStatuses.Failed =>
+                "NAS 歸檔失敗",
+            DocumentProcessingStatuses.Completed when job.ArchiveStatus == DocumentArchiveStatuses.Completed =>
+                "已完成／NAS 已歸檔",
+            DocumentProcessingStatuses.Completed => "AI 已完成",
+            DocumentProcessingStatuses.Failed => "KM 處理失敗",
             _ => "既有文件"
         }
     };

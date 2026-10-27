@@ -277,6 +277,8 @@ builder.Services.AddScoped<KmSyncWorker>();
 builder.Services.AddScoped<KmManualRetryService>();
 builder.Services.AddScoped<KmSyncDiagnostics>();
 builder.Services.AddHostedService<KmSyncBackgroundService>();
+builder.Services.AddScoped<DocumentLibraryArchiveWorker>();
+builder.Services.AddHostedService<DocumentLibraryArchiveBackgroundService>();
 
 builder.Services.AddDbContextFactory<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("Postgres")));

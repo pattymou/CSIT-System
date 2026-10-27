@@ -36,11 +36,17 @@ public static partial class DevKmServiceIngress
         var path = context.Request.Path.Value ?? string.Empty;
         return (HttpMethods.IsPost(context.Request.Method) &&
                 (path.Equals("/api/integrations/km/v1/ingestion-status", StringComparison.OrdinalIgnoreCase) ||
+                 path.Equals("/api/integrations/km/v1/document-library/ingestion-status", StringComparison.OrdinalIgnoreCase) ||
                  path.Equals("/api/integrations/km/v1/document-deletion-status", StringComparison.OrdinalIgnoreCase))) ||
-               (HttpMethods.IsGet(context.Request.Method) && DocumentContentPath().IsMatch(path));
+               (HttpMethods.IsGet(context.Request.Method) &&
+                (DocumentContentPath().IsMatch(path) || DocumentLibraryContentPath().IsMatch(path)));
     }
 
     [GeneratedRegex(@"^/api/integrations/km/v1/documents/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/versions/[1-9][0-9]*/content$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex DocumentContentPath();
+
+    [GeneratedRegex(@"^/api/integrations/km/v1/document-library/files/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/content$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex DocumentLibraryContentPath();
 }

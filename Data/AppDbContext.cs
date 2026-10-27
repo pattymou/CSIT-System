@@ -61,6 +61,7 @@ public class AppDbContext : DbContext
     public DbSet<DocumentFolder> DocumentFolders => Set<DocumentFolder>();
     public DbSet<DocumentLibraryFile> DocumentLibraryFiles => Set<DocumentLibraryFile>();
     public DbSet<DocumentProcessingJob> DocumentProcessingJobs => Set<DocumentProcessingJob>();
+    public DbSet<DocumentProcessingCallbackReceipt> DocumentProcessingCallbacks => Set<DocumentProcessingCallbackReceipt>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -167,8 +168,16 @@ public class AppDbContext : DbContext
         modelBuilder.Entity<DocumentProcessingJob>(entity =>
         {
             entity.ToTable("document_processing_jobs", table =>
+            {
                 table.HasCheckConstraint("ck_document_processing_jobs_status",
-                    "status IN ('Pending', 'Processing', 'Completed', 'Failed')"));
+                    "status IN ('Pending', 'Accepted', 'Processing', 'Completed', 'Failed')");
+                table.HasCheckConstraint("ck_document_processing_jobs_archive_status",
+                    "archive_status IN ('NotStarted', 'Pending', 'Archiving', 'Completed', 'Failed')");
+                table.HasCheckConstraint("ck_document_processing_jobs_metadata",
+                    "status <> 'Completed' OR metadata_json IS NOT NULL OR (archive_status = 'NotStarted' AND km_completed_at IS NULL)");
+                table.HasCheckConstraint("ck_document_processing_jobs_archive_result",
+                    "archive_status <> 'Completed' OR (archived_at IS NOT NULL AND archive_sha256 IS NOT NULL)");
+            });
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Id).HasColumnName("id");
             entity.Property(x => x.DocumentFileId).HasColumnName("document_file_id");
@@ -178,11 +187,50 @@ public class AppDbContext : DbContext
             entity.Property(x => x.UpdatedAt).HasColumnName("updated_at");
             entity.Property(x => x.LastAttemptAt).HasColumnName("last_attempt_at");
             entity.Property(x => x.LastError).HasColumnName("last_error").HasMaxLength(2000);
+            entity.Property(x => x.KmStartedAt).HasColumnName("km_started_at");
+            entity.Property(x => x.KmCompletedAt).HasColumnName("km_completed_at");
+            entity.Property(x => x.KmFailedAt).HasColumnName("km_failed_at");
+            entity.Property(x => x.KmErrorCode).HasColumnName("km_error_code").HasMaxLength(100);
+            entity.Property(x => x.KmErrorMessage).HasColumnName("km_error_message").HasMaxLength(2000);
+            entity.Property(x => x.KmErrorRetryable).HasColumnName("km_error_retryable");
+            entity.Property(x => x.MetadataJson).HasColumnName("metadata_json").HasColumnType("jsonb");
+            entity.Property(x => x.ArchiveStatus).HasColumnName("archive_status").HasMaxLength(30)
+                .HasDefaultValue(DocumentArchiveStatuses.NotStarted).IsRequired();
+            entity.Property(x => x.ArchiveAttemptCount).HasColumnName("archive_attempt_count");
+            entity.Property(x => x.ArchiveNextRetryAt).HasColumnName("archive_next_retry_at");
+            entity.Property(x => x.ArchiveLeaseToken).HasColumnName("archive_lease_token");
+            entity.Property(x => x.ArchiveLeaseExpiresAt).HasColumnName("archive_lease_expires_at");
+            entity.Property(x => x.ArchiveLastAttemptAt).HasColumnName("archive_last_attempt_at");
+            entity.Property(x => x.ArchiveLastError).HasColumnName("archive_last_error").HasMaxLength(2000);
+            entity.Property(x => x.ArchiveSha256).HasColumnName("archive_sha256").HasMaxLength(64);
+            entity.Property(x => x.ArchivedAt).HasColumnName("archived_at");
             entity.HasIndex(x => x.DocumentFileId).IsUnique();
             entity.HasIndex(x => new { x.Status, x.CreatedAt });
+            entity.HasIndex(x => new { x.Status, x.ArchiveStatus, x.ArchiveNextRetryAt })
+                .HasDatabaseName("ix_document_jobs_archive_retry");
+            entity.HasIndex(x => new { x.ArchiveStatus, x.ArchiveLeaseExpiresAt })
+                .HasDatabaseName("ix_document_jobs_archive_claim");
             entity.HasOne(x => x.DocumentFile).WithOne(x => x.ProcessingJob)
                 .HasForeignKey<DocumentProcessingJob>(x => x.DocumentFileId)
                 .OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<DocumentProcessingCallbackReceipt>(entity =>
+        {
+            entity.ToTable("document_processing_callbacks", table =>
+                table.HasCheckConstraint("ck_document_processing_callbacks_status",
+                    "status IN ('Processing', 'Completed', 'Failed')"));
+            entity.HasKey(x => x.CallbackId);
+            entity.Property(x => x.CallbackId).HasColumnName("callback_id");
+            entity.Property(x => x.DocumentProcessingJobId).HasColumnName("document_processing_job_id");
+            entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(30).IsRequired();
+            entity.Property(x => x.PayloadSha256).HasColumnName("payload_sha256").HasMaxLength(64).IsRequired();
+            entity.Property(x => x.ReceivedAt).HasColumnName("received_at");
+            entity.HasIndex(x => new { x.DocumentProcessingJobId, x.ReceivedAt })
+                .HasDatabaseName("ix_document_callbacks_job_received");
+            entity.HasOne(x => x.DocumentProcessingJob).WithMany(x => x.CallbackReceipts)
+                .HasForeignKey(x => x.DocumentProcessingJobId).OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("fk_document_callbacks_job");
         });
 
         modelBuilder.Entity<ModuleEntity>(entity =>
