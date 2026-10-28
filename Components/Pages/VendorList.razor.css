@@ -1,0 +1,17 @@
+.vendor-filter-checkbox {
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+    width: auto;
+    margin: 0;
+    padding: 0;
+    cursor: pointer;
+}
+
+.vendor-filter-checkbox input[type="checkbox"] {
+    flex: 0 0 auto;
+    width: auto;
+    margin: 0;
+    padding: 0;
+}

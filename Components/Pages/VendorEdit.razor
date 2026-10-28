@@ -34,7 +34,7 @@ else
                 <div class="vendor-type-options">
                     @foreach (var type in VendorTypes)
                     {
-                        <label><input type="checkbox" checked="@HasType(type.Code)" @onchange="e => ToggleType(type.Code, e)" /> @type.Label</label>
+                        <label class="vendor-type-option"><input type="checkbox" checked="@HasType(type.Code)" @onchange="e => ToggleType(type.Code, e)" /><span>@type.Label</span></label>
                     }
                 </div>
             </div>
@@ -44,7 +44,7 @@ else
             <div class="form-row"><label>E-mail</label><input type="email" maxlength="320" @bind="_form.Email" /></div>
             <div class="form-row full-width"><label>地址</label><input maxlength="1000" @bind="_form.Address" /></div>
             <div class="form-row full-width"><label>備註</label><textarea rows="4" maxlength="4000" @bind="_form.Notes"></textarea></div>
-            <div class="form-row"><label><input type="checkbox" @bind="_form.IsActive" /> 啟用（停用後不可供新設備選取）</label></div>
+            <div class="form-row"><label class="vendor-active-checkbox"><input type="checkbox" @bind="_form.IsActive" /><span>啟用（停用後不可供新設備選取）</span></label></div>
         </div>
     </div>
 
@@ -200,7 +200,6 @@ else
 }
 
 <style>
-    .vendor-type-options { display:flex; flex-wrap:wrap; gap:1rem; }
     .vendor-thumbnail { width:72px; height:54px; object-fit:cover; border-radius:6px; margin-right:.75rem; }
     .upload-file-item small { display:block; overflow-wrap:anywhere; }
 </style>

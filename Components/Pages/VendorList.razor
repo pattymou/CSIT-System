@@ -23,7 +23,7 @@
             <input value="@_keyword" @oninput="OnKeywordChanged" placeholder="廠商名稱或英文名稱／別名" />
         </div>
         <div class="form-row">
-            <label><input type="checkbox" @bind="_includeDisabled" @bind:after="LoadAsync" /> 顯示已停用廠商</label>
+            <label class="vendor-filter-checkbox"><input type="checkbox" @bind="_includeDisabled" @bind:after="LoadAsync" /><span>顯示已停用廠商</span></label>
         </div>
     </div>
 </div>
