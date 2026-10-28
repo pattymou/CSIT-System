@@ -34,9 +34,9 @@ else
                             }
                         </td>
                         <td>@(file.IsImage ? "設備照片" : "Manual／Datasheet／設備文件")</td>
-                        <td><span class="record-status-pill">@ArchiveText(file.ArchiveStatus)</span>@if (!string.IsNullOrWhiteSpace(file.ArchiveError)) { <small class="error-text">@file.ArchiveError</small> }</td>
-                        <td><span class="record-status-pill">@KmText(file)</span>@if (!string.IsNullOrWhiteSpace(file.KmError)) { <small class="error-text">@file.KmError</small> }</td>
-                        <td class="action-cell"><a class="table-link-btn" href="@file.DownloadUrl" target="_blank" rel="noopener">@(file.IsImage ? "查看原圖" : "檢視")</a>@if (OnDelete.HasDelegate) { <button type="button" class="table-chip-btn danger" disabled="@(!file.CanDelete)" title="@(file.CanDelete ? null : "已建立 KM 排程，禁止直接刪除")" @onclick="() => OnDelete.InvokeAsync(file.Id)">刪除</button> }</td>
+                        <td><span class="attachment-status @ArchiveClass(file)">@ArchiveText(file)</span>@if (!string.IsNullOrWhiteSpace(file.ArchiveError)) { <small class="error-text">@file.ArchiveError</small> }</td>
+                        <td><span class="attachment-status @KmClass(file)">@KmText(file)</span>@if (!string.IsNullOrWhiteSpace(file.KmError)) { <small class="error-text">@file.KmError</small> }</td>
+                        <td class="action-cell"><a class="table-link-btn" href="@file.DownloadUrl" target="_blank" rel="noopener" download>下載</a>@if (OnDelete.HasDelegate) { <button type="button" class="table-chip-btn danger" disabled="@(!file.CanDelete)" title="@(file.CanDelete ? null : "已建立 KM 排程，禁止直接刪除")" @onclick="() => OnDelete.InvokeAsync(file.Id)">刪除</button> }</td>
                     </tr>
                 }
             </tbody>
@@ -64,12 +64,21 @@ else
         if (OnChanged.HasDelegate) await OnChanged.InvokeAsync();
     }
 
-    private static string ArchiveText(string? status) => status switch
+    private static string ArchiveText(ApparatusFileDto file) => file.ArchiveStatus switch
     {
         FileArchiveStatuses.Archived => "正式入庫完成",
         FileArchiveStatuses.Failed => "正式入庫失敗",
         FileArchiveStatuses.Pending => "核准後歸檔中",
-        _ => "既有檔案"
+        _ when file.IsFormalArchiveVerified => "正式入庫完成",
+        _ => "歷史附件，入庫狀態待確認"
+    };
+    private static string ArchiveClass(ApparatusFileDto file) => file.ArchiveStatus switch
+    {
+        FileArchiveStatuses.Archived => "completed",
+        FileArchiveStatuses.Failed => "failed",
+        FileArchiveStatuses.Pending => "processing",
+        _ when file.IsFormalArchiveVerified => "completed",
+        _ => "warning"
     };
     private static string KmText(ApparatusFileDto file)
     {
@@ -85,6 +94,19 @@ else
             nameof(KmIntegrationStatus.Completed) => "KM 分析完成",
             nameof(KmIntegrationStatus.Failed) => "KM 失敗",
             _ => "等待 KM 通知"
+        };
+    }
+    private static string KmClass(ApparatusFileDto file)
+    {
+        if (file.IsImage || !file.HasKmSchedule ||
+            (!file.KmEnabled && file.KmStatus == nameof(KmIntegrationStatus.Pending))) return string.Empty;
+        return file.KmStatus switch
+        {
+            nameof(KmIntegrationStatus.Completed) => "completed",
+            nameof(KmIntegrationStatus.Failed) => "failed",
+            nameof(KmIntegrationStatus.Dispatching) or nameof(KmIntegrationStatus.Sent) or
+                nameof(KmIntegrationStatus.Processing) => "processing",
+            _ => string.Empty
         };
     }
     private static string MetadataStatus(string? status) => status switch

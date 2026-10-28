@@ -48,10 +48,6 @@ else
             <div class="record-detail-item"><span>保管人</span><strong>@Display(_item.Custodian)</strong></div>
             <div class="record-detail-item"><span>設備狀態</span><strong>@Display(_item.ReservationStatus)</strong></div>
         </div>
-        <details class="equipment-view-details" open><summary>歸屬／管理設定</summary><div class="record-detail-grid">
-            <div class="record-detail-item"><span>部門</span><strong>@Display(_item.DepartmentName)</strong></div>
-            <div class="record-detail-item"><span>設備所屬 Team</span><strong>@Display(_item.OwnerTeamName)</strong></div>
-        </div></details>
         <details class="equipment-view-details"><summary>其他資料</summary><div class="record-detail-grid">
             <div class="record-detail-item"><span>設備名稱（英文）</span><strong>@Display(_item.NameEn)</strong></div>
             <div class="record-detail-item"><span>料號</span><strong>@Display(_item.PartNo)</strong></div>
@@ -117,6 +113,58 @@ else
         }
     </div>
 
+    @if (IsEquipment)
+    {
+        <div class="form-card equipment-system-section">
+            <div class="case-card-head"><div><div class="case-kicker">SYSTEM MAINTAINED</div><h3>B. 系統自動新增／維護</h3></div></div>
+            <section>
+                <h4>A. 設備主檔</h4>
+                <div class="record-detail-grid">
+                    <div class="record-detail-item"><span>Equipment ID</span><strong>@_item.Id</strong></div>
+                    <div class="record-detail-item"><span>設備分類代碼</span><strong>@Display(_item.Kind)</strong></div>
+                    <div class="record-detail-item"><span>建立時間</span><strong>@DisplayDateTime(_item.CreatedAt)</strong></div>
+                    <div class="record-detail-item"><span>更新時間</span><strong>@DisplayDateTime(_item.UpdatedAt)</strong></div>
+                </div>
+            </section>
+            <section>
+                <h4>B. 文件關聯</h4>
+                <p>設備 ID <strong>@_item.Id</strong> 目前關聯 <strong>@_item.Files.Count</strong> 份文件／照片。</p>
+                @if (_item.Files.Count == 0)
+                {
+                    <span class="empty-text">尚無文件關聯</span>
+                }
+                else
+                {
+                    <div class="equipment-document-links">
+                        @foreach (var file in _item.Files)
+                        {
+                            <div><strong>@file.FileName</strong><span>@(file.IsImage ? "照片" : "設備文件")</span><small>文件 ID：@file.Id@if (file.KmVersion.HasValue) { <text> · 版本：v@file.KmVersion</text> }</small></div>
+                        }
+                    </div>
+                }
+            </section>
+            <section>
+                <h4>C. 生命週期</h4>
+                @if (_item.LifecycleRecords.Count == 0)
+                {
+                    <span class="empty-text">借用／歸還：尚無紀錄</span>
+                }
+                else
+                {
+                    <div class="equipment-lifecycle-list">
+                        @foreach (var record in _item.LifecycleRecords)
+                        {
+                            <div><strong>@record.ReservationNo · @ReservationUi.StatusText(record.Status)</strong><span>@DisplayDateTime(record.StartTime) ～ @DisplayDateTime(record.EndTime)</span>@if (record.BorrowedAt.HasValue) { <small>借出：@DisplayDateTime(record.BorrowedAt.Value)</small> }@if (record.ReturnedAt.HasValue) { <small>歸還：@DisplayDateTime(record.ReturnedAt.Value)</small> }</div>
+                        }
+                    </div>
+                }
+                <span class="empty-text">維修／校正：尚無紀錄</span>
+            </section>
+        </div>
+
+        <SIT.DepartmentSystem.Web.Components.Shared.EquipmentMetadataSummary Files="_item.Files" />
+    }
+
     <div class="form-card">
         <div class="case-card-head">
             <div>
@@ -127,6 +175,19 @@ else
 
         @if (IsEquipment)
         {
+            var photos = _item.Files.Where(x => x.IsImage).ToList();
+            @if (photos.Count > 0)
+            {
+                <div class="equipment-photo-gallery" aria-label="設備照片">
+                    @foreach (var photo in photos)
+                    {
+                        <a href="@photo.ImageUrl" target="_blank" rel="noopener" title="開啟原圖：@photo.FileName">
+                            <img src="@photo.ImageUrl" alt="設備照片 @photo.FileName" loading="lazy" />
+                            <span>@photo.FileName</span>
+                        </a>
+                    }
+                </div>
+            }
             <SIT.DepartmentSystem.Web.Components.Shared.EquipmentFileTable Files="_item.Files" />
         }
         else if (_item.Files.Count == 0)
@@ -270,6 +331,9 @@ else
         return value?.ToString("yyyy/MM/dd") ?? "-";
     }
 
+    private static string DisplayDateTime(DateTime value) =>
+        value == default ? "—" : value.ToLocalTime().ToString("yyyy/MM/dd HH:mm");
+
     private static string FormatSize(long size) => size >= 1024 * 1024
         ? $"{size / 1024d / 1024d:0.##} MB"
         : size >= 1024 ? $"{size / 1024d:0.##} KB" : $"{size} B";
@@ -289,4 +353,15 @@ else
     .record-detail-item small { display:block; margin-top:.25rem; color:var(--text-muted,#64748b); }
     .equipment-view-details { margin-top:1rem; border-top:1px solid var(--border-color,#d6dbe3); padding-top:.75rem; }
     .equipment-view-details summary { cursor:pointer; font-weight:700; margin-bottom:1rem; }
+    .equipment-system-section section + section { margin-top:1.2rem; padding-top:1rem; border-top:1px solid rgba(148,163,184,.18); }
+    .equipment-system-section h4 { margin:0 0 .75rem; }
+    .equipment-system-section p { margin:.25rem 0 .75rem; }
+    .equipment-document-links,.equipment-lifecycle-list { display:grid; gap:.55rem; margin-bottom:.75rem; }
+    .equipment-document-links > div,.equipment-lifecycle-list > div { display:grid; gap:.2rem; padding:.7rem .8rem; border:1px solid rgba(148,163,184,.16); border-radius:8px; background:rgba(15,23,42,.22); }
+    .equipment-document-links span,.equipment-document-links small,.equipment-lifecycle-list span,.equipment-lifecycle-list small,.empty-text { color:var(--text-muted,#94a3b8); font-size:.8rem; }
+    .equipment-photo-gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(170px,1fr)); gap:12px; margin-bottom:1rem; }
+    .equipment-photo-gallery a { display:grid; gap:.4rem; padding:.5rem; border:1px solid rgba(148,163,184,.22); border-radius:10px; color:inherit; text-decoration:none; background:rgba(15,23,42,.2); }
+    .equipment-photo-gallery a:hover,.equipment-photo-gallery a:focus-visible { border-color:rgba(34,211,238,.5); background:rgba(34,211,238,.07); }
+    .equipment-photo-gallery img { width:100%; height:150px; object-fit:cover; border-radius:7px; background:#0f172a; }
+    .equipment-photo-gallery span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.82rem; }
 </style>

@@ -233,6 +233,23 @@ public class ApparatusController : ControllerBase
         }
     }
 
+    [HttpGet("api/assets/files/{fileId:guid}/image")]
+    public async Task<IActionResult> GetFileImage(Guid fileId)
+    {
+        try
+        {
+            var file = await _service.GetFileContentAsync(fileId);
+            if (!file.ContentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+                return NotFound("此檔案不是支援的設備照片");
+            return File(file.Content, file.ContentType, enableRangeProcessing: true);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ApparatusController] GetFileImage failed: {ex}");
+            return NotFound(ex.Message);
+        }
+    }
+
     [HttpDelete("api/apparatus/files/{fileId:guid}")]
     [HttpDelete("api/assets/files/{fileId:guid}")]
     [BusinessWrite]

@@ -212,9 +212,27 @@ public class ApparatusService : IApparatusService
             _db,
             [entity.CustodianAccount]);
         var outboxes = await LoadEquipmentOutboxesAsync(entity.Files);
+        var verifiedFiles = await VerifyFormalFilesAsync(entity.Files);
+        var lifecycleRecords = moduleCode == "equipment"
+            ? await _db.ReservationItems.AsNoTracking()
+                .Where(x => x.ApparatusId == entity.Id)
+                .OrderByDescending(x => x.Reservation.StartTime)
+                .Select(x => new EquipmentLifecycleRecordDto
+                {
+                    ReservationId = x.ReservationId,
+                    ReservationNo = x.Reservation.ReservationNo,
+                    Status = x.Reservation.Status,
+                    StartTime = x.Reservation.StartTime,
+                    EndTime = x.Reservation.EndTime,
+                    BorrowedAt = x.Reservation.BorrowedAt,
+                    ReturnedAt = x.Reservation.ReturnedAt
+                })
+                .ToListAsync()
+            : [];
         return ToDetailDto(
             entity,
-            ApparatusCustodianResolver.GetDisplayName(custodianNames, entity.CustodianAccount), outboxes);
+            ApparatusCustodianResolver.GetDisplayName(custodianNames, entity.CustodianAccount),
+            outboxes, verifiedFiles, lifecycleRecords);
     }
 
     public async Task<string> CreateAsync(string moduleCode, ApparatusUpsertRequest request)
@@ -435,7 +453,8 @@ public class ApparatusService : IApparatusService
             .OrderByDescending(x => x.CreatedAt)
             .ToListAsync();
         var outboxes = await LoadEquipmentOutboxesAsync(files);
-        return files.Select(x => ToFileDto(x, outboxes)).ToList();
+        var verifiedFiles = await VerifyFormalFilesAsync(files);
+        return files.Select(x => ToFileDto(x, outboxes, verifiedFiles.Contains(x.Id))).ToList();
     }
 
     public async Task UploadFilesAsync(string moduleCode, string apparatusId, IReadOnlyList<IFormFile> files,
@@ -569,7 +588,13 @@ public class ApparatusService : IApparatusService
         }
 
         var bytes = await File.ReadAllBytesAsync(fullPath);
-        return (bytes, file.OriginalFileName ?? file.FileName, file.ContentType ?? "application/octet-stream");
+        var originalName = file.OriginalFileName ?? file.FileName;
+        var contentType = file.ContentType;
+        if (ManagedAssetFileStorage.IsImage(contentType, originalName) &&
+            (string.IsNullOrWhiteSpace(contentType) ||
+             contentType.Equals("application/octet-stream", StringComparison.OrdinalIgnoreCase)))
+            contentType = ImageContentType(originalName);
+        return (bytes, originalName, contentType ?? "application/octet-stream");
     }
 
     public async Task<bool> DeleteFileAsync(Guid fileId)
@@ -876,7 +901,9 @@ public class ApparatusService : IApparatusService
     }
 
     private ApparatusDetailDto ToDetailDto(Apparatus x, string? custodianDisplayName,
-        IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes)
+        IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes,
+        IReadOnlySet<Guid> verifiedFiles,
+        List<EquipmentLifecycleRecordDto> lifecycleRecords)
     {
         var environmentAssignment = x.EnvironmentGroupDevices
             .OrderByDescending(d => d.IsInEnvironment)
@@ -927,15 +954,19 @@ public class ApparatusService : IApparatusService
             EnvironmentGroupId = environmentAssignment?.EquipmentGroupId,
             EnvironmentGroupName = environmentAssignment?.EquipmentGroup.Name,
             IsInEnvironment = environmentAssignment?.IsInEnvironment,
+            CreatedAt = x.CreatedAt,
+            UpdatedAt = x.UpdatedAt,
+            LifecycleRecords = lifecycleRecords,
             Files = x.Files
                 .OrderByDescending(f => f.CreatedAt)
-                .Select(file => ToFileDto(file, outboxes))
+                .Select(file => ToFileDto(file, outboxes, verifiedFiles.Contains(file.Id)))
                 .ToList()
         };
     }
 
     private ApparatusFileDto ToFileDto(ApparatusFile x,
-        IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes)
+        IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes,
+        bool isFormalArchiveVerified = false)
     {
         outboxes.TryGetValue(x.Id, out var outbox);
         var isDocument = x.Apparatus?.ModuleCode == "equipment" &&
@@ -949,7 +980,7 @@ public class ApparatusService : IApparatusService
             ContentType = x.ContentType,
             FileSize = x.FileSize,
             CreatedAt = x.CreatedAt,
-            ImageUrl = $"/api/assets/files/{x.Id}/content",
+            ImageUrl = $"/api/assets/files/{x.Id}/image",
             DownloadUrl = $"/api/assets/files/{x.Id}/content",
             IsImage = ManagedAssetFileStorage.IsImage(x.ContentType, x.OriginalFileName ?? x.FileName),
             Sha256 = x.Sha256,
@@ -957,6 +988,7 @@ public class ApparatusService : IApparatusService
             ArchiveError = x.ArchiveError,
             IsKmEligibleDocument = isDocument,
             HasKmSchedule = outbox is not null,
+            KmVersion = outbox?.Version,
             KmEnabled = _kmOptions.Enabled && _kmOptions.EquipmentEnabled,
             KmStatus = outbox?.Status.ToString(),
             KmError = outbox?.LastErrorMessage,
@@ -964,9 +996,46 @@ public class ApparatusService : IApparatusService
             MetadataSource = x.MetadataSource,
             MetadataVersion = x.MetadataVersion,
             MetadataVerificationStatus = x.MetadataVerificationStatus,
-            CanDelete = outbox is null
+            CanDelete = outbox is null,
+            IsFormalArchiveVerified = isFormalArchiveVerified
         };
     }
+
+    private static async Task<HashSet<Guid>> VerifyFormalFilesAsync(IEnumerable<ApparatusFile> files)
+    {
+        var verified = new HashSet<Guid>();
+        foreach (var file in files)
+        {
+            if (file.ArchiveStatus == FileArchiveStatuses.Archived)
+            {
+                verified.Add(file.Id);
+                continue;
+            }
+            if (file.ArchiveStatus is not null) continue;
+            var path = Path.Combine(file.FilePath, file.FileName);
+            if (!File.Exists(path) || new FileInfo(path).Length != file.FileSize) continue;
+            if (!string.IsNullOrWhiteSpace(file.Sha256))
+            {
+                await using var stream = File.OpenRead(path);
+                var actual = Convert.ToHexString(await SHA256.HashDataAsync(stream));
+                if (!actual.Equals(file.Sha256, StringComparison.OrdinalIgnoreCase)) continue;
+            }
+            verified.Add(file.Id);
+        }
+        return verified;
+    }
+
+    private static string ImageContentType(string fileName) =>
+        Path.GetExtension(fileName).ToLowerInvariant() switch
+        {
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            ".gif" => "image/gif",
+            ".webp" => "image/webp",
+            ".bmp" => "image/bmp",
+            ".tif" or ".tiff" => "image/tiff",
+            _ => "application/octet-stream"
+        };
 
     private async Task<IReadOnlyDictionary<Guid, KmIntegrationOutbox>> LoadEquipmentOutboxesAsync(
         IEnumerable<ApparatusFile> files)

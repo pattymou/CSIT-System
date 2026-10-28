@@ -253,9 +253,49 @@ public sealed class EquipmentVendorManagementTests
             };
             foreach (var file in approvedFiles)
                 await apparatus.UploadFilesAsync("equipment", equipmentId, [file], "approver", Guid.NewGuid());
+
+            var legacyId = Guid.NewGuid();
+            var equipmentFolder = (await db.ApparatusFiles.FirstAsync()).FilePath;
+            var legacyName = legacyId.ToString("N") + ".jpg";
+            var legacyBytes = Encoding.UTF8.GetBytes("legacy-image");
+            await System.IO.File.WriteAllBytesAsync(Path.Combine(equipmentFolder, legacyName), legacyBytes);
+            db.ApparatusFiles.Add(new ApparatusFile
+            {
+                Id = legacyId, ApparatusId = equipmentId, FileName = legacyName,
+                OriginalFileName = "legacy-photo.jpeg", FilePath = equipmentFolder,
+                ContentType = null, FileSize = legacyBytes.Length, ArchiveStatus = null,
+                CreatedAt = DateTime.UtcNow
+            });
+
+            var now = DateTime.UtcNow;
+            var reservation = new Reservation
+            {
+                Id = Guid.NewGuid(), ReservationNo = "RSV-EQUIPMENT-001",
+                ApplicantAccount = "tester", ApplicantName = "Tester",
+                ApplicantDepartment = "TW", ApplicantExtension = "1234",
+                ApplicantAgentName = "Agent", ApplicantAgentExtension = "5678",
+                ApplicantAgentEmail = "agent@example.test", Purpose = "Regression",
+                ProductModelName = "DUT", Customer = "Internal", ProjectSubPu = "CSIT",
+                StartTime = now.AddHours(-2), EndTime = now.AddHours(2),
+                CreatedAt = now, UpdatedAt = now,
+                Items = [new ReservationItem
+                {
+                    Id = Guid.NewGuid(), ApparatusId = equipmentId,
+                    ApparatusName = stored.Name, ProductsId = stored.ProductsId,
+                    Kind = stored.Kind
+                }]
+            };
+            reservation.Submit(now);
+            reservation.Approve("leader", now.AddMinutes(1));
+            reservation.Checkout("leader", now.AddMinutes(2));
+            reservation.Return("leader", now.AddMinutes(3));
+            db.Reservations.Add(reservation);
+            await db.SaveChangesAsync();
+
             var detail = Assert.IsType<ApparatusDetailDto>(await apparatus.GetByIdAsync("equipment", equipmentId));
-            Assert.Equal(4, detail.Files.Count);
-            Assert.All(detail.Files, file => Assert.Equal(FileArchiveStatuses.Archived, file.ArchiveStatus));
+            Assert.Equal(5, detail.Files.Count);
+            Assert.All(detail.Files.Where(x => x.Id != legacyId),
+                file => Assert.Equal(FileArchiveStatuses.Archived, file.ArchiveStatus));
             Assert.Equal(3, await db.KmIntegrationOutbox.CountAsync(x =>
                 x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile));
@@ -263,14 +303,32 @@ public sealed class EquipmentVendorManagementTests
             {
                 Assert.True(file.IsKmEligibleDocument);
                 Assert.True(file.HasKmSchedule);
+                Assert.Equal(1, file.KmVersion);
                 Assert.Equal(KmIntegrationStatus.Pending.ToString(), file.KmStatus);
                 Assert.False(file.KmEnabled);
                 Assert.False(file.CanDelete);
             });
-            var photo = Assert.Single(detail.Files, x => x.IsImage);
-            Assert.False(photo.IsKmEligibleDocument);
-            Assert.False(photo.HasKmSchedule);
-            Assert.True(photo.CanDelete);
+            Assert.Equal(2, detail.Files.Count(x => x.IsImage));
+            Assert.All(detail.Files.Where(x => x.IsImage), photo =>
+            {
+                Assert.False(photo.IsKmEligibleDocument);
+                Assert.False(photo.HasKmSchedule);
+                Assert.True(photo.CanDelete);
+                Assert.True(photo.IsFormalArchiveVerified);
+            });
+            var legacyPhoto = Assert.Single(detail.Files, x => x.Id == legacyId);
+            Assert.Null(legacyPhoto.ArchiveStatus);
+            Assert.EndsWith($"/{legacyId}/image", legacyPhoto.ImageUrl);
+            Assert.EndsWith($"/{legacyId}/content", legacyPhoto.DownloadUrl);
+            var legacyContent = await apparatus.GetFileContentAsync(legacyId);
+            Assert.Equal("image/jpeg", legacyContent.ContentType);
+            var lifecycle = Assert.Single(detail.LifecycleRecords);
+            Assert.Equal("RSV-EQUIPMENT-001", lifecycle.ReservationNo);
+            Assert.Equal(ReservationStatus.Returned, lifecycle.Status);
+            Assert.NotNull(lifecycle.BorrowedAt);
+            Assert.NotNull(lifecycle.ReturnedAt);
+            Assert.NotEqual(default, detail.CreatedAt);
+            Assert.NotEqual(default, detail.UpdatedAt);
             Assert.NotNull(rawExport.LastLatestPackage);
             Assert.Empty(rawExport.LastLatestPackage.Files);
             Assert.Contains(Path.Combine("設備儀器管理", "設備資訊", "Wi-Fi 7 Tester_ASSET-1234"),

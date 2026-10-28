@@ -1,0 +1,115 @@
+@using System.Text.Json
+@using SIT.DepartmentSystem.Web.Entities
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.KmIntegration
+
+<div class="form-card equipment-metadata-summary">
+    <div class="case-card-head"><div><div class="case-kicker">KM / AI SUGGESTIONS</div><h3>C. AI／KM 根據設備文件擷取建議</h3></div></div>
+    @if (Suggestions.Count == 0)
+    {
+        <div class="record-empty-box"><strong>尚無 KM 分析結果</strong><span>KM 正式派送目前停用；本區不會自行產生規格或摘要。</span></div>
+    }
+    else
+    {
+        <section>
+            <h4>A. 技術規格</h4>
+            @if (!Suggestions.SelectMany(x => x.Result.TechnicalSpecifications).Any())
+            {
+                <span class="metadata-empty">尚無技術規格建議</span>
+            }
+            else
+            {
+                <div class="metadata-spec-grid">
+                    @foreach (var item in Suggestions.SelectMany(x => x.Result.TechnicalSpecifications.Select(spec => (x.File, Spec: spec))))
+                    {
+                        <div><span>@item.Spec.Field</span><strong>@item.Spec.Value</strong><small>@EvidenceText(item.Spec.Evidence, item.File)</small></div>
+                    }
+                </div>
+            }
+        </section>
+        <section>
+            <h4>B. 設備能力摘要</h4>
+            @foreach (var suggestion in Suggestions)
+            {
+                <div class="metadata-capability">
+                    <strong>@suggestion.File.FileName</strong>
+                    <p>@(string.IsNullOrWhiteSpace(suggestion.Result.CapabilitySummary) ? "尚無能力摘要" : suggestion.Result.CapabilitySummary)</p>
+                    @if (suggestion.Result.Limitations.Count > 0)
+                    {
+                        <span>限制：@string.Join("、", suggestion.Result.Limitations)</span>
+                    }
+                </div>
+            }
+        </section>
+        <section>
+            <h4>C. 規格可信度</h4>
+            @foreach (var suggestion in Suggestions)
+            {
+                <div class="metadata-evidence">
+                    <strong>@suggestion.File.FileName</strong>
+                    <span>文件版本：@(suggestion.File.MetadataVersion ?? suggestion.Result.MetadataSchemaVersion)</span>
+                    <span>確認狀態：@VerificationText(suggestion.File.MetadataVerificationStatus)</span>
+                    <span>Metadata 來源：@(suggestion.File.MetadataSource ?? "未記錄")</span>
+                    @if (suggestion.Result.Evidence.Count == 0)
+                    {
+                        <small>尚無來源頁碼／段落證據</small>
+                    }
+                    else
+                    {
+                        @foreach (var evidence in suggestion.Result.Evidence)
+                        {
+                            <small>@EvidenceText(evidence, suggestion.File)</small>
+                        }
+                    }
+                </div>
+            }
+            <small class="metadata-note">僅呈現 KM 回傳的來源證據及確認狀態；未提供的可信度數值不會自行推算，建議也不會覆寫設備主檔。</small>
+        </section>
+    }
+</div>
+
+@code {
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        PropertyNameCaseInsensitive = true
+    };
+    [Parameter] public IReadOnlyList<ApparatusFileDto> Files { get; set; } = [];
+
+    private IReadOnlyList<(ApparatusFileDto File, EquipmentMetadataSuggestion Result)> Suggestions =>
+        Files.Where(x => !string.IsNullOrWhiteSpace(x.MetadataJson))
+            .Select(x => (File: x, Result: Parse(x.MetadataJson)))
+            .Where(x => x.Result is not null)
+            .Select(x => (x.File, x.Result!))
+            .ToList();
+
+    private static EquipmentMetadataSuggestion? Parse(string? json)
+    {
+        try
+        {
+            var result = JsonSerializer.Deserialize<EquipmentMetadataSuggestion>(json!, JsonOptions);
+            return result is null || result.TechnicalSpecifications is null ||
+                result.Limitations is null || result.Evidence is null ||
+                result.TechnicalSpecifications.Any(x => x is null || x.Evidence is null)
+                ? null : result;
+        }
+        catch (JsonException) { return null; }
+    }
+
+    private static string EvidenceText(EquipmentMetadataEvidence evidence, ApparatusFileDto file)
+    {
+        var location = new List<string>();
+        if (evidence.Page.HasValue) location.Add($"第 {evidence.Page} 頁");
+        if (!string.IsNullOrWhiteSpace(evidence.Section)) location.Add($"段落：{evidence.Section}");
+        var source = string.IsNullOrWhiteSpace(evidence.SourceFileName) ? file.FileName : evidence.SourceFileName;
+        var text = $"來源：{source}" + (location.Count == 0 ? string.Empty : $"（{string.Join("；", location)}）");
+        return string.IsNullOrWhiteSpace(evidence.Excerpt) ? text : $"{text}；證據：{evidence.Excerpt}";
+    }
+
+    private static string VerificationText(string? status) => status switch
+    {
+        MetadataVerificationStatuses.PendingVerification => "待確認",
+        MetadataVerificationStatuses.Verified => "已確認",
+        MetadataVerificationStatuses.Rejected => "已退回",
+        _ => "未確認"
+    };
+}

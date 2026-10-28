@@ -1,3 +1,5 @@
+using SIT.DepartmentSystem.Web.Entities;
+
 namespace SIT.DepartmentSystem.Web.Models.Api;
 
 public class ApparatusListItemDto
@@ -72,8 +74,22 @@ public class ApparatusDetailDto
     public Guid? EnvironmentGroupId { get; set; }
     public string? EnvironmentGroupName { get; set; }
     public bool? IsInEnvironment { get; set; }
+    public DateTime CreatedAt { get; set; }
+    public DateTime UpdatedAt { get; set; }
+    public List<EquipmentLifecycleRecordDto> LifecycleRecords { get; set; } = new();
 
     public List<ApparatusFileDto> Files { get; set; } = new();
+}
+
+public sealed class EquipmentLifecycleRecordDto
+{
+    public Guid ReservationId { get; set; }
+    public string ReservationNo { get; set; } = string.Empty;
+    public ReservationStatus Status { get; set; }
+    public DateTime StartTime { get; set; }
+    public DateTime EndTime { get; set; }
+    public DateTime? BorrowedAt { get; set; }
+    public DateTime? ReturnedAt { get; set; }
 }
 
 public class ApparatusUpsertRequest
@@ -129,6 +145,7 @@ public class ApparatusFileDto
     public string? ArchiveError { get; set; }
     public bool IsKmEligibleDocument { get; set; }
     public bool HasKmSchedule { get; set; }
+    public int? KmVersion { get; set; }
     public bool KmEnabled { get; set; }
     public string? KmStatus { get; set; }
     public string? KmError { get; set; }
@@ -137,6 +154,7 @@ public class ApparatusFileDto
     public string? MetadataVersion { get; set; }
     public string? MetadataVerificationStatus { get; set; }
     public bool CanDelete { get; set; }
+    public bool IsFormalArchiveVerified { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 
