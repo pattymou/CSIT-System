@@ -4,6 +4,7 @@
 @using SIT.DepartmentSystem.Web.Services.Approval
 @using SIT.DepartmentSystem.Web.Entities
 @inject ApprovalSubmissionService Submissions
+@inject IVerificationApplicationService VerificationApplications
 @inject AuthenticationStateProvider AuthProvider
 @inject IAuthorizationService AuthorizationService
 
@@ -40,6 +41,36 @@ else
         <section id="approval-review-panel" role="tabpanel" class="surface-card approval-review-results">
             <div class="case-card-head"><h2>@_sources.First(x => x.Code == _selectedCode).Title</h2>
                 <button type="button" class="table-chip-btn" @onclick="RefreshAsync">重新整理狀態</button></div>
+            @if (_selectedCode == VerificationSourceCode)
+            {
+                <p>待審 @_verificationItems.Count 筆</p>
+                @if (_verificationItems.Count == 0)
+                {
+                    <div class="record-empty-box">目前沒有待審驗證申請。</div>
+                }
+                else
+                {
+                    <div class="project-table-wrap approval-review-table-wrap"><table class="project-table approval-review-table">
+                        <thead><tr><th>申請編號</th><th>Model Name</th><th>Product Type</th><th>Team</th><th>申請人</th><th>送出日期</th><th>狀態</th></tr></thead>
+                        <tbody>
+                        @foreach (var item in _verificationItems)
+                        {
+                            <tr>
+                                <td><a class="table-link-btn" href="@($"/verification-reviews/{item.Id}")">@item.ApplicationNo</a></td>
+                                <td>@Display(item.ProductModel ?? item.ProjectName)</td>
+                                <td>@Display(item.ValidationRequest?.FormSnapshot?.ProductTypeLabel ?? item.ValidationRequest?.ProductTypeCode)</td>
+                                <td>@Display(item.TeamName ?? item.TeamCode)</td>
+                                <td title="@item.ApplicantAccount">@Display(item.ApplicantName)</td>
+                                <td>@item.SubmittedAt?.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                                <td>待審核</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table></div>
+                }
+            }
+            else
+            {
             <p>待審 @(_items.Count(x => x.Status == ApprovalStatus.Pending)) 筆；正式寫入中 @(_items.Count(x => x.Status == ApprovalStatus.ApprovedPendingCommit)) 筆；寫入失敗 @(_items.Count(x => x.Status == ApprovalStatus.CommitFailed)) 筆</p>
             @if (_items.Count == 0)
             {
@@ -109,13 +140,16 @@ else
                     </tbody>
                 </table></div>
             }
+            }
         </section>
     </div>
 }
 
 @code {
+    private const string VerificationSourceCode = "verification-applications";
     private List<ApprovalSourceDto> _sources = [];
     private List<ApprovalSubmissionDto> _items = [];
+    private List<VerificationApplicationDto> _verificationItems = [];
     private IReadOnlyDictionary<string, int> _sourceCounts = new Dictionary<string, int>();
     private string? _selectedCode;
     private string? _message;
@@ -132,6 +166,7 @@ else
         try
         {
             _sources = (await Submissions.ListActiveSourcesAsync()).ToList();
+            _sources.Add(new ApprovalSourceDto(VerificationSourceCode, "驗證申請", int.MaxValue));
             if (_sources.Count > 0) await SelectSourceAsync(_sources[0].Code);
         }
         catch { _message = "無法載入主管審核項目，請稍後再試。"; }
@@ -145,8 +180,21 @@ else
         try
         {
             var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
-            _sourceCounts = await Submissions.CountForReviewBySourceAsync(user);
-            _items = (await Submissions.ListForReviewAsync(user, code)).ToList();
+            var sourceCounts = (await Submissions.CountForReviewBySourceAsync(user))
+                .ToDictionary(x => x.Key, x => x.Value);
+            var verificationResult = await VerificationApplications.ListForLeaderReviewAsync(user, 1, 200);
+            sourceCounts[VerificationSourceCode] = verificationResult.TotalCount;
+            _sourceCounts = sourceCounts;
+            if (code == VerificationSourceCode)
+            {
+                _verificationItems = verificationResult.Items.ToList();
+                _items = [];
+            }
+            else
+            {
+                _verificationItems = [];
+                _items = (await Submissions.ListForReviewAsync(user, code)).ToList();
+            }
             _message = null;
         }
         catch { _message = "無法載入此來源的待審項目。"; }

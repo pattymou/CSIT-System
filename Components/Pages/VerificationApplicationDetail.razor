@@ -9,35 +9,11 @@
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject NavigationManager Nav
 
-<h3 class="page-title">驗證申請明細</h3>
-
 @if (!string.IsNullOrWhiteSpace(_message)) { <div class="surface-card error-text">@_message</div> }
 @if (_loading) { <div class="surface-card">載入中...</div> }
 else if (_item is not null)
 {
     <div class="surface-card">
-        <div class="detail-grid">
-            <div><span class="label">申請編號</span><strong>@_item.ApplicationNo</strong></div>
-            <div><span class="label">狀態</span><strong>@StatusText(_item.Status)</strong></div>
-            <div><span class="label">部門</span><strong>@Display(_item.RoutingDepartmentName ?? _item.RoutingDepartmentCode)</strong></div>
-            <div><span class="label">Team</span><strong>@Display(_item.TeamName)</strong></div>
-            <div><span class="label">申請人部門</span><strong>@Display(_item.Department)</strong></div>
-            <div><span class="label">專案名稱</span><strong>@_item.ProjectName</strong></div>
-            <div><span class="label">客戶</span><strong>@Display(_item.Customer)</strong></div>
-            <div><span class="label">產品型號</span><strong>@Display(_item.ProductModel)</strong></div>
-            <div><span class="label">要求完成日期</span><strong>@_item.RequestedFinishDate?.ToString("yyyy-MM-dd")</strong></div>
-            @if (_item.ExpectedEndDate.HasValue)
-            { <div><span class="label">主管預計結束日期</span><strong>@_item.ExpectedEndDate.Value.ToString("yyyy-MM-dd")</strong></div> }
-            <div><span class="label">Sample Ready</span><strong>@_item.SampleReadyDate?.ToString("yyyy-MM-dd")</strong></div>
-            <div class="full"><span class="label">驗證需求</span><div>@Display(_item.ValidationRequirement)</div></div>
-            <div><span class="label">Hardware</span><strong>@Display(_item.HardwareVersion)</strong></div>
-            <div><span class="label">Firmware</span><strong>@Display(_item.FirmwareVersion)</strong></div>
-            <div><span class="label">Software</span><strong>@Display(_item.SoftwareVersion)</strong></div>
-            <div><span class="label">送出時間</span><strong>@FormatDate(_item.SubmittedAt)</strong></div>
-            @if (_item.Status == VerificationApplicationStatus.Accepted && !string.IsNullOrWhiteSpace(_item.ModuleRecordNo))
-            { <div><span class="label">Project / Record No</span><strong>@_item.ModuleRecordNo</strong></div> }
-        </div>
-
         @if (_item.ValidationRequest is not null)
         {
             <ValidationRequestSubmissionView Submission="_item.ValidationRequest" />
@@ -52,7 +28,7 @@ else if (_item is not null)
         else if (_item.Status == VerificationApplicationStatus.Accepted)
         { <div class="workflow-note">此申請已接受並建立 CSIT Project。</div> }
 
-        <div class="form-actions">
+        <div class="form-actions verification-detail-actions">
             @if (_item.Status is VerificationApplicationStatus.Draft or VerificationApplicationStatus.Returned)
             {
                 <button type="button" class="btn-secondary" @onclick="Edit">修改</button>
@@ -64,11 +40,9 @@ else if (_item is not null)
 }
 
 <style>
-    .detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
-    .detail-grid .label { display:block; color:#94a3b8; font-size:.85rem; margin-bottom:4px; }
-    .detail-grid .full { grid-column:1/-1; }
     .workflow-note { margin-top:20px; padding:14px; border-radius:10px; background:rgba(14,165,164,.12); }
-    @@media(max-width:700px){ .detail-grid { grid-template-columns:1fr; } .detail-grid .full { grid-column:auto; } }
+    .verification-detail-actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; }
+    .verification-detail-actions button { width:auto; min-width:max-content; padding:12px 18px; white-space:nowrap; writing-mode:horizontal-tb; }
 </style>
 
 @code {

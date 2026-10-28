@@ -9,7 +9,7 @@ internal static class VerificationApplicationWorkflow
     public const string ModuleCode = "verification";
 }
 
-internal static class VerificationApplicationSecurity
+public static class VerificationApplicationSecurity
 {
     public static string GetAccount(ClaimsPrincipal user)
     {
@@ -30,5 +30,15 @@ internal static class VerificationApplicationSecurity
     {
         if (!string.Equals(entity.AssignedLeaderAccount, account, StringComparison.Ordinal))
             throw new UnauthorizedAccessException("The application is assigned to another team leader.");
+    }
+
+    public static void EnsureReviewerAccess(VerificationApplication entity, ClaimsPrincipal user)
+    {
+        ArgumentNullException.ThrowIfNull(entity);
+        var account = GetAccount(user);
+        if (string.Equals(entity.ApplicantAccount, account, StringComparison.Ordinal))
+            throw new UnauthorizedAccessException("Self approval is not permitted.");
+        if (!user.IsInRole("Admin"))
+            EnsureLeaderOwnership(entity, account);
     }
 }
