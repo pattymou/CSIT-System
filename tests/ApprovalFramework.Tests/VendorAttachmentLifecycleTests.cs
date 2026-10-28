@@ -1,3 +1,5 @@
+using System.Security.Claims;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -5,12 +7,51 @@ using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Controllers;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
+using SIT.DepartmentSystem.Web.Services;
+using SIT.DepartmentSystem.Web.Services.Approval;
 using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace ApprovalFramework.Tests;
 
 public sealed class VendorAttachmentLifecycleTests
 {
+    [Fact]
+    public async Task VendorApprovalPolicy_PendsEmployee_BypassesLeaderAndAdmin_AndRejectsReadOnlyLeader()
+    {
+        var factory = new TestDbFactory(Guid.NewGuid().ToString("N"));
+        await using (var db = factory.CreateDbContext())
+        {
+            db.MenuItems.Add(new MenuItem
+            {
+                Id = Guid.NewGuid(), SectionId = Guid.NewGuid(), Code = "vendors",
+                Title = "廠商資訊管理", RoutePath = "/vendors", SortOrder = 1,
+                IsEnabled = true, RequiresSupervisorApproval = true, ModuleCode = "vendor",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+        var root = new CountingRoot();
+        var policy = new ApprovalPolicyResolver(new ApprovalMenuResolver(factory),
+            new ApprovalCommitHandlerRegistry([new NoOpVendorHandler()]), root,
+            new MatrixAuthorization());
+        var source = new ApprovalSourceIdentity("vendor", "Vendor", Guid.NewGuid().ToString("N"),
+            null, null, null, null);
+
+        var employee = await policy.ResolveAsync(source, User("employee", write: true),
+            sourceMenuCode: "vendors");
+        var leader = await policy.ResolveAsync(source, User("leader", write: true, leader: true),
+            sourceMenuCode: "vendors");
+        var admin = await policy.ResolveAsync(source, User("admin", write: true, admin: true),
+            sourceMenuCode: "vendors");
+
+        Assert.Equal(ApprovalUploadDecisionKind.Pending, employee.Kind);
+        Assert.Equal(ApprovalUploadDecisionKind.ApprovalBypassed, leader.Kind);
+        Assert.Equal(ApprovalUploadDecisionKind.ApprovalBypassed, admin.Kind);
+        Assert.Equal(1, root.CallCount);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => policy.ResolveAsync(source,
+            User("readonly-leader", leader: true), sourceMenuCode: "vendors"));
+    }
+
     [Fact]
     public async Task VendorOutboxWaitsWhileVendorContractDisabled_ThenMockDispatchAndCallbackComplete()
     {
@@ -126,6 +167,54 @@ public sealed class VendorAttachmentLifecycleTests
             LastVendorRequest = request;
             return Task.FromResult(KmDeliveryResult.Success("vendor-job-1"));
         }
+    }
+
+    private static ClaimsPrincipal User(string account, bool write = false,
+        bool leader = false, bool admin = false)
+    {
+        var claims = new List<Claim> { new("account", account) };
+        if (write) claims.Add(new("test_write", "true"));
+        if (leader) claims.Add(new("test_leader", "true"));
+        if (admin) claims.Add(new Claim(ClaimTypes.Role, "Admin"));
+        return new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
+    }
+
+    private sealed class MatrixAuthorization : IAuthorizationService
+    {
+        public Task<AuthorizationResult> AuthorizeAsync(ClaimsPrincipal user, object? resource,
+            IEnumerable<IAuthorizationRequirement> requirements) =>
+            Task.FromResult(AuthorizationResult.Failed());
+
+        public Task<AuthorizationResult> AuthorizeAsync(ClaimsPrincipal user, object? resource,
+            string policyName)
+        {
+            var allowed = policyName == SystemAuthorization.Policies.BusinessWrite
+                ? user.IsInRole("Admin") || user.HasClaim("test_write", "true")
+                : policyName == SystemAuthorization.Policies.Administration &&
+                  (user.IsInRole("Admin") || user.HasClaim("test_leader", "true"));
+            return Task.FromResult(allowed
+                ? AuthorizationResult.Success() : AuthorizationResult.Failed());
+        }
+    }
+
+    private sealed class CountingRoot : IApprovalStagingRootResolver
+    {
+        public int CallCount { get; private set; }
+        public Task<string> GetRootAsync(CancellationToken cancellationToken = default)
+        {
+            CallCount++;
+            return Task.FromResult(Path.GetTempPath());
+        }
+    }
+
+    private sealed class NoOpVendorHandler : IApprovalCommitHandler
+    {
+        public string ModuleCode => VendorApprovalSourceResolver.ModuleCode;
+        public Task ValidateAsync(PendingSubmission submission, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+        public Task<ApprovalCommitResult> CommitAsync(PendingSubmission submission,
+            CancellationToken cancellationToken) =>
+            Task.FromResult(new ApprovalCommitResult(submission.Id.ToString("N")));
     }
 
     private sealed class TestDbFactory(string database) : IDbContextFactory<AppDbContext>
