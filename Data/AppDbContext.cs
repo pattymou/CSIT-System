@@ -696,6 +696,8 @@ public class AppDbContext : DbContext
                     "archive_status <> 'Archived' OR (sha256 IS NOT NULL AND length(sha256) = 64)");
                 table.HasCheckConstraint("ck_vendor_files_metadata_verification",
                     "metadata_verification_status IN ('NotApplicable','PendingVerification','Verified','Rejected')");
+                table.HasCheckConstraint("ck_vendor_files_approval",
+                    "(approval_operation_id IS NULL AND approved_by IS NULL AND approved_at IS NULL) OR (approval_operation_id IS NOT NULL AND approved_by IS NOT NULL AND length(btrim(approved_by)) > 0 AND approved_at IS NOT NULL)");
             });
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Id).HasColumnName("id");
@@ -713,12 +715,17 @@ public class AppDbContext : DbContext
             entity.Property(x => x.ArchiveUpdatedAt).HasColumnName("archive_updated_at");
             entity.Property(x => x.UploadedBy).HasColumnName("uploaded_by").HasMaxLength(200).IsRequired();
             entity.Property(x => x.UploadedAt).HasColumnName("uploaded_at");
+            entity.Property(x => x.ApprovalOperationId).HasColumnName("approval_operation_id");
+            entity.Property(x => x.ApprovedBy).HasColumnName("approved_by").HasMaxLength(100);
+            entity.Property(x => x.ApprovedAt).HasColumnName("approved_at");
             entity.Property(x => x.MetadataJson).HasColumnName("metadata_json").HasColumnType("jsonb");
             entity.Property(x => x.MetadataSource).HasColumnName("metadata_source").HasMaxLength(100);
             entity.Property(x => x.MetadataVersion).HasColumnName("metadata_version").HasMaxLength(100);
             entity.Property(x => x.MetadataVerificationStatus).HasColumnName("metadata_verification_status").HasMaxLength(30).IsRequired();
             entity.HasIndex(x => new { x.VendorId, x.UploadedAt });
             entity.HasIndex(x => new { x.ArchiveStatus, x.ArchiveNextRetryAt });
+            entity.HasIndex(x => x.ApprovalOperationId).IsUnique()
+                .HasFilter("approval_operation_id IS NOT NULL");
             entity.HasOne(x => x.Vendor).WithMany(x => x.Files).HasForeignKey(x => x.VendorId)
                 .OnDelete(DeleteBehavior.Restrict);
         });

@@ -24,6 +24,18 @@ public static class ApprovalContextNavigation
                 Name(asset.Name, asset.Id), $"/assets/{module}/{Uri.EscapeDataString(asset.Id)}");
         }
 
+        if (submission.ContextType == VendorApprovalSourceResolver.ContextType &&
+            module == VendorApprovalSourceResolver.ModuleCode &&
+            Guid.TryParseExact(submission.ContextId, "N", out var vendorId))
+        {
+            var vendor = await db.Vendors.AsNoTracking()
+                .Where(x => x.Id == vendorId)
+                .Select(x => new { x.Id, x.Name })
+                .SingleOrDefaultAsync(cancellationToken);
+            return vendor is null ? null : new ApprovalContextNavigationResult(
+                Name(vendor.Name, vendor.Id.ToString("N")), $"/vendors/{vendor.Id}/edit");
+        }
+
         if (module is not ("verification" or "certification")) return null;
         ThreeLevelUploadTarget target;
         try { target = ThreeLevelUploadTarget.FromContext(submission.ContextType, submission.ContextId); }

@@ -1122,7 +1122,7 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         {
                             t.HasCheckConstraint("ck_km_outbox_sent_job", "status NOT IN ('Sent', 'Processing', 'Completed') OR km_job_id IS NOT NULL");
 
-                            t.HasCheckConstraint("ck_km_outbox_supported_event", "source_system = 'CSIT' AND ((event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND project_id IS NOT NULL) OR (event_type = 'VerificationApplicationAttachmentArchived' AND source_entity_type = 'VerificationApplicationFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL))");
+                            t.HasCheckConstraint("ck_km_outbox_supported_event", "source_system = 'CSIT' AND ((event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND project_id IS NOT NULL) OR (event_type = 'VerificationApplicationAttachmentArchived' AND source_entity_type = 'VerificationApplicationFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL))");
 
                             t.HasCheckConstraint("ck_km_outbox_version_size", "version > 0 AND size_bytes > 0");
                         });
@@ -7352,6 +7352,19 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("id");
 
+                    b.Property<Guid?>("ApprovalOperationId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("approval_operation_id");
+
+                    b.Property<DateTime?>("ApprovedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("approved_at");
+
+                    b.Property<string>("ApprovedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("approved_by");
+
                     b.Property<int>("ArchiveAttemptCount")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("integer")
@@ -7445,12 +7458,18 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("ApprovalOperationId")
+                        .IsUnique()
+                        .HasFilter("approval_operation_id IS NOT NULL");
+
                     b.HasIndex("ArchiveStatus", "ArchiveNextRetryAt");
 
                     b.HasIndex("VendorId", "UploadedAt");
 
                     b.ToTable("vendor_files", null, t =>
                         {
+                            t.HasCheckConstraint("ck_vendor_files_approval", "(approval_operation_id IS NULL AND approved_by IS NULL AND approved_at IS NULL) OR (approval_operation_id IS NOT NULL AND approved_by IS NOT NULL AND length(btrim(approved_by)) > 0 AND approved_at IS NOT NULL)");
+
                             t.HasCheckConstraint("ck_vendor_files_archive_result", "archive_status <> 'Archived' OR (sha256 IS NOT NULL AND length(sha256) = 64)");
 
                             t.HasCheckConstraint("ck_vendor_files_archive_status", "archive_status IN ('Pending','Archived','Failed')");

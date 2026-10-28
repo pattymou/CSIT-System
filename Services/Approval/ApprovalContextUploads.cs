@@ -11,6 +11,23 @@ public sealed record OwnApprovalUploadDto(Guid Id, string FileName, DateTime Sub
 /// <summary>Only the uploader's non-formal uploads for an existing Case or Task.</summary>
 public sealed class ApprovalContextUploads(IDbContextFactory<AppDbContext> dbFactory)
 {
+    public async Task<IReadOnlyList<OwnApprovalUploadDto>> ForVendorAsync(
+        ClaimsPrincipal user, Guid vendorId, CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var account = ApprovalIdentity.Account(user);
+        var contextId = vendorId.ToString("N");
+        return await db.PendingSubmissions.AsNoTracking()
+            .Where(x => x.SubmittedByAccount == account &&
+                x.SourceModuleCode == VendorApprovalSourceResolver.ModuleCode &&
+                x.ContextType == VendorApprovalSourceResolver.ContextType &&
+                x.ContextId == contextId && x.Status != ApprovalStatus.Committed)
+            .OrderByDescending(x => x.SubmittedAt).Take(200)
+            .Select(x => new OwnApprovalUploadDto(x.Id, x.OriginalFileName ?? "-", x.SubmittedAt,
+                x.Status, x.RejectReason, false))
+            .ToListAsync(cancellationToken);
+    }
+
     public async Task<IReadOnlyList<OwnApprovalUploadDto>> ForAssetAsync(
         ClaimsPrincipal user, string moduleCode, string apparatusId,
         CancellationToken cancellationToken = default)

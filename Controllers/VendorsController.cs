@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services;
+using SIT.DepartmentSystem.Web.Services.Approval;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 
 namespace SIT.DepartmentSystem.Web.Controllers;
@@ -10,7 +11,9 @@ namespace SIT.DepartmentSystem.Web.Controllers;
 [ApiController]
 [Route("api/vendors")]
 [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
-public sealed class VendorsController(IVendorService service) : ControllerBase
+public sealed class VendorsController(
+    IVendorService service,
+    VendorApprovalUploadService approvalUploads) : ControllerBase
 {
     [HttpGet]
     public async Task<ActionResult<List<VendorListItemDto>>> Search([FromQuery] string? keyword,
@@ -62,10 +65,19 @@ public sealed class VendorsController(IVendorService service) : ControllerBase
     {
         try
         {
-            await service.UploadFilesAsync(id, Request.Form.Files.ToList(), Actor(), cancellationToken);
-            return Ok("附件已完成正式歸檔。");
+            var result = await approvalUploads.UploadAsync(id, Request.Form.Files.ToList(), User, cancellationToken);
+            return result.Decision == ApprovalUploadDecisionKind.Pending
+                ? Accepted(new VendorUploadResponseDto
+                {
+                    Status = "PendingApproval", OperationIds = result.OperationIds.ToList()
+                })
+                : Ok(new VendorUploadResponseDto
+                {
+                    Status = "Archived", OperationIds = result.OperationIds.ToList()
+                });
         }
         catch (KeyNotFoundException) { return NotFound(); }
+        catch (SharedIdentityProvisioningException ex) { return StatusCode(503, ex.Message); }
         catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
     }
 
@@ -82,8 +94,11 @@ public sealed class VendorsController(IVendorService service) : ControllerBase
 
     [HttpDelete("files/{fileId:guid}")]
     [BusinessWrite]
-    public async Task<IActionResult> DeleteFile(Guid fileId, CancellationToken cancellationToken) =>
-        await service.DeleteFileAsync(fileId, cancellationToken) ? NoContent() : NotFound();
+    public async Task<IActionResult> DeleteFile(Guid fileId, CancellationToken cancellationToken)
+    {
+        try { return await service.DeleteFileAsync(fileId, cancellationToken) ? NoContent() : NotFound(); }
+        catch (InvalidOperationException ex) { return Conflict(ex.Message); }
+    }
 
     private string Actor() => User.FindFirstValue("account") ?? User.Identity?.Name ?? "SYSTEM";
 }

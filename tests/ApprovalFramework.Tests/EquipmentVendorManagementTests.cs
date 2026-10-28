@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Security.Claims;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Http;
@@ -13,6 +14,7 @@ using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services;
+using SIT.DepartmentSystem.Web.Services.Approval;
 using SIT.DepartmentSystem.Web.Services.Implementations;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 
@@ -41,7 +43,9 @@ public sealed class EquipmentVendorManagementTests
             var service = new VendorService(db, new ManagedAssetFileStorage(db));
             var id = await service.CreateAsync(new VendorUpsertRequest
                 { Name = "PostgreSQL Vendor", Types = [], IsActive = true }, "pg-test");
-            await service.UploadFilesAsync(id, [File("manual.pdf", "application/pdf", "pg-content")], "pg-test");
+            await service.ArchiveApprovedFileAsync(id,
+                File("manual.pdf", "application/pdf", "pg-content"), "pg-test",
+                Guid.NewGuid(), "pg-approver", DateTime.UtcNow);
             var detail = Assert.IsType<VendorDetailDto>(await service.GetAsync(id));
             Assert.Equal(FileArchiveStatuses.Archived, Assert.Single(detail.Files).ArchiveStatus);
 
@@ -123,10 +127,24 @@ public sealed class EquipmentVendorManagementTests
                 File("sheet.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx-content"),
                 File("photo.png", "image/png", "png-content")
             };
-            await service.UploadFilesAsync(id, files, "tester");
+            var operations = new List<Guid>();
+            foreach (var file in files)
+            {
+                var operation = Guid.NewGuid();
+                operations.Add(operation);
+                await service.ArchiveApprovedFileAsync(id, file, "tester",
+                    operation, "approver", DateTime.UtcNow);
+            }
+
+            var retryId = await service.ArchiveApprovedFileAsync(id,
+                File("manual.pdf", "application/pdf", "pdf-content"), "tester",
+                operations[0], "approver", DateTime.UtcNow);
 
             var before = Assert.IsType<VendorDetailDto>(await service.GetAsync(id));
             Assert.Equal(3, before.Files.Count);
+            Assert.Equal(operations[0], retryId);
+            Assert.Equal(3, await db.KmIntegrationOutbox.CountAsync(x =>
+                x.EventType == KmIntegrationEventTypes.VendorFileArchived));
             Assert.All(before.Files, file =>
             {
                 Assert.Equal(FileArchiveStatuses.Archived, file.ArchiveStatus);
@@ -146,8 +164,63 @@ public sealed class EquipmentVendorManagementTests
             Assert.False(Directory.Exists(Path.Combine(root, "設備儀器管理", "廠商資訊", "Keysight Technologies")));
             var downloaded = await service.DownloadAsync(before.Files.Single(x => x.FileName == "manual.pdf").Id);
             Assert.Equal("pdf-content", Encoding.UTF8.GetString(downloaded.Content));
+            var blockedDelete = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                service.DeleteFileAsync(before.Files[0].Id));
+            Assert.Contains("KM", blockedDelete.Message);
         }
         finally { DeleteRoot(root); }
+    }
+
+    [Fact]
+    public async Task VendorApprovalSource_UsesAuthenticatedAccountTeamAndRequiresUniqueRouting()
+    {
+        var database = Guid.NewGuid().ToString("N");
+        var factory = new TestDbFactory(database);
+        var vendorId = Guid.NewGuid();
+        var teamId = Guid.NewGuid();
+        await using (var db = factory.CreateDbContext())
+        {
+            var now = DateTime.UtcNow;
+            db.Vendors.Add(new Vendor
+            {
+                Id = vendorId, Name = "Routed Vendor", NormalizedName = "ROUTED VENDOR",
+                StorageFolderName = "Routed Vendor", Types = [], CreatedBy = "tester",
+                UpdatedBy = "tester", CreatedAt = now, UpdatedAt = now
+            });
+            db.SystemOptions.Add(new SystemOption
+            {
+                Id = teamId, Category = SystemOptionCategories.Team, Name = "Lab", Value = "LAB",
+                IsEnabled = true, CreatedAt = now, UpdatedAt = now
+            });
+            db.TeamRoutings.Add(new TeamRouting
+            {
+                Id = Guid.NewGuid(), TeamOptionId = teamId, LeaderAccount = "leader",
+                LeaderDisplayName = "Leader", IsEnabled = true, CreatedAt = now, UpdatedAt = now
+            });
+            await db.SaveChangesAsync();
+        }
+        var user = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim("account", "tester")], "test"));
+        var resolver = new VendorApprovalSourceResolver(factory, ProvisioningClient());
+        var source = await resolver.ResolveAsync(vendorId, user);
+        Assert.Equal("vendor", source.ModuleCode);
+        Assert.Equal("Vendor", source.ContextType);
+        Assert.Equal(teamId, source.TeamOptionId);
+        Assert.Equal("LAB", source.TeamCode);
+
+        await using (var db = factory.CreateDbContext())
+        {
+            db.TeamRoutings.Add(new TeamRouting
+            {
+                Id = Guid.NewGuid(), TeamOptionId = teamId, LeaderAccount = "other-leader",
+                LeaderDisplayName = "Other", IsEnabled = true,
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+        }
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            resolver.ResolveAsync(vendorId, user));
+        Assert.Contains("唯一", error.Message);
     }
 
     [Fact]
@@ -294,6 +367,15 @@ public sealed class EquipmentVendorManagementTests
     {
         public HttpClient CreateClient(string name) => new(new IdentityHandler())
             { BaseAddress = new Uri("http://identity.test/") };
+    }
+
+    private sealed class TestDbFactory(string database) : IDbContextFactory<AppDbContext>
+    {
+        private readonly DbContextOptions<AppDbContext> _options =
+            new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(database).Options;
+        public AppDbContext CreateDbContext() => new(_options);
+        public Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDbContext());
     }
 
     private sealed class IdentityHandler : HttpMessageHandler

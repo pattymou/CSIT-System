@@ -122,6 +122,33 @@ public sealed class KmIntegrationOutbox
         };
     }
 
+    public static KmIntegrationOutbox ForArchivedVendorFile(VendorFile file, DateTime now)
+    {
+        if (file.Id == Guid.Empty || file.VendorId == Guid.Empty ||
+            file.ArchiveStatus != FileArchiveStatuses.Archived ||
+            file.ApprovalOperationId is null || file.ApprovedAt is null ||
+            string.IsNullOrWhiteSpace(file.ApprovedBy) ||
+            string.IsNullOrWhiteSpace(file.OriginalFileName) || file.FileSize <= 0 ||
+            file.Sha256 is null || file.Sha256.Length != 64)
+            throw new InvalidOperationException(
+                "Only an approved, formally archived Vendor file can enter the KM outbox.");
+
+        return new KmIntegrationOutbox
+        {
+            Id = Guid.NewGuid(), EventId = file.Id,
+            EventType = KmIntegrationEventTypes.VendorFileArchived,
+            SourceSystem = "CSIT",
+            SourceEntityType = KmIntegrationSourceEntityTypes.VendorFile,
+            SourceEntityId = file.Id, DocumentId = file.Id, Version = 1,
+            ProjectId = null, CaseId = null, TaskId = null,
+            FileName = file.OriginalFileName,
+            ContentType = string.IsNullOrWhiteSpace(file.ContentType)
+                ? "application/octet-stream" : file.ContentType,
+            SizeBytes = file.FileSize, CommittedAt = file.ApprovedAt.Value,
+            Status = KmIntegrationStatus.Pending, CreatedAt = now, UpdatedAt = now
+        };
+    }
+
     public void Claim(Guid lease, DateTime now, TimeSpan duration)
     {
         if (lease == Guid.Empty || duration <= TimeSpan.Zero ||
@@ -229,6 +256,7 @@ public static class KmIntegrationEventTypes
     public const string DocumentLibraryFileUploaded = "DocumentLibraryFileUploaded";
     public const string VerificationApplicationAttachmentArchived =
         "VerificationApplicationAttachmentArchived";
+    public const string VendorFileArchived = "VendorFileArchived";
 }
 
 public static class KmIntegrationSourceEntityTypes
@@ -236,4 +264,5 @@ public static class KmIntegrationSourceEntityTypes
     public const string TestReport = "TestReport";
     public const string DocumentLibraryFile = "DocumentLibraryFile";
     public const string VerificationApplicationFile = "VerificationApplicationFile";
+    public const string VendorFile = "VendorFile";
 }

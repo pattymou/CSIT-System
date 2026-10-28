@@ -18,6 +18,9 @@ public sealed class VendorFile
     public DateTime ArchiveUpdatedAt { get; set; }
     public string UploadedBy { get; set; } = string.Empty;
     public DateTime UploadedAt { get; set; }
+    public Guid? ApprovalOperationId { get; set; }
+    public string? ApprovedBy { get; set; }
+    public DateTime? ApprovedAt { get; set; }
     public string? MetadataJson { get; set; }
     public string? MetadataSource { get; set; }
     public string? MetadataVersion { get; set; }

@@ -7,6 +7,8 @@
 @using SIT.DepartmentSystem.Web.Models.Api
 @inject BrowserApiClient Api
 @inject NavigationManager Nav
+@inject SIT.DepartmentSystem.Web.Services.Approval.ApprovalContextUploads ContextUploads
+@inject AuthenticationStateProvider AuthProvider
 
 <div class="case-title-row">
     <div><div class="case-kicker">EQUIPMENT / VENDOR</div><h3>@(IsEdit ? "編輯廠商" : "新增廠商")</h3></div>
@@ -71,11 +73,16 @@ else
                 {
                     <div class="upload-file-item">
                         @if (file.IsImage) { <img class="vendor-thumbnail" src="@file.DownloadUrl" alt="@file.FileName" /> }
-                        <div><a href="@file.DownloadUrl" target="_blank" rel="noopener">@file.FileName</a><small>@FormatSize(file.FileSize) · @ArchiveStatusText(file.ArchiveStatus)</small>@if (!string.IsNullOrWhiteSpace(file.Sha256)) { <small>SHA256：@file.Sha256</small> }</div>
-                        <button class="table-chip-btn danger" @onclick="() => DeleteFileAsync(file.Id)">刪除</button>
+                        <div><a href="@file.DownloadUrl" target="_blank" rel="noopener">@file.FileName</a><small>@FormatSize(file.FileSize) · @ArchiveStatusText(file.ArchiveStatus) · @KmStatusText(file)</small>@if (file.ApprovedAt.HasValue) { <small>核准：@file.ApprovedBy · @file.ApprovedAt.Value.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</small> }@if (!string.IsNullOrWhiteSpace(file.Sha256)) { <small>SHA256：@file.Sha256</small> }@if (!string.IsNullOrWhiteSpace(file.KmError)) { <small>KM：@file.KmError</small> }</div>
+                        <button class="table-chip-btn danger" disabled="@(!file.CanDelete)" title="@(file.CanDelete ? null : "已進入主管審核／KM 追蹤流程，禁止直接刪除")" @onclick="() => DeleteFileAsync(file.Id)">刪除</button>
                     </div>
                 }
             </div>
+        }
+        <SIT.DepartmentSystem.Web.Components.Shared.OwnApprovalUploadList Items="_ownUploads" />
+        @if (_ownUploads.Any(x => x.Status == SIT.DepartmentSystem.Web.Entities.ApprovalStatus.Rejected))
+        {
+            <a class="table-link-btn" href="/my-submissions">查看退回原因並重新送審</a>
         }
     </div>
 
@@ -94,13 +101,14 @@ else
     ];
     private VendorUpsertRequest _form = new();
     private List<VendorFileDto> _files = [];
+    private IReadOnlyList<SIT.DepartmentSystem.Web.Services.Approval.OwnApprovalUploadDto> _ownUploads = [];
     private List<(string Name, long Size)> _selectedFiles = [];
     private ElementReference _fileInputContainer;
     private Guid? _createdId;
     private bool _loading = true;
     private bool _saving;
     private string? _message;
-    private bool IsEdit => Id.HasValue;
+    private bool IsEdit => Id.HasValue || _createdId.HasValue;
     private bool IsPersisted => Id.HasValue || _createdId.HasValue;
     private Guid? CurrentId => Id ?? _createdId;
 
@@ -120,6 +128,7 @@ else
                     IsActive = detail.IsActive, RowVersion = detail.RowVersion
                 };
                 _files = detail.Files;
+                await LoadOwnUploadsAsync(Id.Value);
             }
         }
         catch (Exception ex) { _message = $"載入廠商失敗：{ex.Message}"; }
@@ -143,6 +152,7 @@ else
         _saving = true;
         try
         {
+            var submittedFiles = _selectedFiles.Count > 0;
             BrowserApiResponse response;
             if (IsPersisted)
                 response = await Api.PutJsonAsync($"/api/vendors/{CurrentId!.Value}", _form);
@@ -155,12 +165,17 @@ else
                     new JsonSerializerOptions(JsonSerializerDefaults.Web));
                 _createdId = created?.Id ?? throw new InvalidOperationException("伺服器未回傳廠商 ID。");
             }
-            if (_selectedFiles.Count > 0 && !await UploadAsync(CurrentId!.Value))
+            if (submittedFiles && !await UploadAsync(CurrentId!.Value))
             {
-                _message = $"廠商已儲存（ID：{CurrentId}），但附件歸檔失敗；請保留本頁後安全重試。{_message}";
+                _message = $"廠商已儲存（ID：{CurrentId}），但附件送審失敗；請保留本頁後安全重試。{_message}";
                 return;
             }
-            Nav.NavigateTo("/vendors");
+            if (!submittedFiles && _createdId.HasValue)
+            {
+                Nav.NavigateTo("/vendors");
+                return;
+            }
+            if (_createdId.HasValue) await ReloadAsync(_createdId.Value);
         }
         catch (Exception ex) { _message = $"儲存失敗：{ex.Message}"; }
         finally { _saving = false; }
@@ -177,12 +192,12 @@ else
     private async Task<bool> UploadAsync(Guid id)
     {
         var response = await Api.UploadFilesAsync($"/api/vendors/{id}/files", _fileInputContainer);
-        if (!response.IsSuccessStatusCode) { _message = $"附件歸檔失敗：{response.Body}"; return false; }
+        if (!response.IsSuccessStatusCode) { _message = $"附件送審失敗：{response.Body}"; return false; }
         _selectedFiles.Clear();
-        var detail = await Api.GetAsync<VendorDetailDto>($"/api/vendors/{id}");
-        _files = detail.Files;
-        _form.RowVersion = detail.RowVersion;
-        _message = "附件已完成正式歸檔。";
+        await ReloadAsync(id);
+        _message = response.StatusCode == StatusCodes.Status202Accepted
+            ? "附件已送主管審核；核准並正式入庫後才會建立 KM 排程。"
+            : "附件已依既有管理員免審政策正式入庫，並建立 KM 排程。";
         return true;
     }
 
@@ -194,8 +209,36 @@ else
     }
 
     private void Back() => Nav.NavigateTo("/vendors");
+    private async Task ReloadAsync(Guid id)
+    {
+        var detail = await Api.GetAsync<VendorDetailDto>($"/api/vendors/{id}");
+        _files = detail.Files;
+        _form.RowVersion = detail.RowVersion;
+        await LoadOwnUploadsAsync(id);
+    }
+
+    private async Task LoadOwnUploadsAsync(Guid id)
+    {
+        var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
+        _ownUploads = await ContextUploads.ForVendorAsync(user, id);
+    }
+
     private static string FormatSize(long size) => size >= 1024 * 1024 ? $"{size / 1024d / 1024d:0.##} MB" : size >= 1024 ? $"{size / 1024d:0.##} KB" : $"{size} B";
     private static string ArchiveStatusText(string value) => value switch { "Archived" => "正式入庫", "Failed" => "歸檔失敗，可安全重試", "Pending" => "等待歸檔", _ => value };
+    private static string KmStatusText(VendorFileDto file)
+    {
+        if (!file.HasKmSchedule) return "既有正式附件（未建立 KM 排程）";
+        if (!file.KmEnabled && file.KmStatus == "Pending") return "KM 尚未啟用";
+        return file.KmStatus switch
+        {
+            "Pending" => "等待 KM 通知",
+            "Dispatching" => "等待 KM 通知",
+            "Sent" or "Processing" => "KM 已接收／分析中",
+            "Completed" => "KM 分析完成",
+            "Failed" => "KM 失敗",
+            _ => "等待 KM 通知"
+        };
+    }
     private sealed class CreateVendorResponse { public Guid Id { get; set; } }
 }
 

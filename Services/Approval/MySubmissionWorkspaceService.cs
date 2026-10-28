@@ -6,7 +6,8 @@ namespace SIT.DepartmentSystem.Web.Services.Approval;
 public sealed class MySubmissionWorkspaceService(
     ApprovalSubmissionService submissions,
     ThreeLevelApprovalUploadService threeLevel,
-    AssetApprovalUploadService assets)
+    AssetApprovalUploadService assets,
+    VendorApprovalUploadService vendors)
 {
     public async Task<Guid> ResubmitAsync(Guid rejectedId, IFormFile file, ClaimsPrincipal user,
         CancellationToken cancellationToken = default)
@@ -15,6 +16,11 @@ public sealed class MySubmissionWorkspaceService(
         if (old.ContextType == "Asset")
             return await assets.ResubmitAsync(old.SourceModuleCode, old.ContextId, file,
                 user, rejectedId, cancellationToken);
+
+        if (old.SourceModuleCode == VendorApprovalSourceResolver.ModuleCode &&
+            old.ContextType == VendorApprovalSourceResolver.ContextType &&
+            Guid.TryParseExact(old.ContextId, "N", out var vendorId))
+            return await vendors.ResubmitAsync(vendorId, file, user, rejectedId, cancellationToken);
 
         var target = ThreeLevelUploadTarget.FromContext(old.ContextType, old.ContextId);
         return await threeLevel.ResubmitAsync(target, file, user, rejectedId, cancellationToken);

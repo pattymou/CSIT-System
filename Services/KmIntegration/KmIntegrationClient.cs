@@ -12,6 +12,11 @@ public interface IKmIntegrationClient
         DocumentLibraryIngestionRequest request,
         CancellationToken cancellationToken) =>
         Task.FromResult(KmDeliveryResult.Failure(false, "UNSUPPORTED", "Document library delivery is unavailable."));
+    Task<KmDeliveryResult> SubmitVendorFileAsync(
+        VendorFileIngestionRequest request,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(KmDeliveryResult.Failure(false, "VENDOR_CONTRACT_NOT_APPROVED",
+            "Anderson KM Vendor ingestion contract is not approved."));
 }
 
 public interface IKmIntegrationAccessTokenProvider
@@ -156,6 +161,12 @@ public sealed class KmIntegrationClient(
             return KmDeliveryResult.Failure(true, "CONNECTION", "KM document library connection failed.");
         }
     }
+
+    public Task<KmDeliveryResult> SubmitVendorFileAsync(
+        VendorFileIngestionRequest request,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(KmDeliveryResult.Failure(false, "VENDOR_CONTRACT_NOT_APPROVED",
+            "Anderson KM Vendor ingestion contract is not approved."));
 
     private static bool TryGetBaseUri(KmIntegrationOptions options, out Uri? baseUri)
     {

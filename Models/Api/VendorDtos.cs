@@ -63,6 +63,19 @@ public sealed class VendorFileDto
     public bool IsImage { get; set; }
     public string UploadedBy { get; set; } = string.Empty;
     public DateTime UploadedAt { get; set; }
+    public string? ApprovedBy { get; set; }
+    public DateTime? ApprovedAt { get; set; }
+    public bool HasKmSchedule { get; set; }
+    public bool KmEnabled { get; set; }
+    public string? KmStatus { get; set; }
+    public string? KmError { get; set; }
+    public bool CanDelete { get; set; }
+}
+
+public sealed class VendorUploadResponseDto
+{
+    public string Status { get; set; } = string.Empty;
+    public List<Guid> OperationIds { get; set; } = [];
 }
 
 public sealed class ManufacturerMatchReportItemDto

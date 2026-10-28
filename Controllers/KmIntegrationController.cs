@@ -10,6 +10,7 @@ using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Config;
+using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Controllers;
@@ -173,10 +174,13 @@ public sealed class KmIntegrationController(
                 callback.JobId, callback.DocumentId, callback.Version);
             return Conflict(new { error = "callback_mismatch" });
         }
-        var recordId = row.ProjectId ?? await db.VerificationApplicationFiles.AsNoTracking()
-            .Where(x => x.Id == row.SourceEntityId)
-            .Select(x => x.VerificationApplication.ModuleRecordId)
-            .SingleOrDefaultAsync(cancellationToken);
+        var recordId = row.ProjectId;
+        if (recordId is null &&
+            row.SourceEntityType == KmIntegrationSourceEntityTypes.VerificationApplicationFile)
+            recordId = await db.VerificationApplicationFiles.AsNoTracking()
+                .Where(x => x.Id == row.SourceEntityId)
+                .Select(x => x.VerificationApplication.ModuleRecordId)
+                .SingleOrDefaultAsync(cancellationToken);
         if (recordId is { } activeRecordId &&
             await VerificationCaseDeletionHold.IsActiveAsync(db, activeRecordId, cancellationToken))
             return Conflict(new { error = "deletion_in_progress" });
@@ -201,6 +205,50 @@ public sealed class KmIntegrationController(
         logger.LogInformation("KM callback transition EventId={EventId} DocumentId={DocumentId} Version={Version} KmJobId={KmJobId} Status={Status}",
             row.EventId, row.DocumentId, row.Version, row.KmJobId, row.Status);
         return NoContent();
+    }
+
+    [HttpGet("vendor-files/{vendorFileId:guid}/content")]
+    [Authorize(Policy = KmIntegrationAuthorization.DocumentReadPolicy)]
+    public async Task<IActionResult> DownloadVendorFile(
+        Guid vendorFileId, CancellationToken cancellationToken)
+    {
+        if (vendorFileId == Guid.Empty) return NotFound();
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var file = await db.VendorFiles.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == vendorFileId, cancellationToken);
+        if (file is null || file.ArchiveStatus != FileArchiveStatuses.Archived ||
+            file.ApprovalOperationId is null || string.IsNullOrWhiteSpace(file.Sha256) ||
+            !await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
+                x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
+                x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile &&
+                x.SourceEntityId == vendorFileId && x.DocumentId == vendorFileId && x.Version == 1 &&
+                (x.Status == KmIntegrationStatus.Dispatching || x.Status == KmIntegrationStatus.Sent ||
+                 x.Status == KmIntegrationStatus.Processing || x.Status == KmIntegrationStatus.Completed ||
+                 x.Status == KmIntegrationStatus.Failed),
+                cancellationToken))
+            return NotFound();
+        string path;
+        try { path = ManagedAssetFileStorage.FullPath(file.FolderPath, file.StoredFileName); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        { return NotFound(); }
+        if (!System.IO.File.Exists(path)) return NotFound();
+        try
+        {
+            var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, true);
+            var digest = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken));
+            if (!string.Equals(digest, file.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                await stream.DisposeAsync();
+                logger.LogWarning("Rejected Vendor file download checksum mismatch VendorFileId={VendorFileId}",
+                    vendorFileId);
+                return Conflict(new { error = "checksum_mismatch" });
+            }
+            stream.Position = 0;
+            return File(stream, file.ContentType ?? "application/octet-stream",
+                Path.GetFileName(file.OriginalFileName));
+        }
+        catch (FileNotFoundException) { return NotFound(); }
+        catch (DirectoryNotFoundException) { return NotFound(); }
     }
 
     [HttpPost("document-library/ingestion-status")]

@@ -320,6 +320,8 @@ builder.Services.AddScoped<ApprovalReviewerScopeResolver>();
 builder.Services.AddScoped<ApprovalSubmissionService>();
 builder.Services.AddScoped<MySubmissionWorkspaceService>();
 builder.Services.AddScoped<ApprovalContextUploads>();
+builder.Services.AddScoped<VendorApprovalSourceResolver>();
+builder.Services.AddScoped<VendorApprovalUploadService>();
 builder.Services.AddScoped<IThreeLevelFormalUploadService>(provider =>
     provider.GetRequiredService<ICaseFileService>());
 builder.Services.AddScoped<ThreeLevelApprovalUploadService>();
@@ -348,6 +350,7 @@ foreach (var assetModuleCode in new[] { "equipment", "goods" })
             provider.GetRequiredService<IAssetFormalUploadService>(),
             provider.GetRequiredService<IDbContextFactory<AppDbContext>>()));
 }
+builder.Services.AddScoped<IApprovalCommitHandler, VendorUploadApprovalCommitHandler>();
 builder.Services.AddScoped<ApprovalCommitWorker>();
 builder.Services.AddHostedService<ApprovalCommitBackgroundService>();
 builder.Services.AddScoped<IAuthorizationHandler, AdministrationAccessHandler>();
@@ -375,7 +378,9 @@ builder.Services.Configure<ApparatusSettings>(
 
 builder.Services.AddScoped<ManagedAssetFileStorage>();
 builder.Services.AddScoped<IApparatusService, ApparatusService>();
-builder.Services.AddScoped<IVendorService, VendorService>();
+builder.Services.AddScoped<VendorService>();
+builder.Services.AddScoped<IVendorService>(provider => provider.GetRequiredService<VendorService>());
+builder.Services.AddScoped<IVendorFormalUploadService>(provider => provider.GetRequiredService<VendorService>());
 builder.Services.AddScoped<IAssetFormalUploadService>(provider =>
     provider.GetRequiredService<IApparatusService>());
 builder.Services.AddScoped<ICaseFileService, CaseFileService>();

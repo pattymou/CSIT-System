@@ -25,3 +25,12 @@ public sealed record KmDeliveryResult(
     public static KmDeliveryResult Failure(bool retryable, string code, string message) =>
         new(false, retryable, null, code, message);
 }
+
+public sealed record VendorKmReference(Guid Id, string Name);
+public sealed record VendorKmFile(
+    Guid Id, string OriginalFileName, string StoredFileName, string ContentType,
+    long SizeBytes, string Sha256, string DownloadUrl);
+public sealed record VendorFileIngestionRequest(
+    string SchemaVersion, Guid EventId, string EventType, string SourceSystem,
+    Guid DocumentId, int Version, DateTime CommittedAt,
+    VendorKmReference Vendor, VendorKmFile File);

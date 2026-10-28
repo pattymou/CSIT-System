@@ -71,7 +71,8 @@ public sealed class KmSyncWorker(
                   NOT EXISTS (SELECT 1 FROM verification_case_deletion_jobs AS deletion
                     WHERE deletion.record_id = km_integration_outbox.project_id
                     AND deletion.status IN ('WaitingForKm', 'KmVerified', 'LocalReady', 'LocalCleanup', 'Completed')))
-                  OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile')) AND
+                  OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile')
+                  OR (@vendor_enabled AND event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile')) AND
                   (status = 'Pending' OR retry_count < @max) AND
                   (status = 'Pending' OR
                    (status = 'Failed' AND next_retry_at <= @now) OR
@@ -80,7 +81,9 @@ public sealed class KmSyncWorker(
                 """;
             var max = command.CreateParameter(); max.ParameterName = "max"; max.Value = options.MaxRetryCount;
             var at = command.CreateParameter(); at.ParameterName = "now"; at.Value = now;
-            command.Parameters.Add(max); command.Parameters.Add(at);
+            var vendorEnabled = command.CreateParameter(); vendorEnabled.ParameterName = "vendor_enabled";
+            vendorEnabled.Value = options.VendorEnabled;
+            command.Parameters.Add(max); command.Parameters.Add(at); command.Parameters.Add(vendorEnabled);
             var id = await command.ExecuteScalarAsync(cancellationToken);
             row = id is Guid value
                 ? await db.KmIntegrationOutbox.SingleAsync(x => x.Id == value, cancellationToken) : null;
@@ -88,19 +91,21 @@ public sealed class KmSyncWorker(
         else
         {
             var exhausted = await db.KmIntegrationOutbox
-                .Where(x => x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
-                    x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
-                    x.Status == KmIntegrationStatus.Dispatching && x.LeaseExpiresAt <= now &&
+                .Where(x => x.Status == KmIntegrationStatus.Dispatching && x.LeaseExpiresAt <= now &&
                     x.RetryCount >= options.MaxRetryCount)
                 .ToListAsync(cancellationToken);
             foreach (var expired in exhausted)
             {
                 expired.DeliveryFailed(expired.LeaseToken!.Value, "RETRY_EXHAUSTED",
                     "KM delivery retry limit reached.", null, now);
-                var job = await db.DocumentProcessingJobs.SingleAsync(x => x.Id == expired.EventId &&
-                    x.DocumentFileId == expired.DocumentId, cancellationToken);
-                if (job.Status is DocumentProcessingStatuses.Pending or DocumentProcessingStatuses.Accepted)
-                    job.DeliveryExhausted(now, "RETRY_EXHAUSTED", "KM delivery retry limit reached.");
+                if (expired.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
+                    expired.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile)
+                {
+                    var job = await db.DocumentProcessingJobs.SingleAsync(x => x.Id == expired.EventId &&
+                        x.DocumentFileId == expired.DocumentId, cancellationToken);
+                    if (job.Status is DocumentProcessingStatuses.Pending or DocumentProcessingStatuses.Accepted)
+                        job.DeliveryExhausted(now, "RETRY_EXHAUSTED", "KM delivery retry limit reached.");
+                }
             }
             if (exhausted.Count > 0) await db.SaveChangesAsync(cancellationToken);
             row = await db.KmIntegrationOutbox.OrderBy(x => x.CreatedAt)
@@ -113,7 +118,10 @@ public sealed class KmSyncWorker(
                          deletion.Status == "LocalReady" || deletion.Status == "LocalCleanup" ||
                          deletion.Status == "Completed"))) ||
                      (x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
-                      x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile)) &&
+                      x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile) ||
+                     (options.VendorEnabled &&
+                      x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
+                      x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile)) &&
                     (x.Status == KmIntegrationStatus.Pending ||
                     x.RetryCount < options.MaxRetryCount) &&
                     (x.Status == KmIntegrationStatus.Pending ||
@@ -149,6 +157,15 @@ public sealed class KmSyncWorker(
                         ? KmDeliveryResult.Failure(false, "DOCUMENT_UNAVAILABLE",
                             "Staged document library file or classification is unavailable.")
                         : await client.SubmitDocumentLibraryAsync(request, deadline.Token);
+                }
+                else if (row.EventType == KmIntegrationEventTypes.VendorFileArchived &&
+                    row.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile)
+                {
+                    var request = await BuildVendorRequestAsync(db, row, options, deadline.Token);
+                    result = request is null
+                        ? KmDeliveryResult.Failure(false, "VENDOR_FILE_UNAVAILABLE",
+                            "Approved formal Vendor file is unavailable.")
+                        : await client.SubmitVendorFileAsync(request, deadline.Token);
                 }
                 else
                 {
@@ -279,6 +296,35 @@ public sealed class KmSyncWorker(
                 new DocumentLibraryClassificationLevel(l1.Id, l1.Name),
                 new DocumentLibraryClassificationLevel(l2.Id, l2.Name),
                 new DocumentLibraryClassificationLevel(l3.Id, l3.Name)));
+    }
+
+    private static async Task<VendorFileIngestionRequest?> BuildVendorRequestAsync(
+        AppDbContext db,
+        KmIntegrationOutbox row,
+        KmIntegrationOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (!options.VendorEnabled || row.EventId == Guid.Empty || row.DocumentId == Guid.Empty ||
+            row.EventId != row.SourceEntityId || row.DocumentId != row.SourceEntityId || row.Version != 1 ||
+            !Uri.TryCreate(options.ServiceBaseUrl, UriKind.Absolute, out var serviceBase) ||
+            serviceBase.Scheme != Uri.UriSchemeHttps || serviceBase.AbsolutePath != "/" ||
+            !string.IsNullOrEmpty(serviceBase.Query) || !string.IsNullOrEmpty(serviceBase.Fragment))
+            return null;
+        var file = await db.VendorFiles.AsNoTracking().Include(x => x.Vendor)
+            .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);
+        if (file?.Vendor is null || file.ArchiveStatus != FileArchiveStatuses.Archived ||
+            file.ApprovalOperationId is null || file.ApprovedAt is null ||
+            string.IsNullOrWhiteSpace(file.ApprovedBy) || file.Sha256 is null ||
+            file.Sha256.Length != 64 || file.FileSize != row.SizeBytes)
+            return null;
+        var downloadPath = $"api/integrations/km/v1/vendor-files/{file.Id:D}/content";
+        return new VendorFileIngestionRequest(
+            "1.0", row.EventId, KmIntegrationEventTypes.VendorFileArchived,
+            "CSIT", file.Id, 1, row.CommittedAt,
+            new VendorKmReference(file.Vendor.Id, file.Vendor.Name),
+            new VendorKmFile(file.Id, file.OriginalFileName, file.StoredFileName,
+                file.ContentType ?? "application/octet-stream", file.FileSize, file.Sha256,
+                new Uri(serviceBase, downloadPath).AbsoluteUri));
     }
 
     private async Task EnsurePendingDocumentLibraryOutboxAsync(CancellationToken cancellationToken)

@@ -1,12 +1,18 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Services.Approval;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
-public sealed class VendorService(AppDbContext db, ManagedAssetFileStorage storage) : IVendorService
+public sealed class VendorService(
+    AppDbContext db,
+    ManagedAssetFileStorage storage,
+    IOptions<KmIntegrationOptions>? kmOptions = null) : IVendorService, IVendorFormalUploadService
 {
     private static readonly HashSet<string> AllowedTypes = new(StringComparer.Ordinal)
         { "Manufacturer", "Agent", "Supplier", "MaintenanceProvider" };
@@ -39,10 +45,18 @@ public sealed class VendorService(AppDbContext db, ManagedAssetFileStorage stora
 
     public async Task<VendorDetailDto?> GetAsync(Guid id, CancellationToken cancellationToken = default)
     {
-        var vendor = await db.Vendors.AsNoTracking().Include(x => x.Files).Include(x => x.Apparatuses)
+        var vendor = await db.Vendors.AsNoTracking()
+            .Include(x => x.Files.Where(file => file.ArchiveStatus == FileArchiveStatuses.Archived))
+            .Include(x => x.Apparatuses)
             .SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (vendor is null) return null;
-        return ToDetail(vendor);
+        var fileIds = vendor.Files.Select(x => x.Id).ToArray();
+        var outboxes = await db.KmIntegrationOutbox.AsNoTracking()
+            .Where(x => x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
+                fileIds.Contains(x.SourceEntityId))
+            .ToDictionaryAsync(x => x.SourceEntityId, cancellationToken);
+        return ToDetail(vendor, outboxes,
+            kmOptions?.Value is { Enabled: true, VendorEnabled: true });
     }
 
     public async Task<Guid> CreateAsync(VendorUpsertRequest request, string actor,
@@ -87,6 +101,12 @@ public sealed class VendorService(AppDbContext db, ManagedAssetFileStorage stora
 
     public async Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken = default)
     {
+        var contextId = id.ToString("N");
+        if (await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
+                x.SourceModuleCode == VendorApprovalSourceResolver.ModuleCode &&
+                x.ContextType == VendorApprovalSourceResolver.ContextType &&
+                x.ContextId == contextId, cancellationToken))
+            throw new InvalidOperationException("廠商已有附件送審歷史，不可刪除；請改為停用。");
         var entity = await db.Vendors.Include(x => x.Apparatuses).Include(x => x.Files)
             .SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (entity is null) return false;
@@ -99,60 +119,84 @@ public sealed class VendorService(AppDbContext db, ManagedAssetFileStorage stora
         return true;
     }
 
-    public async Task UploadFilesAsync(Guid id, IReadOnlyList<IFormFile> files, string actor,
+    public async Task<Guid> ArchiveApprovedFileAsync(Guid id, IFormFile file, string actor,
+        Guid approvalOperationId, string approvedBy, DateTime approvedAt,
         CancellationToken cancellationToken = default)
     {
         var vendor = await db.Vendors.SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
             ?? throw new KeyNotFoundException("找不到廠商。");
-        if (files.Count == 0) throw new InvalidOperationException("沒有收到檔案。");
-        var validated = files.Select(file => new
-        {
-            File = file,
-            OriginalName = ManagedAssetFileStorage.ValidateOriginalFileName(file.FileName, file.Length)
-        }).ToList();
+        if (approvalOperationId == Guid.Empty || string.IsNullOrWhiteSpace(approvedBy))
+            throw new InvalidOperationException("附件缺少核准識別或核准者，無法正式歸檔。");
+        var originalName = ManagedAssetFileStorage.ValidateOriginalFileName(file.FileName, file.Length);
         var folder = await storage.VendorFolderAsync(vendor.StorageFolderName, cancellationToken);
-        var archived = 0;
-        var failures = new List<string>();
-        foreach (var item in validated)
+
+        var entity = await db.VendorFiles.SingleOrDefaultAsync(
+            x => x.ApprovalOperationId == approvalOperationId, cancellationToken);
+        if (entity is not null)
         {
-            var file = item.File;
-            var originalName = item.OriginalName;
-            var now = DateTime.UtcNow;
-            var entity = new VendorFile
+            if (entity.VendorId != id || entity.OriginalFileName != originalName ||
+                entity.FileSize != file.Length)
+                throw new InvalidOperationException("相同核准識別對應的廠商附件資料不一致，已停止重試。");
+            if (entity.ArchiveStatus == FileArchiveStatuses.Archived)
             {
-                Id = Guid.NewGuid(), VendorId = vendor.Id, OriginalFileName = originalName,
-                FolderPath = folder, ContentType = string.IsNullOrWhiteSpace(file.ContentType)
-                    ? "application/octet-stream" : file.ContentType.Trim(), FileSize = file.Length,
-                ArchiveStatus = FileArchiveStatuses.Pending, ArchiveAttemptCount = 1,
-                ArchiveUpdatedAt = now, UploadedBy = Actor(actor), UploadedAt = now,
+                await EnsureVendorOutboxAsync(entity, cancellationToken);
+                return entity.Id;
+            }
+        }
+        else
+        {
+            var now = DateTime.UtcNow;
+            entity = new VendorFile
+            {
+                Id = approvalOperationId,
+                VendorId = vendor.Id,
+                OriginalFileName = originalName,
+                FolderPath = folder,
+                ContentType = string.IsNullOrWhiteSpace(file.ContentType)
+                    ? "application/octet-stream" : file.ContentType.Trim(),
+                FileSize = file.Length,
+                ArchiveStatus = FileArchiveStatuses.Pending,
+                ArchiveAttemptCount = 0,
+                ArchiveUpdatedAt = now,
+                UploadedBy = Actor(actor),
+                UploadedAt = now,
+                ApprovalOperationId = approvalOperationId,
+                ApprovedBy = Actor(approvedBy),
+                ApprovedAt = approvedAt,
                 MetadataVerificationStatus = MetadataVerificationStatuses.NotApplicable
             };
             entity.StoredFileName = ManagedAssetFileStorage.StoredFileName(entity.Id, originalName);
             db.VendorFiles.Add(entity);
             await db.SaveChangesAsync(cancellationToken);
-            try
-            {
-                await using var source = file.OpenReadStream();
-                entity.Sha256 = await storage.ArchiveAsync(source, folder, entity.StoredFileName, cancellationToken);
-                entity.ArchiveStatus = FileArchiveStatuses.Archived;
-                entity.ArchiveError = null;
-                entity.ArchiveNextRetryAt = null;
-                entity.ArchiveUpdatedAt = DateTime.UtcNow;
-                await db.SaveChangesAsync(cancellationToken);
-                archived++;
-            }
-            catch (Exception ex)
-            {
-                entity.ArchiveStatus = FileArchiveStatuses.Failed;
-                entity.ArchiveError = ex.Message[..Math.Min(ex.Message.Length, 2000)];
-                entity.ArchiveNextRetryAt = DateTime.UtcNow.AddMinutes(5);
-                entity.ArchiveUpdatedAt = DateTime.UtcNow;
-                await db.SaveChangesAsync(cancellationToken);
-                failures.Add(originalName);
-            }
         }
-        if (failures.Count != 0)
-            throw new InvalidOperationException($"已歸檔 {archived} 份；{failures.Count} 份失敗並已記錄可重試狀態：{string.Join("、", failures)}");
+
+        entity.ArchiveAttemptCount++;
+        entity.ArchiveStatus = FileArchiveStatuses.Pending;
+        entity.ArchiveError = null;
+        entity.ArchiveNextRetryAt = null;
+        entity.ArchiveUpdatedAt = DateTime.UtcNow;
+        await db.SaveChangesAsync(cancellationToken);
+        try
+        {
+            await using var source = file.OpenReadStream();
+            entity.Sha256 = await storage.ArchiveAsync(source, folder, entity.StoredFileName, cancellationToken);
+            entity.ArchiveStatus = FileArchiveStatuses.Archived;
+            entity.ArchiveError = null;
+            entity.ArchiveNextRetryAt = null;
+            entity.ArchiveUpdatedAt = DateTime.UtcNow;
+            db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForArchivedVendorFile(entity, DateTime.UtcNow));
+            await db.SaveChangesAsync(cancellationToken);
+            return entity.Id;
+        }
+        catch (Exception ex)
+        {
+            entity.ArchiveStatus = FileArchiveStatuses.Failed;
+            entity.ArchiveError = ex.Message[..Math.Min(ex.Message.Length, 2000)];
+            entity.ArchiveNextRetryAt = DateTime.UtcNow.AddMinutes(5);
+            entity.ArchiveUpdatedAt = DateTime.UtcNow;
+            await db.SaveChangesAsync(cancellationToken);
+            throw;
+        }
     }
 
     public async Task<(byte[] Content, string FileName, string ContentType)> DownloadAsync(Guid fileId,
@@ -172,6 +216,11 @@ public sealed class VendorService(AppDbContext db, ManagedAssetFileStorage stora
     {
         var file = await db.VendorFiles.SingleOrDefaultAsync(x => x.Id == fileId, cancellationToken);
         if (file is null) return false;
+        if (file.ApprovalOperationId.HasValue || await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
+                x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
+                x.SourceEntityId == file.Id, cancellationToken))
+            throw new InvalidOperationException(
+                "此附件已進入主管審核及 KM 追蹤流程；正式 Vendor 刪除契約尚未核准，目前禁止直接刪除。");
         db.VendorFiles.Remove(file);
         await db.SaveChangesAsync(cancellationToken);
         var path = ManagedAssetFileStorage.FullPath(file.FolderPath, file.StoredFileName);
@@ -197,21 +246,41 @@ public sealed class VendorService(AppDbContext db, ManagedAssetFileStorage stora
         }).ToList();
     }
 
-    private static VendorDetailDto ToDetail(Vendor x) => new()
+    private async Task EnsureVendorOutboxAsync(VendorFile file, CancellationToken cancellationToken)
+    {
+        if (await db.KmIntegrationOutbox.AnyAsync(x =>
+                x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
+                x.SourceEntityId == file.Id, cancellationToken)) return;
+        db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForArchivedVendorFile(file, DateTime.UtcNow));
+        await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private static VendorDetailDto ToDetail(Vendor x,
+        IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes, bool vendorKmEnabled) => new()
     {
         Id = x.Id, Name = x.Name, Aliases = x.Aliases, Types = x.Types, Website = x.Website,
         ContactPerson = x.ContactPerson, Phone = x.Phone, Email = x.Email, Address = x.Address,
         Notes = x.Notes, IsActive = x.IsActive, EquipmentCount = x.Apparatuses.Count,
         RowVersion = x.Xmin.ToString(), CreatedBy = x.CreatedBy, CreatedAt = x.CreatedAt,
         UpdatedBy = x.UpdatedBy, UpdatedAt = x.UpdatedAt,
-        Files = x.Files.OrderByDescending(f => f.UploadedAt).Select(f => new VendorFileDto
+        Files = x.Files.OrderByDescending(f => f.UploadedAt).Select(f =>
         {
-            Id = f.Id, VendorId = f.VendorId, FileName = f.OriginalFileName,
-            StoredFileName = f.StoredFileName, ContentType = f.ContentType, FileSize = f.FileSize,
-            Sha256 = f.Sha256, ArchiveStatus = f.ArchiveStatus, ArchiveError = f.ArchiveError,
-            DownloadUrl = $"/api/vendors/files/{f.Id}/content",
-            IsImage = ManagedAssetFileStorage.IsImage(f.ContentType, f.OriginalFileName),
-            UploadedBy = f.UploadedBy, UploadedAt = f.UploadedAt
+            outboxes.TryGetValue(f.Id, out var outbox);
+            return new VendorFileDto
+            {
+                Id = f.Id, VendorId = f.VendorId, FileName = f.OriginalFileName,
+                StoredFileName = f.StoredFileName, ContentType = f.ContentType, FileSize = f.FileSize,
+                Sha256 = f.Sha256, ArchiveStatus = f.ArchiveStatus, ArchiveError = f.ArchiveError,
+                DownloadUrl = $"/api/vendors/files/{f.Id}/content",
+                IsImage = ManagedAssetFileStorage.IsImage(f.ContentType, f.OriginalFileName),
+                UploadedBy = f.UploadedBy, UploadedAt = f.UploadedAt,
+                ApprovedBy = f.ApprovedBy, ApprovedAt = f.ApprovedAt,
+                HasKmSchedule = outbox is not null,
+                KmEnabled = vendorKmEnabled,
+                KmStatus = outbox?.Status.ToString(),
+                KmError = outbox?.LastErrorMessage,
+                CanDelete = f.ApprovalOperationId is null && outbox is null
+            };
         }).ToList()
     };
 

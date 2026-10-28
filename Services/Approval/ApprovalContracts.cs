@@ -41,6 +41,13 @@ public interface IAssetFormalUploadService
         string? uploadEmp, Guid? approvalFileId = null);
 }
 
+public interface IVendorFormalUploadService
+{
+    Task<Guid> ArchiveApprovedFileAsync(Guid vendorId, IFormFile file, string uploadedBy,
+        Guid approvalOperationId, string approvedBy, DateTime approvedAt,
+        CancellationToken cancellationToken = default);
+}
+
 /// <summary>
 /// CommitAsync must be idempotent by submission.Id. A retry after a process crash must
 /// return the same result without creating a second domain row or formal file.
