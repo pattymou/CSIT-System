@@ -251,6 +251,112 @@ public sealed class KmIntegrationController(
         catch (DirectoryNotFoundException) { return NotFound(); }
     }
 
+    [HttpGet("equipment-documents/{apparatusFileId:guid}/content")]
+    [Authorize(Policy = KmIntegrationAuthorization.DocumentReadPolicy)]
+    public async Task<IActionResult> DownloadEquipmentDocument(
+        Guid apparatusFileId, CancellationToken cancellationToken)
+    {
+        if (apparatusFileId == Guid.Empty) return NotFound();
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var file = await db.ApparatusFiles.AsNoTracking().Include(x => x.Apparatus)
+            .SingleOrDefaultAsync(x => x.Id == apparatusFileId, cancellationToken);
+        var originalName = file?.OriginalFileName ?? file?.FileName;
+        if (file?.Apparatus is null || file.Apparatus.ModuleCode != "equipment" ||
+            file.ArchiveStatus != FileArchiveStatuses.Archived ||
+            ManagedAssetFileStorage.IsImage(file.ContentType, originalName ?? string.Empty) ||
+            string.IsNullOrWhiteSpace(file.Sha256) ||
+            !await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
+                x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
+                x.SourceEntityId == apparatusFileId && x.DocumentId == apparatusFileId && x.Version == 1 &&
+                (x.Status == KmIntegrationStatus.Dispatching || x.Status == KmIntegrationStatus.Sent ||
+                 x.Status == KmIntegrationStatus.Processing || x.Status == KmIntegrationStatus.Completed ||
+                 x.Status == KmIntegrationStatus.Failed), cancellationToken))
+            return NotFound();
+        var path = Path.Combine(file.FilePath, file.FileName);
+        if (!System.IO.File.Exists(path)) return NotFound();
+        try
+        {
+            var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, true);
+            var digest = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken));
+            if (!string.Equals(digest, file.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                await stream.DisposeAsync();
+                logger.LogWarning("Rejected Equipment document download checksum mismatch ApparatusFileId={ApparatusFileId}",
+                    apparatusFileId);
+                return Conflict(new { error = "checksum_mismatch" });
+            }
+            stream.Position = 0;
+            return File(stream, file.ContentType ?? "application/octet-stream", Path.GetFileName(originalName));
+        }
+        catch (FileNotFoundException) { return NotFound(); }
+        catch (DirectoryNotFoundException) { return NotFound(); }
+    }
+
+    [HttpPost("equipment-documents/ingestion-status")]
+    [Authorize(Policy = KmIntegrationAuthorization.StatusWritePolicy)]
+    public async Task<IActionResult> EquipmentDocumentStatus(
+        [FromBody] EquipmentDocumentStatusCallback callback,
+        CancellationToken cancellationToken)
+    {
+        if (!IsValidEquipmentCallback(callback))
+            return BadRequest(new { error = "invalid_callback" });
+
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
+        var row = db.Database.IsRelational()
+            ? await db.KmIntegrationOutbox
+                .FromSqlInterpolated($"SELECT * FROM km_integration_outbox WHERE km_job_id = {callback.JobId} FOR UPDATE")
+                .SingleOrDefaultAsync(cancellationToken)
+            : await db.KmIntegrationOutbox.SingleOrDefaultAsync(x => x.KmJobId == callback.JobId,
+                cancellationToken);
+        if (row is null || row.EventType != KmIntegrationEventTypes.EquipmentDocumentArchived ||
+            row.SourceEntityType != KmIntegrationSourceEntityTypes.ApparatusFile ||
+            row.SourceSystem != callback.SourceSystem || row.DocumentId != callback.DocumentId ||
+            row.SourceEntityId != callback.DocumentId || row.Version != callback.Version)
+            return Conflict(new { error = "callback_mismatch" });
+
+        var file = await db.ApparatusFiles.Include(x => x.Apparatus)
+            .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);
+        if (file?.Apparatus is null || file.Apparatus.ModuleCode != "equipment" ||
+            file.ArchiveStatus != FileArchiveStatuses.Archived)
+            return Conflict(new { error = "document_unavailable" });
+
+        try
+        {
+            var now = DateTime.UtcNow;
+            switch (callback.Status)
+            {
+                case "Processing":
+                    row.CallbackProcessing(now);
+                    break;
+                case "Completed":
+                    var metadata = JsonSerializer.Serialize(callback.Result, CallbackJson);
+                    if (row.Status == KmIntegrationStatus.Completed && file.MetadataJson is not null &&
+                        !string.Equals(file.MetadataJson, metadata, StringComparison.Ordinal))
+                        return Conflict(new { error = "callback_conflict" });
+                    row.CallbackCompleted(now);
+                    file.MetadataJson ??= metadata;
+                    file.MetadataSource ??= "AndersonKM:EquipmentDocument";
+                    file.MetadataVersion ??= callback.Result!.MetadataSchemaVersion;
+                    if (file.MetadataVerificationStatus is null or MetadataVerificationStatuses.NotApplicable)
+                        file.MetadataVerificationStatus = MetadataVerificationStatuses.PendingVerification;
+                    break;
+                case "Failed":
+                    row.CallbackFailed(callback.Error!.Code, callback.Error.Message, now);
+                    break;
+            }
+            await db.SaveChangesAsync(cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+            return NoContent();
+        }
+        catch (InvalidOperationException)
+        {
+            return Conflict(new { error = "invalid_transition" });
+        }
+    }
+
     [HttpPost("document-library/ingestion-status")]
     [Authorize(Policy = KmIntegrationAuthorization.StatusWritePolicy)]
     public async Task<IActionResult> DocumentLibraryStatus(
@@ -406,6 +512,28 @@ public sealed class KmIntegrationController(
                 !string.IsNullOrWhiteSpace(callback.Error.Message) && callback.Error.Retryable.HasValue;
         return callback.Timestamps.CompletedAt.HasValue && !callback.Timestamps.FailedAt.HasValue &&
             callback.Error is null && IsValidCompletedResult(callback.Result);
+    }
+
+    private static bool IsValidEquipmentCallback(EquipmentDocumentStatusCallback? callback)
+    {
+        if (callback is null || callback.SchemaVersion != "1.0" ||
+            string.IsNullOrWhiteSpace(callback.JobId) || callback.SourceSystem != "CSIT" ||
+            callback.DocumentId == Guid.Empty || callback.Version != 1 ||
+            callback.Status is not ("Processing" or "Completed" or "Failed") || callback.Timestamps is null)
+            return false;
+        if (callback.Status == "Processing")
+            return callback.Timestamps.StartedAt.HasValue && callback.Result is null && callback.Error is null;
+        if (callback.Status == "Failed")
+            return callback.Timestamps.FailedAt.HasValue && callback.Result is null && callback.Error is not null &&
+                !string.IsNullOrWhiteSpace(callback.Error.Code) && !string.IsNullOrWhiteSpace(callback.Error.Message);
+        var result = callback.Result;
+        return callback.Timestamps.CompletedAt.HasValue && callback.Error is null && result is not null &&
+            result.MetadataSchemaVersion == "1.0" && result.TechnicalSpecifications is not null &&
+            result.Limitations is not null && result.Evidence is not null &&
+            result.TechnicalSpecifications.All(x => x is not null &&
+                !string.IsNullOrWhiteSpace(x.Field) && !string.IsNullOrWhiteSpace(x.Value) &&
+                x.Evidence is not null && !string.IsNullOrWhiteSpace(x.Evidence.SourceFileName)) &&
+            result.Evidence.All(x => x is not null && !string.IsNullOrWhiteSpace(x.SourceFileName));
     }
 
     private static bool IsValidCompletedResult(DocumentLibraryCompletedResult? result)

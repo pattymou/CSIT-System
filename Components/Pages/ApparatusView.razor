@@ -35,6 +35,45 @@ else
             <span class="record-status-pill">@Display(_item.ReservationStatus)</span>
         </div>
 
+        @if (IsEquipment)
+        {
+        <div class="record-detail-grid">
+            <div class="record-detail-item"><span>財產編號</span><strong>@Display(_item.ProductsId)</strong></div>
+            <div class="record-detail-item"><span>設備分類</span><strong>@Display(_item.Kind)</strong></div>
+            <div class="record-detail-item"><span>設備名稱</span><strong>@Display(_item.Name)</strong></div>
+            <div class="record-detail-item"><span>廠牌</span><strong>@Display(_item.Brand)</strong><small>正式廠商主檔：@Display(_item.VendorName)</small>@if (!_item.VendorId.HasValue && !string.IsNullOrWhiteSpace(_item.Manufacturer)) { <small>舊廠商文字：@_item.Manufacturer</small> }</div>
+            <div class="record-detail-item"><span>型號</span><strong>@Display(_item.Model)</strong></div>
+            <div class="record-detail-item"><span>序號</span><strong>@Display(_item.Number)</strong></div>
+            <div class="record-detail-item"><span>設備位置</span><strong>@Display(_item.Place)</strong></div>
+            <div class="record-detail-item"><span>保管人</span><strong>@Display(_item.Custodian)</strong></div>
+            <div class="record-detail-item"><span>設備狀態</span><strong>@Display(_item.ReservationStatus)</strong></div>
+        </div>
+        <details class="equipment-view-details" open><summary>歸屬／管理設定</summary><div class="record-detail-grid">
+            <div class="record-detail-item"><span>部門</span><strong>@Display(_item.DepartmentName)</strong></div>
+            <div class="record-detail-item"><span>設備所屬 Team</span><strong>@Display(_item.OwnerTeamName)</strong></div>
+        </div></details>
+        <details class="equipment-view-details"><summary>其他資料</summary><div class="record-detail-grid">
+            <div class="record-detail-item"><span>設備名稱（英文）</span><strong>@Display(_item.NameEn)</strong></div>
+            <div class="record-detail-item"><span>料號</span><strong>@Display(_item.PartNo)</strong></div>
+            <div class="record-detail-item"><span>廠商貨品編號</span><strong>@Display(_item.ManufacturerNumber)</strong></div>
+            <div class="record-detail-item"><span>對應採購</span><strong>@Display(_item.ProcurementStaff)</strong></div>
+            <div class="record-detail-item"><span>IMEI</span><strong>@Display(_item.Imei)</strong></div>
+            <div class="record-detail-item"><span>OS</span><strong>@Display(_item.Os)</strong></div>
+            <div class="record-detail-item"><span>OS Ver.</span><strong>@Display(_item.OsVersion)</strong></div>
+            <div class="record-detail-item"><span>檢查日期</span><strong>@DisplayDate(_item.InspectionDate)</strong></div>
+            <div class="record-detail-item"><span>保養日期</span><strong>@DisplayDate(_item.MaintenanceDate)</strong></div>
+            <div class="record-detail-item"><span>取得成本</span><strong>@Display(_item.CostPrice)</strong></div>
+            <div class="record-detail-item"><span>使用年限</span><strong>@Display(_item.YearsUse)</strong></div>
+            <div class="record-detail-item"><span>使用天數</span><strong>@Display(_item.DaysUse)</strong></div>
+            <div class="record-detail-item"><span>使用價格</span><strong>@Display(_item.PriceUse)</strong></div>
+            <div class="record-detail-item"><span>保管代理人</span><strong>@Display(_item.Agent)</strong></div>
+            <div class="record-detail-item record-detail-full"><span>Feature</span><strong>@Display(_item.Feature)</strong></div>
+            <div class="record-detail-item record-detail-full"><span>Specification</span><strong>@Display(_item.Spec)</strong></div>
+            <div class="record-detail-item record-detail-full"><span>備註</span><strong>@Display(_item.Note)</strong></div>
+        </div></details>
+        }
+        else
+        {
         <div class="record-detail-grid">
             <div class="record-detail-item"><span>財產編號</span><strong>@Display(_item.ProductsId)</strong></div>
             <div class="record-detail-item"><span>設備名稱(中文)</span><strong>@Display(_item.Name)</strong></div>
@@ -75,6 +114,7 @@ else
             <div class="record-detail-item record-detail-full"><span>Specification</span><strong>@Display(_item.Spec)</strong></div>
             <div class="record-detail-item record-detail-full"><span>備註</span><strong>@Display(_item.Note)</strong></div>
         </div>
+        }
     </div>
 
     <div class="form-card">
@@ -85,7 +125,11 @@ else
             </div>
         </div>
 
-        @if (_item.Files.Count == 0)
+        @if (IsEquipment)
+        {
+            <SIT.DepartmentSystem.Web.Components.Shared.EquipmentFileTable Files="_item.Files" />
+        }
+        else if (_item.Files.Count == 0)
         {
             <div class="record-empty-box">
                 <strong>目前沒有文件</strong>
@@ -118,6 +162,7 @@ else
     [Parameter] public string Id { get; set; } = "";
 
     private string EffectiveModuleCode => string.IsNullOrWhiteSpace(ModuleCode) ? "equipment" : ModuleCode.Trim();
+    private bool IsEquipment => string.Equals(EffectiveModuleCode, "equipment", StringComparison.OrdinalIgnoreCase);
 
     private ApparatusDetailDto? _item;
     private string? _message;
@@ -241,4 +286,7 @@ else
 <style>
     .apparatus-view-thumbnail { width:96px; height:72px; object-fit:cover; border-radius:8px; margin-right:.75rem; }
     .upload-file-item small { display:block; color:var(--text-muted,#64748b); }
+    .record-detail-item small { display:block; margin-top:.25rem; color:var(--text-muted,#64748b); }
+    .equipment-view-details { margin-top:1rem; border-top:1px solid var(--border-color,#d6dbe3); padding-top:.75rem; }
+    .equipment-view-details summary { cursor:pointer; font-weight:700; margin-bottom:1rem; }
 </style>

@@ -1,0 +1,92 @@
+@page "/vendors/{Id:guid}"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.Approval
+@inject BrowserApiClient Api
+@inject NavigationManager Nav
+@inject ApprovalContextUploads ContextUploads
+@inject AuthenticationStateProvider AuthProvider
+@inject IAuthorizationService AuthorizationService
+
+<div class="case-title-row">
+    <div><div class="case-kicker">EQUIPMENT / VENDOR</div><h3>廠商檢視</h3></div>
+    <div class="form-actions">
+        <button type="button" class="btn-secondary" @onclick="Back">返回清單</button>
+        @if (_canWrite) { <button type="button" class="primary-btn" @onclick="Edit">編輯</button> }
+    </div>
+</div>
+
+@if (!string.IsNullOrWhiteSpace(_message))
+{
+    <div class="form-card error-text">@_message</div>
+}
+else if (_vendor is null)
+{
+    <div class="form-card">載入中...</div>
+}
+else
+{
+    <div class="form-card">
+        <div class="case-card-head">
+            <div><div class="case-kicker">MASTER DATA</div><h3>@_vendor.Name</h3></div>
+            <span class="record-status-pill">@(_vendor.IsActive ? "啟用" : "停用")</span>
+        </div>
+        <div class="record-detail-grid">
+            <div class="record-detail-item"><span>廠商名稱</span><strong>@Display(_vendor.Name)</strong></div>
+            <div class="record-detail-item"><span>英文名稱／別名</span><strong>@Display(_vendor.Aliases)</strong></div>
+            <div class="record-detail-item"><span>廠商類型</span><strong>@DisplayTypes(_vendor.Types)</strong></div>
+            <div class="record-detail-item"><span>官方網站</span><strong>@Display(_vendor.Website)</strong></div>
+            <div class="record-detail-item"><span>聯絡人</span><strong>@Display(_vendor.ContactPerson)</strong></div>
+            <div class="record-detail-item"><span>電話</span><strong>@Display(_vendor.Phone)</strong></div>
+            <div class="record-detail-item"><span>Email</span><strong>@Display(_vendor.Email)</strong></div>
+            <div class="record-detail-item"><span>地址</span><strong>@Display(_vendor.Address)</strong></div>
+            <div class="record-detail-item"><span>啟用狀態</span><strong>@(_vendor.IsActive ? "啟用" : "停用")</strong></div>
+            <div class="record-detail-item"><span>設備數</span><strong>@_vendor.EquipmentCount</strong></div>
+            <div class="record-detail-item"><span>建立人／時間</span><strong>@Display(_vendor.CreatedBy)</strong><small>@Local(_vendor.CreatedAt)</small></div>
+            <div class="record-detail-item"><span>修改人／時間</span><strong>@Display(_vendor.UpdatedBy)</strong><small>@Local(_vendor.UpdatedAt)</small></div>
+            <div class="record-detail-item record-detail-full"><span>備註</span><strong>@Display(_vendor.Notes)</strong></div>
+        </div>
+    </div>
+
+    <div class="form-card">
+        <div class="case-card-head"><div><div class="case-kicker">ATTACHMENTS</div><h3>廠商附件狀態</h3></div></div>
+        <SIT.DepartmentSystem.Web.Components.Shared.VendorAttachmentTable
+            Files="_vendor.Files" PendingUploads="_pending" />
+    </div>
+}
+
+@code {
+    [Parameter] public Guid Id { get; set; }
+    private VendorDetailDto? _vendor;
+    private IReadOnlyList<OwnApprovalUploadDto> _pending = [];
+    private bool _canWrite;
+    private string? _message;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        try
+        {
+            var auth = await AuthProvider.GetAuthenticationStateAsync();
+            _canWrite = (await AuthorizationService.AuthorizeAsync(
+                auth.User, SystemAuthorization.Policies.BusinessWrite)).Succeeded;
+            _vendor = await Api.GetAsync<VendorDetailDto>($"/api/vendors/{Id}");
+            _pending = await ContextUploads.ForVendorAsync(auth.User, Id);
+        }
+        catch (Exception ex) { _message = $"載入廠商失敗：{ex.Message}"; }
+    }
+
+    private void Back() => Nav.NavigateTo("/vendors");
+    private void Edit() => Nav.NavigateTo($"/vendors/{Id}/edit");
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private static string Local(DateTime value) => value.ToLocalTime().ToString("yyyy/MM/dd HH:mm");
+    private static string DisplayTypes(IEnumerable<string> types) => string.Join("、", types.Select(x => x switch
+    {
+        "Manufacturer" => "製造商", "Agent" => "代理商", "Supplier" => "供應商",
+        "MaintenanceProvider" => "維修服務商", _ => x
+    })) is { Length: > 0 } result ? result : "—";
+}
+
+<style>
+    .record-detail-item small { display:block; margin-top:.25rem; color:var(--text-muted,#64748b); }
+</style>

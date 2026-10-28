@@ -127,6 +127,16 @@ public class ApparatusFileDto
     public string? Sha256 { get; set; }
     public string? ArchiveStatus { get; set; }
     public string? ArchiveError { get; set; }
+    public bool IsKmEligibleDocument { get; set; }
+    public bool HasKmSchedule { get; set; }
+    public bool KmEnabled { get; set; }
+    public string? KmStatus { get; set; }
+    public string? KmError { get; set; }
+    public string? MetadataJson { get; set; }
+    public string? MetadataSource { get; set; }
+    public string? MetadataVersion { get; set; }
+    public string? MetadataVerificationStatus { get; set; }
+    public bool CanDelete { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 

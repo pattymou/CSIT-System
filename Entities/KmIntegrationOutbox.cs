@@ -1,3 +1,5 @@
+using SIT.DepartmentSystem.Web.Services;
+
 namespace SIT.DepartmentSystem.Web.Entities;
 
 public enum KmIntegrationStatus
@@ -149,6 +151,35 @@ public sealed class KmIntegrationOutbox
         };
     }
 
+    public static KmIntegrationOutbox ForArchivedEquipmentDocument(
+        Apparatus equipment, ApparatusFile file, DateTime now)
+    {
+        var originalName = file.OriginalFileName ?? file.FileName;
+        if (equipment.ModuleCode != "equipment" || file.Id == Guid.Empty ||
+            file.ApparatusId != equipment.Id || file.ArchiveStatus != FileArchiveStatuses.Archived ||
+            ManagedAssetFileStorage.IsImage(file.ContentType, originalName) ||
+            string.IsNullOrWhiteSpace(originalName) || file.FileSize <= 0 ||
+            file.Sha256 is null || file.Sha256.Length != 64)
+            throw new InvalidOperationException(
+                "Only a formally archived Equipment document can enter the KM outbox.");
+
+        return new KmIntegrationOutbox
+        {
+            Id = Guid.NewGuid(), EventId = file.Id,
+            EventType = KmIntegrationEventTypes.EquipmentDocumentArchived,
+            SourceSystem = "CSIT",
+            SourceEntityType = KmIntegrationSourceEntityTypes.ApparatusFile,
+            SourceEntityId = file.Id, DocumentId = file.Id, Version = 1,
+            ProjectId = null, CaseId = null, TaskId = null,
+            FileName = originalName!,
+            ContentType = string.IsNullOrWhiteSpace(file.ContentType)
+                ? "application/octet-stream" : file.ContentType,
+            SizeBytes = file.FileSize,
+            CommittedAt = file.ArchiveUpdatedAt ?? file.CreatedAt,
+            Status = KmIntegrationStatus.Pending, CreatedAt = now, UpdatedAt = now
+        };
+    }
+
     public void Claim(Guid lease, DateTime now, TimeSpan duration)
     {
         if (lease == Guid.Empty || duration <= TimeSpan.Zero ||
@@ -257,6 +288,7 @@ public static class KmIntegrationEventTypes
     public const string VerificationApplicationAttachmentArchived =
         "VerificationApplicationAttachmentArchived";
     public const string VendorFileArchived = "VendorFileArchived";
+    public const string EquipmentDocumentArchived = "EquipmentDocumentArchived";
 }
 
 public static class KmIntegrationSourceEntityTypes
@@ -265,4 +297,5 @@ public static class KmIntegrationSourceEntityTypes
     public const string DocumentLibraryFile = "DocumentLibraryFile";
     public const string VerificationApplicationFile = "VerificationApplicationFile";
     public const string VendorFile = "VendorFile";
+    public const string ApparatusFile = "ApparatusFile";
 }

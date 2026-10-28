@@ -256,6 +256,21 @@ public sealed class EquipmentVendorManagementTests
             var detail = Assert.IsType<ApparatusDetailDto>(await apparatus.GetByIdAsync("equipment", equipmentId));
             Assert.Equal(4, detail.Files.Count);
             Assert.All(detail.Files, file => Assert.Equal(FileArchiveStatuses.Archived, file.ArchiveStatus));
+            Assert.Equal(3, await db.KmIntegrationOutbox.CountAsync(x =>
+                x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile));
+            Assert.All(detail.Files.Where(x => !x.IsImage), file =>
+            {
+                Assert.True(file.IsKmEligibleDocument);
+                Assert.True(file.HasKmSchedule);
+                Assert.Equal(KmIntegrationStatus.Pending.ToString(), file.KmStatus);
+                Assert.False(file.KmEnabled);
+                Assert.False(file.CanDelete);
+            });
+            var photo = Assert.Single(detail.Files, x => x.IsImage);
+            Assert.False(photo.IsKmEligibleDocument);
+            Assert.False(photo.HasKmSchedule);
+            Assert.True(photo.CanDelete);
             Assert.NotNull(rawExport.LastLatestPackage);
             Assert.Empty(rawExport.LastLatestPackage.Files);
             Assert.Contains(Path.Combine("設備儀器管理", "設備資訊", "Wi-Fi 7 Tester_ASSET-1234"),

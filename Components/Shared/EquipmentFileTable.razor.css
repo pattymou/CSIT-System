@@ -1,0 +1,6 @@
+.equipment-file-table td { vertical-align: top; }
+.equipment-file-table small { display: block; margin-top: .25rem; color: var(--text-muted, #64748b); overflow-wrap: anywhere; }
+.equipment-file-thumbnail { width: 96px; height: 72px; object-fit: cover; border-radius: 8px; margin-right: .5rem; vertical-align: middle; }
+.metadata-suggestion { margin-top: .75rem; max-width: 720px; }
+.metadata-suggestion textarea { width: 100%; margin-top: .5rem; font-family: ui-monospace, monospace; }
+.metadata-suggestion pre { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }

@@ -72,7 +72,8 @@ public sealed class KmSyncWorker(
                     WHERE deletion.record_id = km_integration_outbox.project_id
                     AND deletion.status IN ('WaitingForKm', 'KmVerified', 'LocalReady', 'LocalCleanup', 'Completed')))
                   OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile')
-                  OR (@vendor_enabled AND event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile')) AND
+                  OR (@vendor_enabled AND event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile')
+                  OR (@equipment_enabled AND event_type = 'EquipmentDocumentArchived' AND source_entity_type = 'ApparatusFile')) AND
                   (status = 'Pending' OR retry_count < @max) AND
                   (status = 'Pending' OR
                    (status = 'Failed' AND next_retry_at <= @now) OR
@@ -83,7 +84,10 @@ public sealed class KmSyncWorker(
             var at = command.CreateParameter(); at.ParameterName = "now"; at.Value = now;
             var vendorEnabled = command.CreateParameter(); vendorEnabled.ParameterName = "vendor_enabled";
             vendorEnabled.Value = options.VendorEnabled;
+            var equipmentEnabled = command.CreateParameter(); equipmentEnabled.ParameterName = "equipment_enabled";
+            equipmentEnabled.Value = options.EquipmentEnabled;
             command.Parameters.Add(max); command.Parameters.Add(at); command.Parameters.Add(vendorEnabled);
+            command.Parameters.Add(equipmentEnabled);
             var id = await command.ExecuteScalarAsync(cancellationToken);
             row = id is Guid value
                 ? await db.KmIntegrationOutbox.SingleAsync(x => x.Id == value, cancellationToken) : null;
@@ -121,7 +125,10 @@ public sealed class KmSyncWorker(
                       x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile) ||
                      (options.VendorEnabled &&
                       x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
-                      x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile)) &&
+                       x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile) ||
+                      (options.EquipmentEnabled &&
+                       x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                       x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile)) &&
                     (x.Status == KmIntegrationStatus.Pending ||
                     x.RetryCount < options.MaxRetryCount) &&
                     (x.Status == KmIntegrationStatus.Pending ||
@@ -166,6 +173,15 @@ public sealed class KmSyncWorker(
                         ? KmDeliveryResult.Failure(false, "VENDOR_FILE_UNAVAILABLE",
                             "Approved formal Vendor file is unavailable.")
                         : await client.SubmitVendorFileAsync(request, deadline.Token);
+                }
+                else if (row.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                    row.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile)
+                {
+                    var request = await BuildEquipmentRequestAsync(db, row, options, deadline.Token);
+                    result = request is null
+                        ? KmDeliveryResult.Failure(false, "EQUIPMENT_DOCUMENT_UNAVAILABLE",
+                            "Approved formal Equipment document is unavailable.")
+                        : await client.SubmitEquipmentDocumentAsync(request, deadline.Token);
                 }
                 else
                 {
@@ -325,6 +341,49 @@ public sealed class KmSyncWorker(
             new VendorKmFile(file.Id, file.OriginalFileName, file.StoredFileName,
                 file.ContentType ?? "application/octet-stream", file.FileSize, file.Sha256,
                 new Uri(serviceBase, downloadPath).AbsoluteUri));
+    }
+
+    private static async Task<EquipmentDocumentIngestionRequest?> BuildEquipmentRequestAsync(
+        AppDbContext db,
+        KmIntegrationOutbox row,
+        KmIntegrationOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (!options.EquipmentEnabled || row.EventId == Guid.Empty || row.DocumentId == Guid.Empty ||
+            row.EventId != row.SourceEntityId || row.DocumentId != row.SourceEntityId || row.Version != 1 ||
+            !Uri.TryCreate(options.ServiceBaseUrl, UriKind.Absolute, out var serviceBase) ||
+            serviceBase.Scheme != Uri.UriSchemeHttps || serviceBase.AbsolutePath != "/" ||
+            !string.IsNullOrEmpty(serviceBase.Query) || !string.IsNullOrEmpty(serviceBase.Fragment))
+            return null;
+        var file = await db.ApparatusFiles.AsNoTracking().Include(x => x.Apparatus).ThenInclude(x => x.Vendor)
+            .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);
+        var originalName = file?.OriginalFileName ?? file?.FileName;
+        if (file?.Apparatus is null || file.Apparatus.ModuleCode != "equipment" ||
+            file.ArchiveStatus != FileArchiveStatuses.Archived ||
+            ManagedAssetFileStorage.IsImage(file.ContentType, originalName ?? string.Empty) ||
+            file.Sha256 is null || file.Sha256.Length != 64 || file.FileSize != row.SizeBytes)
+            return null;
+        var downloadPath = $"api/integrations/km/v1/equipment-documents/{file.Id:D}/content";
+        return new EquipmentDocumentIngestionRequest(
+            "1.0", row.EventId, KmIntegrationEventTypes.EquipmentDocumentArchived,
+            "CSIT", file.Id, 1, row.CommittedAt,
+            new EquipmentKmReference(file.Apparatus.Id, file.Apparatus.ProductsId,
+                file.Apparatus.Name, file.Apparatus.Kind, file.Apparatus.Brand,
+                file.Apparatus.VendorId, file.Apparatus.Vendor?.Name, file.Apparatus.Model),
+            new EquipmentKmFile(file.Id, originalName!, file.FileName,
+                file.ContentType ?? "application/octet-stream", file.FileSize, file.Sha256,
+                new Uri(serviceBase, downloadPath).AbsoluteUri, EquipmentDocumentKind(originalName!)));
+    }
+
+    private static string EquipmentDocumentKind(string fileName)
+    {
+        var name = Path.GetFileNameWithoutExtension(fileName);
+        if (name.Contains("datasheet", StringComparison.OrdinalIgnoreCase) || name.Contains("spec", StringComparison.OrdinalIgnoreCase))
+            return "Datasheet";
+        if (name.Contains("sop", StringComparison.OrdinalIgnoreCase)) return "SOP";
+        if (name.Contains("manual", StringComparison.OrdinalIgnoreCase) || name.Contains("手冊", StringComparison.OrdinalIgnoreCase))
+            return "Manual";
+        return "EquipmentDocument";
     }
 
     private async Task EnsurePendingDocumentLibraryOutboxAsync(CancellationToken cancellationToken)

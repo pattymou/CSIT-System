@@ -4,6 +4,8 @@
 @using SIT.DepartmentSystem.Web.Models.Api
 @inject BrowserApiClient Api
 @inject NavigationManager Nav
+@inject AuthenticationStateProvider AuthProvider
+@inject IAuthorizationService AuthorizationService
 
 <div class="case-title-row">
     <div>
@@ -12,7 +14,7 @@
     </div>
     <div class="form-actions">
         <button class="btn-secondary" @onclick="BackToEquipment">返回設備管理</button>
-        <button class="primary-btn" @onclick="Create">+ 新增廠商</button>
+        @if (_canWrite) { <button class="primary-btn" @onclick="Create">+ 新增廠商</button> }
     </div>
 </div>
 
@@ -60,8 +62,12 @@
                             <td>@item.EquipmentCount</td>
                             <td>@(item.IsActive ? "啟用" : "停用")</td>
                             <td class="action-cell">
-                                <button class="table-chip-btn" @onclick="() => Edit(item.Id)">編輯</button>
-                                <button class="table-chip-btn danger" @onclick="() => DeleteAsync(item.Id)">刪除</button>
+                                <button class="table-chip-btn" @onclick="() => View(item.Id)">檢視</button>
+                                @if (_canWrite)
+                                {
+                                    <button class="table-chip-btn" @onclick="() => Edit(item.Id)">編輯</button>
+                                    <button class="table-chip-btn danger" @onclick="() => DeleteAsync(item.Id)">刪除</button>
+                                }
                             </td>
                         </tr>
                     }
@@ -82,9 +88,16 @@
     private string? _message;
     private bool _includeDisabled = true;
     private bool _loading = true;
+    private bool _canWrite;
     private CancellationTokenSource? _searchCts;
 
-    protected override async Task OnInitializedAsync() => await LoadAsync();
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthProvider.GetAuthenticationStateAsync();
+        _canWrite = (await AuthorizationService.AuthorizeAsync(
+            auth.User, SystemAuthorization.Policies.BusinessWrite)).Succeeded;
+        await LoadAsync();
+    }
 
     private async Task LoadAsync()
     {
@@ -114,6 +127,7 @@
     }
 
     private void Edit(Guid id) => Nav.NavigateTo($"/vendors/{id}/edit");
+    private void View(Guid id) => Nav.NavigateTo($"/vendors/{id}");
     private void Create() => Nav.NavigateTo("/vendors/new");
     private void BackToEquipment() => Nav.NavigateTo("/assets/equipment");
 

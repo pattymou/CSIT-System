@@ -1,0 +1,98 @@
+@using SIT.DepartmentSystem.Web.Entities
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.KmIntegration
+@inject BrowserApiClient Api
+
+@if (Files.Count == 0)
+{
+    <div class="record-empty-box"><strong>目前沒有設備文件或照片</strong></div>
+}
+else
+{
+    <div class="project-table-wrap">
+        <table class="project-table equipment-file-table">
+            <thead><tr><th>檔案名稱</th><th>類型</th><th>正式入庫</th><th>KM 分析</th><th>操作</th></tr></thead>
+            <tbody>
+                @foreach (var file in Files)
+                {
+                    <tr>
+                        <td>
+                            @if (file.IsImage) { <a href="@file.ImageUrl" target="_blank" rel="noopener"><img class="equipment-file-thumbnail" src="@file.ImageUrl" alt="@file.FileName" /></a> }
+                            <strong>@file.FileName</strong><small>@FormatSize(file.FileSize)</small>
+                            @if (!string.IsNullOrWhiteSpace(file.Sha256)) { <small>SHA256：@file.Sha256</small> }
+                            @if (!string.IsNullOrWhiteSpace(file.MetadataJson))
+                            {
+                                <details class="metadata-suggestion"><summary>查看 KM／AI Metadata 建議（@MetadataStatus(file.MetadataVerificationStatus)）</summary>
+                                    @if (CanManageMetadata)
+                                    {
+                                        <textarea rows="9" value="@MetadataText(file)" @oninput="e => SetMetadataText(file.Id, e.Value?.ToString())"></textarea>
+                                        <div class="form-actions"><button type="button" class="table-chip-btn" @onclick="() => ReviewAsync(file, MetadataVerificationStatuses.Verified)">確認／儲存修正</button><button type="button" class="table-chip-btn danger" @onclick="() => ReviewAsync(file, MetadataVerificationStatuses.Rejected)">退回建議</button></div>
+                                    }
+                                    else { <pre>@file.MetadataJson</pre> }
+                                    <small>來源：@(file.MetadataSource ?? "—")；版本：@(file.MetadataVersion ?? "—")。建議不會自動覆寫設備主檔。</small>
+                                </details>
+                            }
+                        </td>
+                        <td>@(file.IsImage ? "設備照片" : "Manual／Datasheet／設備文件")</td>
+                        <td><span class="record-status-pill">@ArchiveText(file.ArchiveStatus)</span>@if (!string.IsNullOrWhiteSpace(file.ArchiveError)) { <small class="error-text">@file.ArchiveError</small> }</td>
+                        <td><span class="record-status-pill">@KmText(file)</span>@if (!string.IsNullOrWhiteSpace(file.KmError)) { <small class="error-text">@file.KmError</small> }</td>
+                        <td class="action-cell"><a class="table-link-btn" href="@file.DownloadUrl" target="_blank" rel="noopener">@(file.IsImage ? "查看原圖" : "檢視")</a>@if (OnDelete.HasDelegate) { <button type="button" class="table-chip-btn danger" disabled="@(!file.CanDelete)" title="@(file.CanDelete ? null : "已建立 KM 排程，禁止直接刪除")" @onclick="() => OnDelete.InvokeAsync(file.Id)">刪除</button> }</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<ApparatusFileDto> Files { get; set; } = [];
+    [Parameter] public bool CanManageMetadata { get; set; }
+    [Parameter] public EventCallback<Guid> OnDelete { get; set; }
+    [Parameter] public EventCallback OnChanged { get; set; }
+    private readonly Dictionary<Guid, string> _metadataEdits = [];
+
+    private string MetadataText(ApparatusFileDto file) =>
+        _metadataEdits.TryGetValue(file.Id, out var value) ? value : file.MetadataJson ?? string.Empty;
+    private void SetMetadataText(Guid id, string? value) => _metadataEdits[id] = value ?? string.Empty;
+
+    private async Task ReviewAsync(ApparatusFileDto file, string status)
+    {
+        var response = await Api.PutJsonAsync($"/api/assets/files/{file.Id}/metadata-review",
+            new EquipmentMetadataReviewRequest { Status = status, CorrectedMetadataJson = MetadataText(file) });
+        if (!response.IsSuccessStatusCode) return;
+        _metadataEdits.Remove(file.Id);
+        if (OnChanged.HasDelegate) await OnChanged.InvokeAsync();
+    }
+
+    private static string ArchiveText(string? status) => status switch
+    {
+        FileArchiveStatuses.Archived => "正式入庫完成",
+        FileArchiveStatuses.Failed => "正式入庫失敗",
+        FileArchiveStatuses.Pending => "核准後歸檔中",
+        _ => "既有檔案"
+    };
+    private static string KmText(ApparatusFileDto file)
+    {
+        if (file.IsImage) return "照片不進行 KM 分析";
+        if (!file.HasKmSchedule) return "未建立 KM 排程";
+        if (!file.KmEnabled && file.KmStatus == nameof(KmIntegrationStatus.Pending)) return "KM 尚未啟用";
+        return file.KmStatus switch
+        {
+            nameof(KmIntegrationStatus.Pending) => "等待 KM 通知",
+            nameof(KmIntegrationStatus.Dispatching) => "KM 派送中",
+            nameof(KmIntegrationStatus.Sent) => "KM 已接收",
+            nameof(KmIntegrationStatus.Processing) => "KM 分析中",
+            nameof(KmIntegrationStatus.Completed) => "KM 分析完成",
+            nameof(KmIntegrationStatus.Failed) => "KM 失敗",
+            _ => "等待 KM 通知"
+        };
+    }
+    private static string MetadataStatus(string? status) => status switch
+    {
+        MetadataVerificationStatuses.PendingVerification => "待確認",
+        MetadataVerificationStatuses.Verified => "已確認",
+        MetadataVerificationStatuses.Rejected => "已退回",
+        _ => "未確認"
+    };
+    private static string FormatSize(long size) => size >= 1024 * 1024 ? $"{size / 1024d / 1024d:0.##} MB" : size >= 1024 ? $"{size / 1024d:0.##} KB" : $"{size} B";
+}

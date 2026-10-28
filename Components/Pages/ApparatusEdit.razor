@@ -37,6 +37,62 @@
         <div class="case-no-badge">ID：@_form.Id</div>
     </div>
 
+    @if (IsEquipment)
+    {
+        <div class="form-grid equipment-primary-grid">
+            <div class="form-row"><label>財產編號</label><input @bind="_form.ProductsId" /></div>
+            <div class="form-row"><label>設備分類 *</label><select @bind="_form.Kind"><option value="">請選擇設備分類</option>@foreach (var option in _apparatusKindOptions) { <option value="@option.Value">@option.Name</option> }</select></div>
+            <div class="form-row"><label>設備名稱 *</label><input @bind="_form.Name" /></div>
+            <div class="form-row full-width equipment-brand-group">
+                <label>廠牌</label>
+                <div class="equipment-brand-fields">
+                    <div><span>既有廠牌文字（Brand）</span><input @bind="_form.Brand" /></div>
+                    <div><span>正式廠商主檔 *</span><select required @bind="_form.VendorId"><option value="">請選擇啟用中的廠商</option>@foreach (var vendor in _vendorOptions) { <option value="@vendor.Id">@vendor.Name@(!vendor.IsActive ? "（已停用，僅保留歷史關聯）" : "")</option> }</select></div>
+                </div>
+                <small>廠牌保留舊資料文字；正式廠商主檔用於設備關聯，系統不會自行比對或覆寫兩者。</small>
+                @if (_isEdit && !_form.VendorId.HasValue && !string.IsNullOrWhiteSpace(_form.Manufacturer))
+                { <small class="equipment-warning">舊廠商文字（尚未連結）：@_form.Manufacturer</small> }
+            </div>
+            <div class="form-row"><label>型號</label><input @bind="_form.Model" /></div>
+            <div class="form-row"><label>序號</label><input @bind="_form.Number" /></div>
+            <div class="form-row"><label>設備位置</label><input @bind="_form.Place" /></div>
+            <div class="form-row"><label>保管人 *</label><select required @bind="_form.CustodianAccount"><option value="">請選擇保管人</option>@foreach (var user in AllowedCustodians) { <option value="@user.Account">@user.DisplayName</option> }</select></div>
+            <div class="form-row"><label>設備狀態</label><select @bind="_form.ReservationStatus"><option>可借用</option><option>校驗中</option><option>異常維修中</option><option>不可借用</option><option>採購中</option></select></div>
+        </div>
+
+        <details class="equipment-details" open>
+            <summary>歸屬／管理設定</summary>
+            <div class="form-grid">
+                <div class="form-row"><label>部門 *</label><select required @bind="_form.DepartmentOptionId" @bind:after="OnDepartmentChanged"><option value="">請選擇部門</option>@foreach (var department in _ownershipOptions.Departments) { <option value="@department.Id">@DepartmentTeamRules.DisplayName(department.Name, department.Value)</option> }</select></div>
+                <div class="form-row"><label>設備所屬 Team *</label><select required @bind="_form.OwnerTeamOptionId" @bind:after="OnOwnerTeamChanged"><option value="">請選擇設備所屬 Team</option>@foreach (var team in AllowedOwnerTeams) { <option value="@team.Id">@DepartmentTeamRules.DisplayName(team.Name, team.Value)</option> }</select></div>
+            </div>
+        </details>
+
+        <details class="equipment-details">
+            <summary>其他資料</summary>
+            <div class="form-grid">
+                <div class="form-row"><label>設備名稱（英文）</label><input @bind="_form.NameEn" /></div>
+                <div class="form-row"><label>料號</label><input @bind="_form.PartNo" /></div>
+                <div class="form-row"><label>廠商貨品編號</label><input @bind="_form.ManufacturerNumber" /></div>
+                <div class="form-row"><label>對應採購</label><input @bind="_form.ProcurementStaff" /></div>
+                <div class="form-row"><label>IMEI</label><input @bind="_form.Imei" /></div>
+                <div class="form-row"><label>OS</label><select @bind="_form.Os"><option value="">請選擇 OS</option><option>IOS</option><option>Android</option></select></div>
+                <div class="form-row"><label>OS Ver.</label><input @bind="_form.OsVersion" /></div>
+                <div class="form-row"><label>檢查日期</label><input type="date" @bind="_form.InspectionDate" /></div>
+                <div class="form-row"><label>保養日期</label><input type="date" @bind="_form.MaintenanceDate" /></div>
+                <div class="form-row"><label>取得成本</label><input @bind="_form.CostPrice" /></div>
+                <div class="form-row"><label>使用年限</label><input @bind="_form.YearsUse" /></div>
+                <div class="form-row"><label>使用天數</label><input @bind="_form.DaysUse" /></div>
+                <div class="form-row"><label>使用價格</label><input @bind="_form.PriceUse" /></div>
+                <div class="form-row"><label>保管代理人</label><input @bind="_form.Agent" /></div>
+                <div class="form-row full-width"><label>Feature</label><textarea class="text-area" rows="5" @bind="_form.Feature"></textarea></div>
+                <div class="form-row full-width"><label>Specification</label><textarea class="text-area" rows="5" @bind="_form.Spec"></textarea></div>
+                <div class="form-row full-width"><label>備註</label><textarea class="text-area" rows="5" @bind="_form.Note"></textarea></div>
+            </div>
+        </details>
+    }
+    else
+    {
     <div class="form-grid">
         <div class="form-row">
             <label>財產編號</label>
@@ -239,6 +295,7 @@
             <textarea class="text-area" rows="5" @bind="_form.Note"></textarea>
         </div>
     </div>
+    }
 </div>
 
 @if (IsEquipment && _isEdit)
@@ -372,6 +429,8 @@
     <div class="upload-box" @ref="_fileInputContainer">
         <InputFile OnChange="OnFilesSelected" multiple />
         <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案。新增設備時會與基本資料由同一個「確定」動作提交。</span>
+        @if (IsEquipment && string.IsNullOrWhiteSpace(_form.ProductsId))
+        { <span class="equipment-warning">缺少財產編號時不能正式歸檔；系統不會以序號或假值取代既定 NAS 命名。</span> }
     </div>
 
     @if (_selectedFiles.Count > 0)
@@ -387,7 +446,12 @@
         </div>
     }
 
-    @if (_files.Count > 0)
+    @if (IsEquipment)
+    {
+        <SIT.DepartmentSystem.Web.Components.Shared.EquipmentFileTable Files="_files"
+            CanManageMetadata="true" OnDelete="DeleteFileAsync" OnChanged="LoadFilesAsync" />
+    }
+    else if (_files.Count > 0)
     {
         <div class="upload-list">
             @foreach (var file in _files)
@@ -849,7 +913,9 @@
             await LoadFilesAsync();
             _message = response.StatusCode == 202
                 ? "附件已送主管審核，核准後才會建立正式檔案。"
-                : "附件已完成正式提交。";
+                : IsEquipment
+                    ? "附件已完成正式入庫；設備文件已建立 KM 排程，照片維持原有預覽且不進行 KM 分析。"
+                    : "附件已完成正式提交。";
             return true;
         }
         catch (Exception ex)
@@ -1166,82 +1232,4 @@
         Nav.NavigateTo("/test-environment-settings");
     }
 
-    public sealed class ApparatusOwnershipOptionsDto
-    {
-        public List<ApparatusOwnerTeamOptionDto> Departments { get; set; } = new();
-        public List<ApparatusOwnerTeamOptionDto> Teams { get; set; } = new();
-        public List<ApparatusCustodianOptionDto> Users { get; set; } = new();
-    }
-
-    public sealed class ApparatusOwnerTeamOptionDto
-    {
-        public Guid Id { get; set; }
-        public string Value { get; set; } = string.Empty;
-        public string Name { get; set; } = string.Empty;
-    }
-
-    public sealed class ApparatusCustodianOptionDto
-    {
-        public string Account { get; set; } = string.Empty;
-        public string DisplayName { get; set; } = string.Empty;
-        public string Department { get; set; } = string.Empty;
-        public string TeamCode { get; set; } = string.Empty;
-    }
-
-    public class ApparatusFileDto
-    {
-        public Guid Id { get; set; }
-        public string ApparatusId { get; set; } = "";
-        public string FileName { get; set; } = "";
-        public string? ContentType { get; set; }
-        public long FileSize { get; set; }
-        public string ImageUrl { get; set; } = "";
-        public string DownloadUrl { get; set; } = "";
-        public bool IsImage { get; set; }
-        public string? Sha256 { get; set; }
-        public string? ArchiveStatus { get; set; }
-        public string? ArchiveError { get; set; }
-        public DateTime CreatedAt { get; set; }
-    }
-
-    public class ApparatusDetailDto : ApparatusUpsertRequest
-    {
-        public List<ApparatusFileDto> Files { get; set; } = new();
-    }
-
-    public class ApparatusUpsertRequest
-    {
-        public string? Id { get; set; }
-        public string? RowVersion { get; set; }
-        public string? ProductsId { get; set; }
-        public string Name { get; set; } = "";
-        public string? NameEn { get; set; }
-        public string? Kind { get; set; }
-        public string? PartNo { get; set; }
-        public string? Manufacturer { get; set; }
-        public string? ManufacturerNumber { get; set; }
-        public Guid? VendorId { get; set; }
-        public string? Brand { get; set; }
-        public string? Model { get; set; }
-        public string? Number { get; set; }
-        public string? ProcurementStaff { get; set; }
-        public string? Imei { get; set; }
-        public string? Os { get; set; }
-        public string? OsVersion { get; set; }
-        public DateOnly? InspectionDate { get; set; }
-        public DateOnly? MaintenanceDate { get; set; }
-        public string? Place { get; set; }
-        public string? CostPrice { get; set; }
-        public string? YearsUse { get; set; }
-        public string? DaysUse { get; set; }
-        public string? PriceUse { get; set; }
-        public string? CustodianAccount { get; set; }
-        public Guid? DepartmentOptionId { get; set; }
-        public Guid? OwnerTeamOptionId { get; set; }
-        public string? Agent { get; set; }
-        public string? ReservationStatus { get; set; }
-        public string? Feature { get; set; }
-        public string? Spec { get; set; }
-        public string? Note { get; set; }
-    }
 }

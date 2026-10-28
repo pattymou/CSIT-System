@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
@@ -7,6 +8,7 @@ using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
@@ -18,6 +20,7 @@ public class ApparatusService : IApparatusService
     private readonly IRawDataExportService _rawDataExportService;
     private readonly SharedIdentityProvisioningClient _provisioningClient;
     private readonly ManagedAssetFileStorage _managedStorage;
+    private readonly KmIntegrationOptions _kmOptions;
 
     public ApparatusService(
         AppDbContext db,
@@ -25,7 +28,8 @@ public class ApparatusService : IApparatusService
         IOptions<RawDataSettings> rawDataOptions,
         IRawDataExportService rawDataExportService,
         SharedIdentityProvisioningClient provisioningClient,
-        ManagedAssetFileStorage? managedStorage = null)
+        ManagedAssetFileStorage? managedStorage = null,
+        IOptions<KmIntegrationOptions>? kmOptions = null)
     {
         _db = db;
         _settings = options.Value;
@@ -33,6 +37,7 @@ public class ApparatusService : IApparatusService
         _rawDataExportService = rawDataExportService;
         _provisioningClient = provisioningClient;
         _managedStorage = managedStorage ?? new ManagedAssetFileStorage(db);
+        _kmOptions = kmOptions?.Value ?? new KmIntegrationOptions();
     }
 
     public async Task<string> GenerateNewIdAsync()
@@ -206,9 +211,10 @@ public class ApparatusService : IApparatusService
         var custodianNames = await ApparatusCustodianResolver.LoadDisplayNamesAsync(
             _db,
             [entity.CustodianAccount]);
+        var outboxes = await LoadEquipmentOutboxesAsync(entity.Files);
         return ToDetailDto(
             entity,
-            ApparatusCustodianResolver.GetDisplayName(custodianNames, entity.CustodianAccount));
+            ApparatusCustodianResolver.GetDisplayName(custodianNames, entity.CustodianAccount), outboxes);
     }
 
     public async Task<string> CreateAsync(string moduleCode, ApparatusUpsertRequest request)
@@ -383,6 +389,13 @@ public class ApparatusService : IApparatusService
                 "This apparatus belongs to a test environment group and cannot be deleted. Remove the group membership first.");
         }
 
+        var fileIds = entity.Files.Select(x => x.Id).ToArray();
+        if (fileIds.Length > 0 && await _db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
+                x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                fileIds.Contains(x.SourceEntityId)))
+            throw new InvalidOperationException(
+                "This equipment has documents tracked by KM and cannot be physically deleted.");
+
         foreach (var file in entity.Files)
         {
             DeletePhysicalFile(file);
@@ -417,11 +430,12 @@ public class ApparatusService : IApparatusService
             return new();
         }
 
-        return await _db.ApparatusFiles
+        var files = await _db.ApparatusFiles
             .Where(x => x.ApparatusId == apparatusId)
             .OrderByDescending(x => x.CreatedAt)
-            .Select(x => ToFileDto(x))
             .ToListAsync();
+        var outboxes = await LoadEquipmentOutboxesAsync(files);
+        return files.Select(x => ToFileDto(x, outboxes)).ToList();
     }
 
     public async Task UploadFilesAsync(string moduleCode, string apparatusId, IReadOnlyList<IFormFile> files,
@@ -543,6 +557,7 @@ public class ApparatusService : IApparatusService
         {
             throw new FileNotFoundException("找不到檔案資料");
         }
+
         if (file.ArchiveStatus is not null && file.ArchiveStatus != FileArchiveStatuses.Archived)
             throw new FileNotFoundException("檔案尚未完成正式歸檔");
 
@@ -565,6 +580,12 @@ public class ApparatusService : IApparatusService
             return false;
         }
 
+        if (await _db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
+                x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                x.SourceEntityId == fileId))
+            throw new InvalidOperationException(
+                "此設備文件已進入 KM 追蹤流程，尚未有正式刪除契約，禁止直接刪除。");
+
         var apparatusId = file.ApparatusId;
 
         var apparatus = await _db.Apparatuses
@@ -580,6 +601,30 @@ public class ApparatusService : IApparatusService
         await RebuildLatestRawDataAsync(moduleCode, apparatusId);
 
         Console.WriteLine($"[ApparatusService] Deleted asset file record. fileId={fileId}, apparatusId={apparatusId}");
+        return true;
+    }
+
+    public async Task<bool> ReviewFileMetadataAsync(
+        Guid fileId, EquipmentMetadataReviewRequest request, string actor)
+    {
+        var file = await _db.ApparatusFiles.Include(x => x.Apparatus)
+            .SingleOrDefaultAsync(x => x.Id == fileId);
+        if (file is null) return false;
+        if (file.Apparatus.ModuleCode != "equipment" || string.IsNullOrWhiteSpace(file.MetadataJson))
+            throw new InvalidOperationException("此檔案目前沒有可確認的設備 Metadata 建議。");
+        if (request.Status is not (MetadataVerificationStatuses.Verified or MetadataVerificationStatuses.Rejected))
+            throw new InvalidOperationException("Metadata 僅能標記為已確認或已退回。");
+
+        if (!string.IsNullOrWhiteSpace(request.CorrectedMetadataJson))
+        {
+            using var parsed = JsonDocument.Parse(request.CorrectedMetadataJson);
+            if (parsed.RootElement.ValueKind != JsonValueKind.Object)
+                throw new InvalidOperationException("修正後 Metadata 必須是 JSON object。");
+            file.MetadataJson = JsonSerializer.Serialize(parsed.RootElement);
+            file.MetadataSource = $"UserConfirmed:{(string.IsNullOrWhiteSpace(actor) ? "SYSTEM" : actor.Trim())}";
+        }
+        file.MetadataVerificationStatus = request.Status;
+        await _db.SaveChangesAsync();
         return true;
     }
 
@@ -830,7 +875,8 @@ public class ApparatusService : IApparatusService
         }
     }
 
-    private static ApparatusDetailDto ToDetailDto(Apparatus x, string? custodianDisplayName)
+    private ApparatusDetailDto ToDetailDto(Apparatus x, string? custodianDisplayName,
+        IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes)
     {
         var environmentAssignment = x.EnvironmentGroupDevices
             .OrderByDescending(d => d.IsInEnvironment)
@@ -883,13 +929,17 @@ public class ApparatusService : IApparatusService
             IsInEnvironment = environmentAssignment?.IsInEnvironment,
             Files = x.Files
                 .OrderByDescending(f => f.CreatedAt)
-                .Select(ToFileDto)
+                .Select(file => ToFileDto(file, outboxes))
                 .ToList()
         };
     }
 
-    private static ApparatusFileDto ToFileDto(ApparatusFile x)
+    private ApparatusFileDto ToFileDto(ApparatusFile x,
+        IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes)
     {
+        outboxes.TryGetValue(x.Id, out var outbox);
+        var isDocument = x.Apparatus?.ModuleCode == "equipment" &&
+            !ManagedAssetFileStorage.IsImage(x.ContentType, x.OriginalFileName ?? x.FileName);
         return new ApparatusFileDto
         {
             Id = x.Id,
@@ -904,8 +954,30 @@ public class ApparatusService : IApparatusService
             IsImage = ManagedAssetFileStorage.IsImage(x.ContentType, x.OriginalFileName ?? x.FileName),
             Sha256 = x.Sha256,
             ArchiveStatus = x.ArchiveStatus,
-            ArchiveError = x.ArchiveError
+            ArchiveError = x.ArchiveError,
+            IsKmEligibleDocument = isDocument,
+            HasKmSchedule = outbox is not null,
+            KmEnabled = _kmOptions.Enabled && _kmOptions.EquipmentEnabled,
+            KmStatus = outbox?.Status.ToString(),
+            KmError = outbox?.LastErrorMessage,
+            MetadataJson = x.MetadataJson,
+            MetadataSource = x.MetadataSource,
+            MetadataVersion = x.MetadataVersion,
+            MetadataVerificationStatus = x.MetadataVerificationStatus,
+            CanDelete = outbox is null
         };
+    }
+
+    private async Task<IReadOnlyDictionary<Guid, KmIntegrationOutbox>> LoadEquipmentOutboxesAsync(
+        IEnumerable<ApparatusFile> files)
+    {
+        var ids = files.Select(x => x.Id).ToArray();
+        if (ids.Length == 0) return new Dictionary<Guid, KmIntegrationOutbox>();
+        return await _db.KmIntegrationOutbox.AsNoTracking()
+            .Where(x => x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
+                ids.Contains(x.SourceEntityId))
+            .ToDictionaryAsync(x => x.SourceEntityId);
     }
 
     private async Task<Vendor?> ValidateNewEquipmentVendorAsync(string moduleCode, ApparatusUpsertRequest request)
@@ -968,6 +1040,7 @@ public class ApparatusService : IApparatusService
                 if (existing.ArchiveStatus == FileArchiveStatuses.Archived &&
                     File.Exists(Path.Combine(existing.FilePath, existing.FileName)))
                 {
+                    await EnsureEquipmentOutboxAsync(apparatus, existing);
                     archived++;
                     continue;
                 }
@@ -994,6 +1067,7 @@ public class ApparatusService : IApparatusService
                 entity.ArchiveStatus = FileArchiveStatuses.Archived;
                 entity.ArchiveNextRetryAt = null;
                 entity.ArchiveUpdatedAt = DateTime.UtcNow;
+                await EnsureEquipmentOutboxAsync(apparatus, entity, saveChanges: false);
                 await _db.SaveChangesAsync();
                 archived++;
             }
@@ -1010,6 +1084,19 @@ public class ApparatusService : IApparatusService
         await RebuildLatestRawDataAsync("equipment", apparatus.Id);
         if (failures.Count != 0)
             throw new InvalidOperationException($"設備已建立／保留；附件已歸檔 {archived} 份，{failures.Count} 份失敗並已記錄：{string.Join("、", failures)}");
+    }
+
+    private async Task EnsureEquipmentOutboxAsync(
+        Apparatus apparatus, ApparatusFile file, bool saveChanges = true)
+    {
+        var originalName = file.OriginalFileName ?? file.FileName;
+        if (ManagedAssetFileStorage.IsImage(file.ContentType, originalName)) return;
+        if (!await _db.KmIntegrationOutbox.AnyAsync(x =>
+                x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                x.SourceEntityId == file.Id))
+            _db.KmIntegrationOutbox.Add(
+                KmIntegrationOutbox.ForArchivedEquipmentDocument(apparatus, file, DateTime.UtcNow));
+        if (saveChanges) await _db.SaveChangesAsync();
     }
 
     private static void ValidateUpsert(ApparatusUpsertRequest request)

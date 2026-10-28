@@ -34,7 +34,7 @@
 <div class="form-card">
     <div class="form-grid">
         <div class="form-row">
-            <label>類別</label>
+            <label>@(IsEquipment ? "設備分類" : "類別")</label>
             <input value="@_kind"
                    @oninput="OnKindChanged"
                    placeholder="例如：儀器 / 手機 / AP" />
@@ -73,13 +73,14 @@
                 <thead>
                     <tr>
                         <th>財產編號</th>
-                        <th>類別</th>
+                        <th>@(IsEquipment ? "設備分類" : "類別")</th>
+                        @if (IsEquipment) { <th>設備名稱</th> }
                         <th>廠牌</th>
                         <th>型號</th>
-                        <th>名稱</th>
-                        @if (IsEquipment) { <th>廠商</th> }
+                        @if (IsEquipment) { <th>序號</th><th>設備位置</th> }
+                        @if (!IsEquipment) { <th>名稱</th> }
                         <th>保管人</th>
-                        <th>狀態</th>
+                        <th>@(IsEquipment ? "設備狀態" : "狀態")</th>
                         @if (IsEquipment) { <th>測試環境</th> }
                         <th>操作</th>
                     </tr>
@@ -90,10 +91,11 @@
                         <tr class="clickable-row" @onclick="() => View(item.Id)">
                             <td>@Display(item.ProductsId)</td>
                             <td>@Display(item.Kind)</td>
-                            <td>@Display(item.Brand)</td>
+                            @if (IsEquipment) { <td>@item.Name</td> }
+                            <td><strong>@Display(item.Brand)</strong>@if (IsEquipment && !string.IsNullOrWhiteSpace(item.VendorName)) { <small class="vendor-master-link">正式廠商：@item.VendorName</small> }</td>
                             <td>@Display(item.Model)</td>
-                            <td>@item.Name</td>
-                            @if (IsEquipment) { <td>@Display(item.VendorName)</td> }
+                            @if (IsEquipment) { <td>@Display(item.Number)</td><td>@Display(item.Place)</td> }
+                            @if (!IsEquipment) { <td>@item.Name</td> }
                             <td>@Display(item.Custodian)</td>
                             <td>@Display(item.ReservationStatus)</td>
                             @if (IsEquipment)
@@ -327,4 +329,5 @@
 <style>
     .environment-assignment-cell { display:grid; gap:.15rem; }
     .environment-assignment-cell small { color:var(--text-muted,#64748b); white-space:nowrap; }
+    .vendor-master-link { display:block; margin-top:.2rem; color:var(--text-muted,#64748b); white-space:nowrap; }
 </style>

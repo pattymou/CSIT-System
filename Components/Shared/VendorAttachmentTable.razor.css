@@ -1,0 +1,4 @@
+.vendor-attachment-table td { vertical-align: top; }
+.vendor-attachment-table td small { display: block; margin-top: .25rem; color: var(--text-muted, #64748b); overflow-wrap: anywhere; }
+.vendor-table-thumbnail { width: 64px; height: 48px; object-fit: cover; border-radius: 6px; margin-right: .5rem; vertical-align: middle; }
+.status-muted { color: var(--text-muted, #64748b); }

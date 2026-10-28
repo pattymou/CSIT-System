@@ -17,8 +17,15 @@ public sealed class ApprovalContextUploads(IDbContextFactory<AppDbContext> dbFac
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var account = ApprovalIdentity.Account(user);
         var contextId = vendorId.ToString("N");
+        var isAdmin = user.IsInRole("Admin");
+        Guid[] leaderTeamIds = isAdmin
+            ? []
+            : await db.TeamRoutings.AsNoTracking()
+                .Where(x => x.IsEnabled && x.LeaderAccount.ToLower() == account)
+                .Select(x => x.TeamOptionId).Distinct().ToArrayAsync(cancellationToken);
         return await db.PendingSubmissions.AsNoTracking()
-            .Where(x => x.SubmittedByAccount == account &&
+            .Where(x => (x.SubmittedByAccount == account || isAdmin ||
+                         leaderTeamIds.Contains(x.SubmittedTeamOptionId)) &&
                 x.SourceModuleCode == VendorApprovalSourceResolver.ModuleCode &&
                 x.ContextType == VendorApprovalSourceResolver.ContextType &&
                 x.ContextId == contextId && x.Status != ApprovalStatus.Committed)

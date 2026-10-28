@@ -5,6 +5,7 @@ public sealed class KmIntegrationOptions
     public const string SectionName = "KmIntegration";
     public bool Enabled { get; set; }
     public bool VendorEnabled { get; set; }
+    public bool EquipmentEnabled { get; set; }
     public string? BaseUrl { get; set; }
     public string? ServiceBaseUrl { get; set; }
     public int TimeoutSeconds { get; set; } = 15;

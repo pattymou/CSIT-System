@@ -34,3 +34,35 @@ public sealed record VendorFileIngestionRequest(
     string SchemaVersion, Guid EventId, string EventType, string SourceSystem,
     Guid DocumentId, int Version, DateTime CommittedAt,
     VendorKmReference Vendor, VendorKmFile File);
+
+public sealed record EquipmentKmReference(
+    string Id, string? ProductsId, string Name, string Kind, string? Brand,
+    Guid? VendorId, string? VendorName, string? Model);
+public sealed record EquipmentKmFile(
+    Guid Id, string OriginalFileName, string StoredFileName, string ContentType,
+    long SizeBytes, string Sha256, string DownloadUrl, string DocumentKind);
+public sealed record EquipmentDocumentIngestionRequest(
+    string SchemaVersion, Guid EventId, string EventType, string SourceSystem,
+    Guid DocumentId, int Version, DateTime CommittedAt,
+    EquipmentKmReference Equipment, EquipmentKmFile File);
+
+public sealed record EquipmentMetadataEvidence(
+    string SourceFileName, int? Page, string? Section, string? Excerpt);
+public sealed record EquipmentTechnicalSpecificationSuggestion(
+    string Field, string Value, EquipmentMetadataEvidence Evidence);
+public sealed record EquipmentMetadataSuggestion(
+    string MetadataSchemaVersion,
+    IReadOnlyList<EquipmentTechnicalSpecificationSuggestion> TechnicalSpecifications,
+    string? CapabilitySummary,
+    IReadOnlyList<string> Limitations,
+    IReadOnlyList<EquipmentMetadataEvidence> Evidence);
+public sealed record EquipmentDocumentStatusCallback(
+    string SchemaVersion, string JobId, string SourceSystem, Guid DocumentId, int Version,
+    string Status, KmCallbackTimestamps? Timestamps, EquipmentMetadataSuggestion? Result,
+    KmCallbackError? Error);
+
+public sealed class EquipmentMetadataReviewRequest
+{
+    public string Status { get; set; } = string.Empty;
+    public string? CorrectedMetadataJson { get; set; }
+}

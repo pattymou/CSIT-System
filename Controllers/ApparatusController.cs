@@ -1,9 +1,11 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Authorization;
+using System.Security.Claims;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 using SIT.DepartmentSystem.Web.Services.Approval;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Controllers;
 
@@ -236,8 +238,36 @@ public class ApparatusController : ControllerBase
     [BusinessWrite]
     public async Task<IActionResult> DeleteFile(Guid fileId)
     {
-        var ok = await _service.DeleteFileAsync(fileId);
-        return ok ? NoContent() : NotFound("找不到檔案");
+        try
+        {
+            var ok = await _service.DeleteFileAsync(fileId);
+            return ok ? NoContent() : NotFound("找不到檔案");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(ex.Message);
+        }
+    }
+
+    [HttpPut("api/assets/files/{fileId:guid}/metadata-review")]
+    [BusinessWrite]
+    public async Task<IActionResult> ReviewFileMetadata(
+        Guid fileId, [FromBody] EquipmentMetadataReviewRequest request)
+    {
+        try
+        {
+            var actor = User.FindFirstValue("account") ?? User.Identity?.Name ?? "SYSTEM";
+            var ok = await _service.ReviewFileMetadataAsync(fileId, request, actor);
+            return ok ? NoContent() : NotFound("找不到檔案");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(ex.Message);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return BadRequest("修正後 Metadata 不是有效 JSON。");
+        }
     }
 
     private static string NormalizeModuleCode(string? moduleCode)

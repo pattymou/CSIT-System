@@ -17,11 +17,19 @@
 .environment-warning { margin-top:1rem; padding:.75rem; border-radius:8px; color:#b45309; background:#fffbeb; }
 .environment-actions { margin-top:1rem; }
 
+.equipment-brand-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
+.equipment-brand-fields > div { display:grid; gap:.35rem; }
+.equipment-brand-fields span, .equipment-brand-group small { color:var(--text-muted,#64748b); }
+.equipment-warning { display:block; margin-top:.5rem; color:#b45309 !important; }
+.equipment-details { margin-top:1rem; border-top:1px solid var(--border-color,#d6dbe3); padding-top:.75rem; }
+.equipment-details summary { cursor:pointer; font-weight:700; margin-bottom:1rem; }
+
 @media (max-width: 800px) {
     .resource-capability-row {
         grid-template-columns: 1fr;
     }
     .environment-membership-grid { grid-template-columns:1fr; }
+    .equipment-brand-fields { grid-template-columns:1fr; }
 }
 .apparatus-file-thumbnail {
     width: 72px;

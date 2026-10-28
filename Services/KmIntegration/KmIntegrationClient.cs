@@ -17,6 +17,11 @@ public interface IKmIntegrationClient
         CancellationToken cancellationToken) =>
         Task.FromResult(KmDeliveryResult.Failure(false, "VENDOR_CONTRACT_NOT_APPROVED",
             "Anderson KM Vendor ingestion contract is not approved."));
+    Task<KmDeliveryResult> SubmitEquipmentDocumentAsync(
+        EquipmentDocumentIngestionRequest request,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(KmDeliveryResult.Failure(false, "EQUIPMENT_CONTRACT_NOT_APPROVED",
+            "Anderson KM Equipment document ingestion contract is not approved."));
 }
 
 public interface IKmIntegrationAccessTokenProvider
@@ -167,6 +172,12 @@ public sealed class KmIntegrationClient(
         CancellationToken cancellationToken) =>
         Task.FromResult(KmDeliveryResult.Failure(false, "VENDOR_CONTRACT_NOT_APPROVED",
             "Anderson KM Vendor ingestion contract is not approved."));
+
+    public Task<KmDeliveryResult> SubmitEquipmentDocumentAsync(
+        EquipmentDocumentIngestionRequest request,
+        CancellationToken cancellationToken) =>
+        Task.FromResult(KmDeliveryResult.Failure(false, "EQUIPMENT_CONTRACT_NOT_APPROVED",
+            "Anderson KM Equipment document ingestion contract is not approved."));
 
     private static bool TryGetBaseUri(KmIntegrationOptions options, out Uri? baseUri)
     {

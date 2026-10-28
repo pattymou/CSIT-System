@@ -1,0 +1,104 @@
+@using SIT.DepartmentSystem.Web.Entities
+@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.Approval
+
+@if (Files.Count == 0 && PendingUploads.Count == 0)
+{
+    <div class="record-empty-box"><strong>目前沒有廠商附件</strong></div>
+}
+else
+{
+    <div class="project-table-wrap">
+        <table class="project-table vendor-attachment-table">
+            <thead>
+                <tr><th>檔案名稱</th><th>審核狀態</th><th>正式入庫</th><th>KM 分析</th><th>操作</th></tr>
+            </thead>
+            <tbody>
+                @foreach (var upload in PendingUploads)
+                {
+                    <tr>
+                        <td><strong>@upload.FileName</strong><small>@upload.SubmittedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</small></td>
+                        <td><span class="record-status-pill">@ApprovalText(upload.Status)</span>
+                            @if (upload.Status == ApprovalStatus.Rejected && !string.IsNullOrWhiteSpace(upload.RejectReason))
+                            { <small class="error-text">原因：@upload.RejectReason</small> }
+                        </td>
+                        <td><span class="status-muted">尚未完成</span></td>
+                        <td><span class="status-muted">尚未建立 KM 排程</span></td>
+                        <td>@if (upload.Status == ApprovalStatus.Rejected) { <a class="table-link-btn" href="/my-submissions">查看／重新送審</a> } else { <span>—</span> }</td>
+                    </tr>
+                }
+                @foreach (var file in Files)
+                {
+                    <tr>
+                        <td>
+                            @if (file.IsImage) { <img class="vendor-table-thumbnail" src="@file.DownloadUrl" alt="@file.FileName" /> }
+                            <strong>@file.FileName</strong>
+                            <small>@FormatSize(file.FileSize)</small>
+                        </td>
+                        <td><span class="record-status-pill">@(file.ApprovedAt.HasValue ? "已核准" : "既有正式檔案")</span>
+                            @if (file.ApprovedAt.HasValue) { <small>@file.ApprovedBy · @file.ApprovedAt.Value.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</small> }
+                        </td>
+                        <td><span class="record-status-pill">@ArchiveText(file.ArchiveStatus)</span>
+                            @if (!string.IsNullOrWhiteSpace(file.ArchiveError)) { <small class="error-text">@file.ArchiveError</small> }
+                        </td>
+                        <td><span class="record-status-pill">@KmText(file)</span>
+                            @if (!string.IsNullOrWhiteSpace(file.KmError)) { <small class="error-text">@file.KmError</small> }
+                        </td>
+                        <td class="action-cell">
+                            <a class="table-link-btn" href="@file.DownloadUrl" target="_blank" rel="noopener">檢視</a>
+                            @if (OnDelete.HasDelegate)
+                            {
+                                <button type="button" class="table-chip-btn danger" disabled="@(!file.CanDelete)"
+                                        title="@(file.CanDelete ? null : "已進入審核／KM 追蹤流程，禁止直接刪除")"
+                                        @onclick="() => OnDelete.InvokeAsync(file.Id)">刪除</button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+
+@code {
+    [Parameter] public IReadOnlyList<VendorFileDto> Files { get; set; } = [];
+    [Parameter] public IReadOnlyList<OwnApprovalUploadDto> PendingUploads { get; set; } = [];
+    [Parameter] public EventCallback<Guid> OnDelete { get; set; }
+
+    private static string ApprovalText(ApprovalStatus status) => status switch
+    {
+        ApprovalStatus.Pending => "等待主管審核",
+        ApprovalStatus.ApprovedPendingCommit => "已核准，歸檔中",
+        ApprovalStatus.CommitFailed => "歸檔失敗，等待重試",
+        ApprovalStatus.Rejected => "已退回",
+        _ => "已核准"
+    };
+
+    private static string ArchiveText(string status) => status switch
+    {
+        FileArchiveStatuses.Archived => "正式入庫完成",
+        FileArchiveStatuses.Failed => "正式入庫失敗",
+        FileArchiveStatuses.Pending => "核准後歸檔中",
+        _ => "尚未完成"
+    };
+
+    private static string KmText(VendorFileDto file)
+    {
+        if (!file.HasKmSchedule) return "未建立 KM 排程";
+        if (!file.KmEnabled && file.KmStatus == nameof(KmIntegrationStatus.Pending)) return "KM 尚未啟用";
+        return file.KmStatus switch
+        {
+            nameof(KmIntegrationStatus.Pending) => "等待 KM 通知",
+            nameof(KmIntegrationStatus.Dispatching) => "KM 派送中",
+            nameof(KmIntegrationStatus.Sent) => "KM 已接收",
+            nameof(KmIntegrationStatus.Processing) => "KM 分析中",
+            nameof(KmIntegrationStatus.Completed) => "KM 分析完成",
+            nameof(KmIntegrationStatus.Failed) => "KM 失敗",
+            _ => "等待 KM 通知"
+        };
+    }
+
+    private static string FormatSize(long size) => size >= 1024 * 1024
+        ? $"{size / 1024d / 1024d:0.##} MB"
+        : size >= 1024 ? $"{size / 1024d:0.##} KB" : $"{size} B";
+}
