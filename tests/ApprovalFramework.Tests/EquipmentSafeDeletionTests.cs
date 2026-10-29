@@ -1,5 +1,8 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Runtime.Versioning;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
@@ -221,6 +224,8 @@ public sealed class EquipmentSafeDeletionTests
                 Assert.False(requested.Completed);
                 Assert.Equal(EquipmentFileDeletionStatuses.CleanupFailed,
                     (await db.EquipmentFileDeletionJobs.SingleAsync()).Status);
+                Assert.Equal("FILE_IO_FAILED",
+                    (await db.EquipmentFileDeletionJobs.SingleAsync()).LastErrorCode);
                 Assert.True(await db.Apparatuses.AnyAsync(x => x.Id == "EQ-RETRY"));
             }
 
@@ -230,6 +235,150 @@ public sealed class EquipmentSafeDeletionTests
             Assert.False(await verify.Apparatuses.AnyAsync(x => x.Id == "EQ-RETRY"));
             Assert.Equal(EquipmentDeletionStatuses.Completed,
                 (await verify.EquipmentDeletionJobs.SingleAsync()).Status);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    [SupportedOSPlatform("windows")]
+    public async Task ReadExecuteOnlyDirectoryIsAccessDeniedAndRetryCompletesAfterAclRestore()
+    {
+        if (!OperatingSystem.IsWindows()) return;
+
+        var factory = new Factory();
+        var root = NewRoot();
+        DirectorySecurity? originalAcl = null;
+        SecurityIdentifier? currentSid = null;
+        string? folder = null;
+        string? filePath = null;
+        try
+        {
+            await SeedStorageAsync(factory, root);
+            var fileId = await SeedEquipmentFileAsync(factory, root, "EQ-ACL", "restricted.pdf", false, false);
+            await using (var db = factory.CreateDbContext())
+                folder = await db.ApparatusFiles.Where(x => x.Id == fileId)
+                    .Select(x => x.FilePath).SingleAsync();
+
+            var directory = new DirectoryInfo(folder);
+            originalAcl = directory.GetAccessControl(AccessControlSections.All);
+            filePath = Path.Combine(folder, "restricted.pdf");
+            currentSid = WindowsIdentity.GetCurrent().User
+                ?? throw new InvalidOperationException("Windows test identity has no SID.");
+            var restrictedAcl = new DirectorySecurity();
+            restrictedAcl.SetOwner(currentSid);
+            restrictedAcl.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+            restrictedAcl.AddAccessRule(new FileSystemAccessRule(currentSid,
+                FileSystemRights.ReadAndExecute | FileSystemRights.ReadPermissions |
+                FileSystemRights.ChangePermissions | FileSystemRights.TakeOwnership,
+                InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+                PropagationFlags.None, AccessControlType.Allow));
+            directory.SetAccessControl(restrictedAcl);
+
+            await using (var denied = factory.CreateDbContext())
+            {
+                var requested = await Service(denied).RequestAsync("EQ-ACL", "writer");
+                Assert.False(requested.Completed);
+                var job = await denied.EquipmentFileDeletionJobs.SingleAsync();
+                Assert.Equal(EquipmentFileDeletionStatuses.CleanupFailed, job.Status);
+                Assert.Equal("FILE_ACCESS_DENIED", job.LastErrorCode);
+                Assert.Equal("檔案存取遭拒。", job.LastErrorMessage);
+                Assert.True(await denied.Apparatuses.AnyAsync(x => x.Id == "EQ-ACL"));
+                Assert.True(await denied.ApparatusFiles.AnyAsync(x => x.Id == fileId));
+                Assert.True(File.Exists(Path.Combine(folder, "restricted.pdf")));
+            }
+
+            directory.SetAccessControl(originalAcl);
+            originalAcl = null;
+            GrantDirectoryCleanupRights(folder, currentSid);
+            GrantFileCleanupRights(filePath, currentSid);
+
+            await using (var retry = factory.CreateDbContext())
+                Assert.Equal(1, await Service(retry).ProcessPendingAsync());
+            await using var verify = factory.CreateDbContext();
+            Assert.False(await verify.Apparatuses.AnyAsync(x => x.Id == "EQ-ACL"));
+            Assert.Single(await verify.EquipmentFileDeletionJobs.ToListAsync());
+            Assert.Equal(EquipmentDeletionStatuses.Completed,
+                (await verify.EquipmentDeletionJobs.SingleAsync()).Status);
+        }
+        finally
+        {
+            if (originalAcl is not null && folder is not null && Directory.Exists(folder))
+                new DirectoryInfo(folder).SetAccessControl(originalAcl);
+            if (currentSid is not null && folder is not null && Directory.Exists(folder))
+                GrantDirectoryCleanupRights(folder, currentSid);
+            if (currentSid is not null && filePath is not null && File.Exists(filePath))
+                GrantFileCleanupRights(filePath, currentSid);
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void GrantDirectoryCleanupRights(string path, SecurityIdentifier sid)
+    {
+        var directory = new DirectoryInfo(path);
+        var acl = directory.GetAccessControl(AccessControlSections.Access);
+        acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.Modify,
+            InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit,
+            PropagationFlags.None, AccessControlType.Allow));
+        directory.SetAccessControl(acl);
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static void GrantFileCleanupRights(string path, SecurityIdentifier sid)
+    {
+        var acl = new FileSecurity();
+        acl.SetOwner(sid);
+        acl.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);
+        acl.AddAccessRule(new FileSystemAccessRule(sid, FileSystemRights.Modify,
+            AccessControlType.Allow));
+        new FileInfo(path).SetAccessControl(acl);
+    }
+
+    [Fact]
+    public async Task PartialLocalCleanupFailureRetriesWithoutDeletingAnotherEquipment()
+    {
+        var factory = new Factory();
+        var root = NewRoot();
+        try
+        {
+            await SeedStorageAsync(factory, root);
+            var blockedId = await SeedEquipmentFileAsync(factory, root, "EQ-PARTIAL", "blocked.pdf", false, false);
+            var completedId = await SeedEquipmentFileAsync(factory, root, "EQ-PARTIAL", "completed.pdf", false, false);
+            var otherId = await SeedEquipmentFileAsync(factory, root, "EQ-OTHER", "keep.pdf", false, false);
+            string blockedPath;
+            await using (var db = factory.CreateDbContext())
+                blockedPath = await db.ApparatusFiles.Where(x => x.Id == blockedId)
+                    .Select(x => Path.Combine(x.FilePath, x.FileName)).SingleAsync();
+
+            using (File.Open(blockedPath, FileMode.Open, FileAccess.Read, FileShare.None))
+            {
+                await using var db = factory.CreateDbContext();
+                var requested = await Service(db).RequestAsync("EQ-PARTIAL", "writer");
+                Assert.False(requested.Completed);
+            }
+
+            await using (var waiting = factory.CreateDbContext())
+            {
+                Assert.True(await waiting.ApparatusFiles.AnyAsync(x => x.Id == blockedId));
+                Assert.False(await waiting.ApparatusFiles.AnyAsync(x => x.Id == completedId));
+                Assert.True(await waiting.ApparatusFiles.AnyAsync(x => x.Id == otherId));
+                Assert.Equal(EquipmentFileDeletionStatuses.CleanupFailed,
+                    (await waiting.EquipmentFileDeletionJobs.SingleAsync(x =>
+                        x.ApparatusFileId == blockedId)).Status);
+                Assert.Equal(EquipmentFileDeletionStatuses.Completed,
+                    (await waiting.EquipmentFileDeletionJobs.SingleAsync(x =>
+                        x.ApparatusFileId == completedId)).Status);
+            }
+
+            await using (var retry = factory.CreateDbContext())
+                Assert.Equal(1, await Service(retry).ProcessPendingAsync());
+
+            await using var verify = factory.CreateDbContext();
+            Assert.False(await verify.Apparatuses.AnyAsync(x => x.Id == "EQ-PARTIAL"));
+            Assert.True(await verify.Apparatuses.AnyAsync(x => x.Id == "EQ-OTHER"));
+            Assert.True(await verify.ApparatusFiles.AnyAsync(x => x.Id == otherId));
+            Assert.True(File.Exists(await verify.ApparatusFiles.Where(x => x.Id == otherId)
+                .Select(x => Path.Combine(x.FilePath, x.FileName)).SingleAsync()));
         }
         finally { Directory.Delete(root, true); }
     }

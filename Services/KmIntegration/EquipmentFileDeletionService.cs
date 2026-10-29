@@ -8,7 +8,9 @@ namespace SIT.DepartmentSystem.Web.Services.KmIntegration;
 public sealed record EquipmentFileDeletionRequestResult(Guid RequestId, string Status,
     bool CompletedLocally);
 
-public sealed class EquipmentFileDeletionService(AppDbContext db)
+public sealed class EquipmentFileDeletionService(
+    AppDbContext db,
+    ILogger<EquipmentFileDeletionService>? logger = null)
 {
     public async Task<EquipmentFileDeletionRequestResult?> RequestAsync(Guid fileId, string actor,
         CancellationToken cancellationToken = default)
@@ -106,17 +108,22 @@ public sealed class EquipmentFileDeletionService(AppDbContext db)
         var fullPath = Path.Combine(file.FilePath, file.FileName);
         var quarantinePath = fullPath + ".csit-delete-" + job.Id.ToString("N");
         var moved = false;
+        var transactionCompleted = false;
+        var operation = "BeginLocalCleanup";
         try
         {
             job.BeginLocalCleanup(DateTime.UtcNow);
             if (File.Exists(fullPath))
             {
+                operation = "DeleteExistingQuarantine";
                 if (File.Exists(quarantinePath)) File.Delete(quarantinePath);
+                operation = "MoveSourceToQuarantine";
                 File.Move(fullPath, quarantinePath);
                 moved = true;
             }
             else if (File.Exists(quarantinePath)) moved = true;
 
+            operation = "PersistLocalCleanup";
             var outboxes = await db.KmIntegrationOutbox.Where(x =>
                 x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
@@ -126,19 +133,46 @@ public sealed class EquipmentFileDeletionService(AppDbContext db)
             job.MarkLocalCleanupCompleted(moved || !File.Exists(fullPath), DateTime.UtcNow);
             await db.SaveChangesAsync(cancellationToken);
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+            transactionCompleted = true;
+            operation = "DeleteQuarantine";
             if (File.Exists(quarantinePath)) File.Delete(quarantinePath);
             return true;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or DbUpdateException)
         {
-            if (transaction is not null) await transaction.RollbackAsync(cancellationToken);
-            if (moved && File.Exists(quarantinePath) && !File.Exists(fullPath))
-                File.Move(quarantinePath, fullPath);
+            logger?.LogError(ex,
+                "Equipment file local cleanup failed Operation={Operation} EquipmentId={EquipmentId} ApparatusFileId={ApparatusFileId} DeletionJobId={DeletionJobId} SourcePath={SourcePath} QuarantinePath={QuarantinePath}",
+                operation, job.EquipmentId, job.ApparatusFileId, job.Id, fullPath, quarantinePath);
+            if (!transactionCompleted && transaction is not null)
+                await transaction.RollbackAsync(CancellationToken.None);
+            if (!transactionCompleted && moved && File.Exists(quarantinePath) && !File.Exists(fullPath))
+            {
+                try { File.Move(quarantinePath, fullPath); }
+                catch (Exception restoreEx) when (restoreEx is IOException or UnauthorizedAccessException)
+                {
+                    logger?.LogCritical(restoreEx,
+                        "Equipment file cleanup rollback could not restore quarantine EquipmentId={EquipmentId} ApparatusFileId={ApparatusFileId} DeletionJobId={DeletionJobId} SourcePath={SourcePath} QuarantinePath={QuarantinePath}",
+                        job.EquipmentId, job.ApparatusFileId, job.Id, fullPath, quarantinePath);
+                }
+            }
+            if (transactionCompleted)
+            {
+                // The source has already been removed from its live path and the database commit
+                // succeeded. Do not move a completed job backwards if final quarantine disposal
+                // is denied; retain the server-side path in the structured log for operations.
+                return true;
+            }
             db.ChangeTracker.Clear();
             var failed = await db.EquipmentFileDeletionJobs.SingleAsync(x => x.Id == jobId,
                 cancellationToken);
             failed.BeginLocalCleanup(DateTime.UtcNow);
-            failed.MarkCleanupFailed("LOCAL_CLEANUP_FAILED", ex.Message, DateTime.UtcNow);
+            failed.MarkCleanupFailed(
+                ex is UnauthorizedAccessException ? "FILE_ACCESS_DENIED" :
+                ex is IOException ? "FILE_IO_FAILED" : "LOCAL_DB_CLEANUP_FAILED",
+                ex is UnauthorizedAccessException ? "檔案存取遭拒。" :
+                ex is IOException ? "本地檔案清理失敗，等待安全重試。" :
+                "本地清理資料更新失敗，等待安全重試。",
+                DateTime.UtcNow);
             await db.SaveChangesAsync(cancellationToken);
             return false;
         }

@@ -47,6 +47,9 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.DoesNotContain("既有檔案", files);
         Assert.Contains("歷史附件，入庫狀態待確認", files);
         Assert.Contains("attachment-status", files);
+        Assert.Contains("<th>KM 分析</th><th>本地刪除狀態</th>", files);
+        Assert.Contains("LocalDeletionText(file)", files);
+        Assert.DoesNotContain("file.DeletionError ?? file.KmError", files);
         Assert.Contains(".attachment-status.completed", fileCss);
         Assert.Contains("background:rgba(16,185,129,.16)", fileCss);
     }

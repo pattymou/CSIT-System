@@ -55,7 +55,7 @@
                     _deletePreview.DeletionStatus != EquipmentDeletionStatuses.Completed)
                 {
                     <button type="button" class="primary-btn" disabled="@_deleteWorking"
-                            @onclick="RefreshDeletionAsync">重新檢查狀態</button>
+                            @onclick="RefreshDeletionAsync">重新整理狀態</button>
                 }
                 else if (_deletePreview.CanStart)
                 {

@@ -156,6 +156,7 @@ public class ApparatusFileDto
     public string? MetadataVerificationStatus { get; set; }
     public Guid? DeletionRequestId { get; set; }
     public string? DeletionStatus { get; set; }
+    public string? DeletionErrorCode { get; set; }
     public string? DeletionError { get; set; }
     public bool CanDelete { get; set; }
     public bool IsFormalArchiveVerified { get; set; }

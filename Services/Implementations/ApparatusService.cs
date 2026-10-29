@@ -1040,6 +1040,7 @@ public class ApparatusService : IApparatusService
             MetadataVerificationStatus = x.MetadataVerificationStatus,
             DeletionRequestId = deletion?.Id,
             DeletionStatus = deletion?.Status,
+            DeletionErrorCode = deletion?.LastErrorCode,
             DeletionError = deletion?.LastErrorMessage ?? deletion?.LastErrorCode,
             CanDelete = deletion is null ||
                 deletion.Status == EquipmentFileDeletionStatuses.CleanupFailed,
