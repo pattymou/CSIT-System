@@ -240,10 +240,15 @@ public sealed class KmDeletionBackgroundService(
             TimeSpan.FromSeconds(Math.Max(1, integration.Value.PollSeconds)));
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            if (!deletion.Value.Enabled) continue;
             try
             {
                 using var scope = scopes.CreateScope();
+                var completed = await scope.ServiceProvider
+                    .GetRequiredService<EquipmentDeletionService>()
+                    .ProcessPendingAsync(cancellationToken: stoppingToken);
+                if (completed > 0)
+                    logger.LogInformation("Equipment deletion jobs completed Count={Count}.", completed);
+                if (!deletion.Value.Enabled) continue;
                 var accepted = await scope.ServiceProvider
                     .GetRequiredService<KmDeletionDispatchService>()
                     .ProcessBatchAsync(cancellationToken: stoppingToken);

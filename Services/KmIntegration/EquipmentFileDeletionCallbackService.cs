@@ -17,6 +17,7 @@ public sealed class EquipmentFileDeletionCallbackService(IDbContextFactory<AppDb
         var payloadHash = Convert.ToHexString(SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(
             callback, new JsonSerializerOptions(JsonSerializerDefaults.Web))));
         var shouldCleanup = false;
+        string? equipmentId = null;
         await using (var db = await dbFactory.CreateDbContextAsync(cancellationToken))
         {
             await using var transaction = db.Database.IsRelational()
@@ -29,6 +30,7 @@ public sealed class EquipmentFileDeletionCallbackService(IDbContextFactory<AppDb
                 : await db.EquipmentFileDeletionJobs.SingleOrDefaultAsync(
                     x => x.Id == callback.DeletionRequestId, cancellationToken);
             if (job is null) return KmDeletionCallbackOutcome.NotFound;
+            equipmentId = job.EquipmentId;
             if (job.Resource != callback.Resource ||
                 !string.Equals(job.KmDeletionJobId, callback.KmDeletionJobId,
                     StringComparison.Ordinal)) return KmDeletionCallbackOutcome.Conflict;
@@ -66,6 +68,10 @@ public sealed class EquipmentFileDeletionCallbackService(IDbContextFactory<AppDb
             await using var cleanupDb = await dbFactory.CreateDbContextAsync(cancellationToken);
             await new EquipmentFileDeletionService(cleanupDb)
                 .TryCompleteLocalCleanupAsync(callback.DeletionRequestId, cancellationToken);
+            if (equipmentId is not null)
+                await new EquipmentDeletionService(cleanupDb,
+                        new EquipmentFileDeletionService(cleanupDb), new ManagedAssetFileStorage(cleanupDb))
+                    .TryAdvanceByEquipmentIdAsync(equipmentId, cancellationToken);
         }
         return KmDeletionCallbackOutcome.Accepted;
     }

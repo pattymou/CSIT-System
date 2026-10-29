@@ -3,6 +3,7 @@
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode @(new InteractiveServerRenderMode(prerender: false))
 @using SIT.DepartmentSystem.Web.Services.Interfaces
+@using SIT.DepartmentSystem.Web.Entities
 @inject BrowserApiClient Api
 @inject NavigationManager Nav
 @inject IMenuManagementService MenuService
@@ -12,6 +13,58 @@
 @if (!string.IsNullOrWhiteSpace(_message))
 {
     <div class="form-card error-text">@_message</div>
+}
+
+@if (_showDeleteDialog && _deletePreview is not null)
+{
+    <div class="equipment-delete-backdrop" @onclick="CloseDeleteDialog">
+        <section class="equipment-delete-dialog" role="dialog" aria-modal="true"
+                 aria-labelledby="equipment-delete-title" @onclick:stopPropagation>
+            <h2 id="equipment-delete-title">@DeleteDialogTitle</h2>
+            <dl>
+                <div><dt>設備名稱</dt><dd>@_deletePreview.EquipmentName</dd></div>
+                <div><dt>財產編號</dt><dd>@Display(_deletePreview.ProductsId)</dd></div>
+                <div><dt>附件數量</dt><dd>@_deletePreview.AttachmentCount</dd></div>
+            </dl>
+            @if (_deletePreview.BlockingReasons.Count > 0)
+            {
+                <div class="equipment-delete-blockers" role="alert">
+                    @foreach (var reason in _deletePreview.BlockingReasons)
+                    {
+                        <p>@reason</p>
+                    }
+                </div>
+            }
+            else if (_deletePreview.DeletionJobId.HasValue)
+            {
+                <p class="equipment-delete-waiting">@DeletionStatusText(_deletePreview.DeletionStatus)</p>
+                @if (!string.IsNullOrWhiteSpace(_deletePreview.DeletionError))
+                {
+                    <p class="error-text">@_deletePreview.DeletionError</p>
+                }
+                <p>KM 尚未確認前，正式附件與設備主檔會保留；所有附件完成安全清理後才會刪除主檔。</p>
+            }
+            else
+            {
+                <p>清理範圍包含設備照片、附件、尚未派送的 KM 排程，以及此設備專屬的正式目錄。</p>
+                <p>已送達 KM 或無法證明未送達的附件，會等待 KM 完整刪除確認；等待期間設備主檔不會被標示為已刪除。</p>
+            }
+            <div class="equipment-delete-actions">
+                <button type="button" class="btn-secondary" @onclick="CloseDeleteDialog">關閉</button>
+                @if (_deletePreview.DeletionJobId.HasValue &&
+                    _deletePreview.DeletionStatus != EquipmentDeletionStatuses.Completed)
+                {
+                    <button type="button" class="primary-btn" disabled="@_deleteWorking"
+                            @onclick="RefreshDeletionAsync">重新檢查狀態</button>
+                }
+                else if (_deletePreview.CanStart)
+                {
+                    <button type="button" class="table-chip-btn danger" disabled="@_deleteWorking"
+                            @onclick="ConfirmDeleteAsync">@(_deleteWorking ? "建立刪除任務中..." : "確認刪除")</button>
+                }
+            </div>
+        </section>
+    </div>
 }
 
 @if (_item == null)
@@ -184,6 +237,12 @@ else
     private ApparatusDetailDto? _item;
     private string? _message;
     private bool _reloadRequested;
+    private EquipmentDeletionPreviewDto? _deletePreview;
+    private bool _showDeleteDialog;
+    private bool _deleteWorking;
+    private string DeleteDialogTitle => _deletePreview?.BlockingReasons.Count > 0
+        ? "無法刪除此設備"
+        : _deletePreview?.DeletionJobId.HasValue == true ? "設備刪除進度" : "確認刪除設備";
 
     // ⭐ 新增：頁面標題
     private string PageTitle = "";
@@ -265,17 +324,76 @@ else
 
     private async Task DeleteAsync()
     {
-        var response = await Api.DeleteAsync(
-            $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(Id)}");
-
-        if (response.IsSuccessStatusCode)
+        if (!IsEquipment)
         {
-            Nav.NavigateTo($"/assets/{EffectiveModuleCode}");
+            var response = await Api.DeleteAsync(
+                $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(Id)}");
+            if (response.IsSuccessStatusCode)
+            {
+                Nav.NavigateTo($"/assets/{EffectiveModuleCode}");
+                return;
+            }
+            _message = $"刪除失敗：{response.StatusCode} {response.Body}";
             return;
         }
-
-        _message = $"刪除失敗：{response.StatusCode} {response.Body}";
+        try
+        {
+            _deletePreview = await Api.GetAsync<EquipmentDeletionPreviewDto>(
+                $"/api/assets/equipment/{Uri.EscapeDataString(Id)}/deletion-preview");
+            _showDeleteDialog = true;
+        }
+        catch (Exception ex)
+        {
+            _message = $"無法取得刪除預覽：{ex.Message}";
+        }
     }
+
+    private async Task ConfirmDeleteAsync()
+    {
+        if (_deletePreview?.CanStart != true || _deleteWorking) return;
+        _deleteWorking = true;
+        try
+        {
+            var response = await Api.PostJsonAsync(
+                $"/api/assets/equipment/{Uri.EscapeDataString(Id)}/deletion", new { });
+            if (!response.IsSuccessStatusCode)
+            {
+                await RefreshDeletionAsync();
+                _message = $"刪除任務未建立：{response.StatusCode} {response.Body}";
+                return;
+            }
+            await RefreshDeletionAsync();
+            if (_deletePreview?.DeletionStatus == EquipmentDeletionStatuses.Completed)
+                Nav.NavigateTo($"/assets/{EffectiveModuleCode}");
+        }
+        finally { _deleteWorking = false; }
+    }
+
+    private async Task RefreshDeletionAsync()
+    {
+        _deleteWorking = true;
+        try
+        {
+            _deletePreview = await Api.GetAsync<EquipmentDeletionPreviewDto>(
+                $"/api/assets/equipment/{Uri.EscapeDataString(Id)}/deletion-preview");
+            if (_deletePreview.DeletionStatus == EquipmentDeletionStatuses.Completed)
+                Nav.NavigateTo($"/assets/{EffectiveModuleCode}");
+        }
+        catch (Exception ex) { _message = $"無法更新刪除狀態：{ex.Message}"; }
+        finally { _deleteWorking = false; }
+    }
+
+    private void CloseDeleteDialog() => _showDeleteDialog = false;
+
+    private static string DeletionStatusText(string? status) => status switch
+    {
+        EquipmentDeletionStatuses.WaitingForFiles => "正在等待附件完成安全刪除或 KM 刪除確認，設備主檔仍保留。",
+        EquipmentDeletionStatuses.Finalizing => "附件已完成清理，正在進行設備主檔與專屬目錄的最終清理。",
+        EquipmentDeletionStatuses.CleanupFailed => "最終清理暫時失敗，系統會保留狀態並重試。",
+        EquipmentDeletionStatuses.Blocked => "最終檢查發現刪除限制，設備主檔未刪除。",
+        EquipmentDeletionStatuses.Completed => "設備與專屬資料已完成安全刪除。",
+        _ => "設備刪除任務處理中，設備主檔尚未刪除。"
+    };
 
     private static string Display(string? value)
     {
@@ -315,4 +433,14 @@ else
     .equipment-photo-gallery a:hover,.equipment-photo-gallery a:focus-visible { border-color:rgba(34,211,238,.5); background:rgba(34,211,238,.07); }
     .equipment-photo-gallery img { width:100%; height:150px; object-fit:cover; border-radius:7px; background:#0f172a; }
     .equipment-photo-gallery span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:.82rem; }
+    .equipment-delete-backdrop { position:fixed; inset:0; z-index:1200; display:grid; place-items:center; padding:1rem; background:rgba(2,6,23,.72); }
+    .equipment-delete-dialog { width:min(620px,100%); max-height:90vh; overflow:auto; padding:1.25rem; border-radius:14px; background:var(--panel-bg,#111827); border:1px solid rgba(148,163,184,.3); box-shadow:0 24px 70px rgba(0,0,0,.45); }
+    .equipment-delete-dialog dl { display:grid; gap:.5rem; margin:1rem 0; }
+    .equipment-delete-dialog dl div { display:grid; grid-template-columns:110px 1fr; gap:.75rem; }
+    .equipment-delete-dialog dt { color:var(--text-muted,#94a3b8); }
+    .equipment-delete-dialog dd { margin:0; font-weight:700; }
+    .equipment-delete-blockers { padding:.75rem 1rem; border:1px solid rgba(248,113,113,.45); border-radius:10px; background:rgba(127,29,29,.2); }
+    .equipment-delete-blockers p { margin:.35rem 0; }
+    .equipment-delete-waiting { font-weight:700; color:#fbbf24; }
+    .equipment-delete-actions { display:flex; justify-content:flex-end; gap:.75rem; margin-top:1.25rem; }
 </style>

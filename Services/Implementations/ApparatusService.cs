@@ -48,7 +48,8 @@ public class ApparatusService : IApparatusService
         for (var i = 0; i < 10; i++)
         {
             var id = "A" + DateTime.UtcNow.ToString("yyyyMMddHHmmssfff") + RandomNumberGenerator.GetInt32(1000, 9999);
-            var exists = await _db.Apparatuses.AnyAsync(x => x.Id == id);
+            var exists = await _db.Apparatuses.AnyAsync(x => x.Id == id) ||
+                await _db.EquipmentDeletionJobs.AnyAsync(x => x.EquipmentId == id);
 
             if (!exists)
             {
@@ -57,7 +58,12 @@ public class ApparatusService : IApparatusService
             }
         }
 
-        var fallbackId = "A" + Guid.NewGuid().ToString("N")[..20].ToUpperInvariant();
+        string fallbackId;
+        do
+        {
+            fallbackId = "A" + Guid.NewGuid().ToString("N")[..20].ToUpperInvariant();
+        } while (await _db.Apparatuses.AnyAsync(x => x.Id == fallbackId) ||
+                 await _db.EquipmentDeletionJobs.AnyAsync(x => x.EquipmentId == fallbackId));
         Console.WriteLine($"[ApparatusService] Generate fallback id: {fallbackId}");
         return fallbackId;
     }
@@ -258,6 +264,8 @@ public class ApparatusService : IApparatusService
         {
             throw new InvalidOperationException($"資產 ID 已存在：{id}。請重新整理頁面後再新增。");
         }
+        if (await _db.EquipmentDeletionJobs.AsNoTracking().AnyAsync(x => x.EquipmentId == id))
+            throw new InvalidOperationException("此設備 ID 已有永久刪除稽核紀錄，不可重複使用。");
 
         var entity = new Apparatus
         {
@@ -392,6 +400,13 @@ public class ApparatusService : IApparatusService
     public async Task<bool> DeleteAsync(string moduleCode, string id)
     {
         moduleCode = NormalizeModuleCode(moduleCode);
+
+        if (moduleCode == "equipment")
+        {
+            var result = await new EquipmentDeletionService(_db, _fileDeletion, _managedStorage)
+                .RequestAsync(id, "SYSTEM");
+            return result.Completed;
+        }
 
         await using var transaction = await _db.Database.BeginTransactionAsync();
         await _db.Database.ExecuteSqlInterpolatedAsync(

@@ -722,6 +722,94 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         });
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentDeletionJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("AttachmentCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("attachment_count");
+
+                    b.Property<int>("CleanupAttemptCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("cleanup_attempt_count");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTime?>("DbRecordDeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("db_record_deleted_at");
+
+                    b.Property<string>("EquipmentId")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("equipment_id");
+
+                    b.Property<string>("EquipmentName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)")
+                        .HasColumnName("equipment_name");
+
+                    b.Property<string>("LastErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("last_error_code");
+
+                    b.Property<string>("LastErrorMessage")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("last_error_message");
+
+                    b.Property<string>("ProductsId")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("products_id");
+
+                    b.Property<DateTime>("RequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("requested_at");
+
+                    b.Property<string>("RequestedBy")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("requested_by");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("StorageFolderName")
+                        .HasMaxLength(240)
+                        .HasColumnType("character varying(240)")
+                        .HasColumnName("storage_folder_name");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EquipmentId")
+                        .IsUnique();
+
+                    b.HasIndex("Status", "UpdatedAt");
+
+                    b.ToTable("equipment_deletion_jobs", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_equipment_deletion_status", "status IN ('WaitingForFiles','Finalizing','CleanupFailed','Blocked','Completed')");
+                        });
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentFileDeletionCallbackReceipt", b =>
                 {
                     b.Property<Guid>("CallbackId")

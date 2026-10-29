@@ -16,13 +16,15 @@ public class ApparatusController : ControllerBase
     private readonly IApparatusService _service;
     private readonly IEnvironmentGroupDeviceService _environmentGroupDevices;
     private readonly AssetApprovalUploadService _approvalUpload;
+    private readonly EquipmentDeletionService _equipmentDeletion;
 
     public ApparatusController(IApparatusService service, IEnvironmentGroupDeviceService environmentGroupDevices,
-        AssetApprovalUploadService approvalUpload)
+        AssetApprovalUploadService approvalUpload, EquipmentDeletionService equipmentDeletion)
     {
         _service = service;
         _environmentGroupDevices = environmentGroupDevices;
         _approvalUpload = approvalUpload;
+        _equipmentDeletion = equipmentDeletion;
     }
 
     [HttpGet("api/assets/ownership-options")]
@@ -161,12 +163,51 @@ public class ApparatusController : ControllerBase
 
         try
         {
+            if (string.Equals(moduleCode, "equipment", StringComparison.OrdinalIgnoreCase))
+            {
+                var actor = User.FindFirstValue("account") ?? User.Identity?.Name ?? "SYSTEM";
+                var result = await _equipmentDeletion.RequestAsync(id, actor, HttpContext.RequestAborted);
+                return result.Completed ? NoContent() : Accepted(result);
+            }
             var ok = await _service.DeleteAsync(moduleCode, id);
             return ok ? NoContent() : NotFound("找不到資料");
         }
         catch (InvalidOperationException ex)
         {
             return Conflict(ex.Message);
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
+        }
+    }
+
+    [HttpGet("api/assets/equipment/{id}/deletion-preview")]
+    public async Task<IActionResult> GetEquipmentDeletionPreview(string id,
+        CancellationToken cancellationToken)
+    {
+        var preview = await _equipmentDeletion.GetPreviewAsync(id, cancellationToken);
+        return preview is null ? NotFound("找不到設備或刪除任務。") : Ok(preview);
+    }
+
+    [HttpPost("api/assets/equipment/{id}/deletion")]
+    [BusinessWrite]
+    public async Task<IActionResult> RequestEquipmentDeletion(string id,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var actor = User.FindFirstValue("account") ?? User.Identity?.Name ?? "SYSTEM";
+            var result = await _equipmentDeletion.RequestAsync(id, actor, cancellationToken);
+            return result.Completed ? Ok(result) : Accepted(result);
+        }
+        catch (EquipmentDeletionBlockedException ex)
+        {
+            return Conflict(new { reasons = ex.Reasons });
+        }
+        catch (KeyNotFoundException ex)
+        {
+            return NotFound(ex.Message);
         }
     }
 

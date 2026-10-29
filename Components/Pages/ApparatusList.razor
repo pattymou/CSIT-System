@@ -264,7 +264,11 @@
     {
         var response = await Api.DeleteAsync($"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(id)}");
 
-        if (response.IsSuccessStatusCode)
+        if (response.StatusCode == StatusCodes.Status202Accepted)
+        {
+            _message = "設備刪除已建立，正在等待附件與 KM 清理確認；設備主檔尚未刪除。";
+        }
+        else if (response.IsSuccessStatusCode)
         {
             _items.RemoveAll(x => x.Id == id);
             _message = "刪除成功。";

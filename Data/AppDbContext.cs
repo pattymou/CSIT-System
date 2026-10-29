@@ -7,6 +7,7 @@ namespace SIT.DepartmentSystem.Web.Data;
 public class AppDbContext : DbContext
 {
     internal Guid? CaseDeletionCleanupJobId { get; set; }
+    internal Guid? EquipmentDeletionCleanupJobId { get; set; }
     public AppDbContext(DbContextOptions<AppDbContext> options) : base(options) { }
 
     public DbSet<ModuleEntity> Modules => Set<ModuleEntity>();
@@ -49,6 +50,7 @@ public class AppDbContext : DbContext
     public DbSet<VerificationCaseDeletionCallbackReceipt> VerificationCaseDeletionCallbacks => Set<VerificationCaseDeletionCallbackReceipt>();
     public DbSet<EquipmentFileDeletionJob> EquipmentFileDeletionJobs => Set<EquipmentFileDeletionJob>();
     public DbSet<EquipmentFileDeletionCallbackReceipt> EquipmentFileDeletionCallbacks => Set<EquipmentFileDeletionCallbackReceipt>();
+    public DbSet<EquipmentDeletionJob> EquipmentDeletionJobs => Set<EquipmentDeletionJob>();
     public DbSet<ValidationFormTemplate> ValidationFormTemplates => Set<ValidationFormTemplate>();
     public DbSet<ValidationFormTemplateVersion> ValidationFormTemplateVersions => Set<ValidationFormTemplateVersion>();
     public DbSet<ValidationProductType> ValidationProductTypes => Set<ValidationProductType>();
@@ -83,14 +85,23 @@ public class AppDbContext : DbContext
     private async Task<int> SaveChangesGuardedAsync(bool acceptAllChangesOnSuccess,
         CancellationToken cancellationToken)
     {
+        var equipmentIds = EquipmentDeletionWriteGuard.AffectedEquipment(this);
         var recordIds = await VerificationCaseDeletionWriteGuard.AffectedRecordsAsync(this, cancellationToken);
-        if (recordIds.Count == 0)
+        if (recordIds.Count == 0 && equipmentIds.Count == 0)
             return await base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
 
         var ownsTransaction = Database.CurrentTransaction is null && Database.IsRelational();
         await using var transaction = ownsTransaction
             ? await Database.BeginTransactionAsync(System.Data.IsolationLevel.ReadCommitted, cancellationToken)
             : null;
+        foreach (var equipmentId in equipmentIds.Order())
+        {
+            await EquipmentDeletionWriteGuard.LockAsync(this, equipmentId, cancellationToken);
+            if (await EquipmentDeletionJobs.AsNoTracking().AnyAsync(x =>
+                x.EquipmentId == equipmentId && x.Status != EquipmentDeletionStatuses.Completed,
+                cancellationToken))
+                throw new InvalidOperationException("此設備正在執行刪除，暫停新增或修改相關資料。");
+        }
         foreach (var recordId in recordIds.Order())
         {
             await VerificationCaseDeletionWriteGuard.LockRecordAsync(this, recordId, cancellationToken);
@@ -127,6 +138,7 @@ public class AppDbContext : DbContext
         modelBuilder.ConfigureKmIntegration();
         modelBuilder.ConfigureVerificationCaseDeletion();
         modelBuilder.ConfigureEquipmentFileDeletion();
+        modelBuilder.ConfigureEquipmentDeletion();
         modelBuilder.ConfigureValidationRequests();
 
         modelBuilder.Entity<DocumentFolder>(entity =>

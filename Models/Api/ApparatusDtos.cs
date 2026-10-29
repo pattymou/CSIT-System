@@ -188,3 +188,23 @@ public sealed class ApparatusCustodianOptionDto
     public string Department { get; set; } = string.Empty;
     public string TeamCode { get; set; } = string.Empty;
 }
+
+public sealed class EquipmentDeletionPreviewDto
+{
+    public bool Exists { get; set; }
+    public string EquipmentId { get; set; } = string.Empty;
+    public string EquipmentName { get; set; } = string.Empty;
+    public string? ProductsId { get; set; }
+    public int AttachmentCount { get; set; }
+    public bool HasReservationHistory { get; set; }
+    public bool HasEnvironmentGroupMembership { get; set; }
+    public List<string> BlockingReasons { get; set; } = [];
+    public Guid? DeletionJobId { get; set; }
+    public string? DeletionStatus { get; set; }
+    public string? DeletionError { get; set; }
+    public bool CanStart => Exists && BlockingReasons.Count == 0 && DeletionJobId is null;
+    public bool IsWaiting => DeletionJobId.HasValue && DeletionStatus != EquipmentDeletionStatuses.Completed;
+}
+
+public sealed record EquipmentDeletionRequestResult(Guid RequestId, string Status,
+    bool Completed, int AttachmentCount);
