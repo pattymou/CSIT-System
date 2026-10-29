@@ -45,7 +45,7 @@ foreach ($restricted in @($automationRoot, $reviewRoot)) {
     if ($LASTEXITCODE -ne 0) { throw 'DEV restricted directory ACL update failed.' }
 }
 $names = @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevMigrationReview.ps1',
-    'Approve-DevMigrationReview.ps1')
+    'Approve-DevMigrationReview.ps1', 'Initialize-DevManagedAssetStorage.ps1')
 foreach ($name in $names) {
     $source = Join-Path $PSScriptRoot $name
     $target = Join-Path $automationRoot $name
