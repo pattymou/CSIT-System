@@ -274,7 +274,7 @@ public class ApparatusService : IApparatusService
             StorageFolderName = moduleCode == "equipment" && !string.IsNullOrWhiteSpace(request.ProductsId)
                 ? ManagedAssetFileStorage.SafeFolderName($"{request.Name.Trim()}_{request.ProductsId.Trim()}")
                 : null,
-            Brand = request.Brand,
+            Brand = moduleCode == "equipment" ? selectedVendor?.Name : request.Brand,
             Model = request.Model,
             Number = request.Number,
             ProcurementStaff = request.ProcurementStaff,
@@ -329,6 +329,14 @@ public class ApparatusService : IApparatusService
         var ownership = await ValidateOwnershipAsync(
             request,
             CancellationToken.None);
+        if (moduleCode == "equipment" &&
+            (entity.DepartmentOptionId != request.DepartmentOptionId ||
+             entity.OwnerTeamOptionId != ownership.OwnerTeamOptionId) &&
+            !request.ConfirmOwnershipChange)
+        {
+            throw new InvalidOperationException("設備部門或 Team 歸屬變更必須明確確認。");
+        }
+        var vendorChanged = moduleCode == "equipment" && entity.VendorId != request.VendorId;
         ApplyConcurrencyToken(entity, request.RowVersion);
 
         entity.ModuleCode = moduleCode;
@@ -340,7 +348,8 @@ public class ApparatusService : IApparatusService
         entity.Manufacturer = selectedVendor?.Name ?? request.Manufacturer;
         entity.ManufacturerNumber = request.ManufacturerNumber;
         if (moduleCode == "equipment") entity.VendorId = request.VendorId;
-        entity.Brand = request.Brand;
+        if (moduleCode != "equipment") entity.Brand = request.Brand;
+        else if (vendorChanged && selectedVendor is not null) entity.Brand = selectedVendor.Name;
         entity.Model = request.Model;
         entity.Number = request.Number;
         entity.ProcurementStaff = request.ProcurementStaff;

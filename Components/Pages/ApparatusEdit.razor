@@ -45,28 +45,52 @@
             <div class="form-row"><label>設備名稱 *</label><input @bind="_form.Name" /></div>
             <div class="form-row full-width equipment-brand-group">
                 <label>廠牌</label>
-                <div class="equipment-brand-fields">
-                    <div><span>既有廠牌文字（Brand）</span><input @bind="_form.Brand" /></div>
-                    <div><span>正式廠商主檔 *</span><select required @bind="_form.VendorId"><option value="">請選擇啟用中的廠商</option>@foreach (var vendor in _vendorOptions) { <option value="@vendor.Id">@vendor.Name@(!vendor.IsActive ? "（已停用，僅保留歷史關聯）" : "")</option> }</select></div>
-                </div>
-                <small>廠牌保留舊資料文字；正式廠商主檔用於設備關聯，系統不會自行比對或覆寫兩者。</small>
-                @if (_isEdit && !_form.VendorId.HasValue && !string.IsNullOrWhiteSpace(_form.Manufacturer))
-                { <small class="equipment-warning">舊廠商文字（尚未連結）：@_form.Manufacturer</small> }
+                <select required="@(!_isEdit)" value="@VendorSelectionValue" @onchange="OnVendorChanged">
+                    @if (_isEdit && !_form.VendorId.HasValue && !string.IsNullOrWhiteSpace(_form.Brand))
+                    {
+                        <option value="">原始廠牌：@_form.Brand（尚未連結）</option>
+                    }
+                    else if (!_isEdit)
+                    {
+                        <option value="">請選擇啟用中的廠商</option>
+                    }
+                    else if (!_form.VendorId.HasValue)
+                    {
+                        <option value="">尚未連結廠商主檔</option>
+                    }
+                    @foreach (var vendor in _vendorOptions)
+                    {
+                        <option value="@vendor.Id">@vendor.Name@(!vendor.IsActive ? "（已停用，僅保留歷史關聯）" : "")</option>
+                    }
+                </select>
+                <small>選擇廠商主檔即可；舊設備未連結時會保留原始廠牌，不會自動猜測配對。</small>
             </div>
             <div class="form-row"><label>型號</label><input @bind="_form.Model" /></div>
             <div class="form-row"><label>序號</label><input @bind="_form.Number" /></div>
             <div class="form-row"><label>設備位置</label><input @bind="_form.Place" /></div>
-            <div class="form-row"><label>保管人 *</label><select required @bind="_form.CustodianAccount"><option value="">請選擇保管人</option>@foreach (var user in AllowedCustodians) { <option value="@user.Account">@user.DisplayName</option> }</select></div>
+            <div class="form-row"><label>保管人 *</label><select required @bind="_form.CustodianAccount" @bind:after="OnCustodianChanged"><option value="">請選擇保管人</option>@foreach (var user in AllowedCustodians) { <option value="@user.Account">@user.DisplayName</option> }</select></div>
             <div class="form-row"><label>設備狀態</label><select @bind="_form.ReservationStatus"><option>可借用</option><option>校驗中</option><option>異常維修中</option><option>不可借用</option><option>採購中</option></select></div>
         </div>
 
-        <details class="equipment-details" open>
-            <summary>歸屬／管理設定</summary>
+        @if (ShowOwnershipCorrection)
+        {
+        <details class="equipment-details equipment-ownership-correction" open>
+            <summary>歸屬資料需要確認</summary>
+            <p class="equipment-warning">@_ownershipMessage</p>
             <div class="form-grid">
                 <div class="form-row"><label>部門 *</label><select required @bind="_form.DepartmentOptionId" @bind:after="OnDepartmentChanged"><option value="">請選擇部門</option>@foreach (var department in _ownershipOptions.Departments) { <option value="@department.Id">@DepartmentTeamRules.DisplayName(department.Name, department.Value)</option> }</select></div>
                 <div class="form-row"><label>設備所屬 Team *</label><select required @bind="_form.OwnerTeamOptionId" @bind:after="OnOwnerTeamChanged"><option value="">請選擇設備所屬 Team</option>@foreach (var team in AllowedOwnerTeams) { <option value="@team.Id">@DepartmentTeamRules.DisplayName(team.Name, team.Value)</option> }</select></div>
             </div>
+            @if (RequiresOwnershipChangeConfirmation)
+            {
+                <label class="equipment-ownership-confirm"><input type="checkbox" @bind="_form.ConfirmOwnershipChange" /> 我已確認此次保管人歸屬變更及 Team 轉移</label>
+            }
         </details>
+        }
+        else
+        {
+            <div class="equipment-ownership-auto">@OwnershipAutoText</div>
+        }
 
         <details class="equipment-details">
             <summary>其他資料</summary>
@@ -532,16 +556,32 @@
     private List<SystemOptionDto> _apparatusKindOptions = new();
     private List<VendorOptionDto> _vendorOptions = new();
     private ApparatusOwnershipOptionsDto _ownershipOptions = new();
+    private string? _originalCustodianAccount;
+    private Guid? _originalDepartmentOptionId;
+    private Guid? _originalOwnerTeamOptionId;
+    private bool _ownershipNeedsAttention;
+    private string _ownershipMessage = string.Empty;
     private bool IsPersisted => _isEdit || !string.IsNullOrWhiteSpace(_createdAssetId);
     private string? CurrentAssetId => _createdAssetId ?? _form.Id;
+    private string VendorSelectionValue => _form.VendorId?.ToString() ?? string.Empty;
     private IReadOnlyList<ApparatusOwnerTeamOptionDto> AllowedOwnerTeams => !_form.DepartmentOptionId.HasValue ? []
         : DepartmentTeamRules.GetAllowedTeamsForDepartment(
             _ownershipOptions.Departments.FirstOrDefault(x => x.Id == _form.DepartmentOptionId)?.Value,
             _ownershipOptions.Teams, team => team.Name, team => team.Value);
     private IReadOnlyList<ApparatusCustodianOptionDto> AllowedCustodians =>
-        !_form.DepartmentOptionId.HasValue || !_form.OwnerTeamOptionId.HasValue
+        IsEquipment
+            ? _ownershipOptions.Users
+            : !_form.DepartmentOptionId.HasValue || !_form.OwnerTeamOptionId.HasValue
             ? []
             : GetAllowedCustodians();
+    private bool RequiresOwnershipChangeConfirmation => IsEquipment && _isEdit &&
+        (_form.DepartmentOptionId != _originalDepartmentOptionId ||
+         _form.OwnerTeamOptionId != _originalOwnerTeamOptionId);
+    private bool ShowOwnershipCorrection => IsEquipment &&
+        (_ownershipNeedsAttention || RequiresOwnershipChangeConfirmation);
+    private string OwnershipAutoText => string.IsNullOrWhiteSpace(_form.CustodianAccount)
+        ? "選擇保管人後，系統會依 Shared Identity 正式資料自動帶入部門與 Team。"
+        : "部門與設備所屬 Team 已依保管人的 Shared Identity 正式資料驗證。";
 
     protected override void OnParametersSet()
     {
@@ -600,6 +640,11 @@
         _environmentAssignment = null;
         _createdAssetId = null;
         _vendorOptions = new();
+        _originalCustodianAccount = null;
+        _originalDepartmentOptionId = null;
+        _originalOwnerTeamOptionId = null;
+        _ownershipNeedsAttention = false;
+        _ownershipMessage = string.Empty;
 
         await LoadPageMetaAsync();
         await LoadOptionsAsync();
@@ -653,11 +698,11 @@
                 await LoadFilesAsync();
                 if (IsEquipment) await LoadVendorOptionsAsync(detail.VendorId);
 
-                if (_ownershipOptions.Departments.All(x => x.Id != _form.DepartmentOptionId))
-                {
-                    _form.DepartmentOptionId = null;
-                }
-                OnDepartmentChanged();
+                _originalCustodianAccount = _form.CustodianAccount;
+                _originalDepartmentOptionId = _form.DepartmentOptionId;
+                _originalOwnerTeamOptionId = _form.OwnerTeamOptionId;
+                if (IsEquipment) EvaluateExistingOwnership();
+                else OnDepartmentChanged();
 
                 if (IsEquipment)
                 {
@@ -768,6 +813,20 @@
         if (!_form.OwnerTeamOptionId.HasValue)
         {
             _message = "請選擇設備所屬 Team。";
+            return;
+        }
+
+        if (IsEquipment && _ownershipNeedsAttention)
+        {
+            _message = string.IsNullOrWhiteSpace(_ownershipMessage)
+                ? "保管人的部門與 Team 歸屬尚未完成驗證。"
+                : _ownershipMessage;
+            return;
+        }
+
+        if (RequiresOwnershipChangeConfirmation && !_form.ConfirmOwnershipChange)
+        {
+            _message = "保管人歸屬跨部門或 Team 變更，請確認歸屬變更後再儲存。";
             return;
         }
 
@@ -987,6 +1046,26 @@
         _vendorOptions = await Api.GetAsync<List<VendorOptionDto>>($"/api/vendors/options{suffix}");
     }
 
+    private void OnVendorChanged(ChangeEventArgs args)
+    {
+        if (!Guid.TryParse(args.Value?.ToString(), out var vendorId))
+        {
+            // Legacy equipment may remain unlinked until the user explicitly selects a vendor.
+            if (!_isEdit) _form.VendorId = null;
+            return;
+        }
+
+        var vendor = _vendorOptions.SingleOrDefault(x => x.Id == vendorId);
+        if (vendor is null || (!vendor.IsActive && vendorId != _form.VendorId))
+            return;
+
+        if (_form.VendorId != vendorId)
+        {
+            _form.VendorId = vendorId;
+            _form.Brand = vendor.Name;
+        }
+    }
+
     private async Task LoadEnvironmentAssignmentAsync()
     {
         if (string.IsNullOrWhiteSpace(_form.Id))
@@ -1024,18 +1103,144 @@
 
     private void OnDepartmentChanged()
     {
+        _form.ConfirmOwnershipChange = false;
         if (_form.OwnerTeamOptionId.HasValue &&
             AllowedOwnerTeams.All(team => team.Id != _form.OwnerTeamOptionId.Value))
         {
             _form.OwnerTeamOptionId = null;
         }
 
-        ClearCustodianIfNotAllowed();
+        if (!IsEquipment) ClearCustodianIfNotAllowed();
+        UpdateManualOwnershipState();
     }
 
     private void OnOwnerTeamChanged()
     {
-        ClearCustodianIfNotAllowed();
+        _form.ConfirmOwnershipChange = false;
+        if (!IsEquipment) ClearCustodianIfNotAllowed();
+        UpdateManualOwnershipState();
+    }
+
+    private void OnCustodianChanged()
+    {
+        _form.ConfirmOwnershipChange = false;
+        if (string.IsNullOrWhiteSpace(_form.CustodianAccount))
+        {
+            if (!_isEdit)
+            {
+                _form.DepartmentOptionId = null;
+                _form.OwnerTeamOptionId = null;
+                _ownershipNeedsAttention = false;
+                _ownershipMessage = string.Empty;
+                return;
+            }
+            _ownershipNeedsAttention = true;
+            _ownershipMessage = "請先選擇保管人，系統才能從 Shared Identity 驗證部門與 Team。";
+            return;
+        }
+
+        if (_isEdit && string.Equals(_form.CustodianAccount, _originalCustodianAccount,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _form.DepartmentOptionId = _originalDepartmentOptionId;
+            _form.OwnerTeamOptionId = _originalOwnerTeamOptionId;
+            EvaluateExistingOwnership();
+            return;
+        }
+
+        var users = _ownershipOptions.Users.Where(x =>
+            string.Equals(x.Account, _form.CustodianAccount, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (users.Count != 1)
+        {
+            SetOwnershipResolutionFailure("Shared Identity 無法唯一識別所選保管人，請確認必要的部門與 Team。", clear: true);
+            return;
+        }
+
+        var user = users[0];
+        var departments = _ownershipOptions.Departments.Where(x =>
+            string.Equals(x.Value?.Trim(), user.Department?.Trim(), StringComparison.OrdinalIgnoreCase)).ToList();
+        if (departments.Count != 1)
+        {
+            SetOwnershipResolutionFailure("Shared Identity 的保管人部門無法唯一對應 CSIT 部門選項，請人工確認。", clear: true);
+            return;
+        }
+
+        var department = departments[0];
+        var teams = DepartmentTeamRules.GetAllowedTeamsForDepartment(
+                department.Value, _ownershipOptions.Teams, team => team.Name, team => team.Value)
+            .Where(x => string.Equals(x.Value?.Trim(), user.TeamCode?.Trim(),
+                StringComparison.OrdinalIgnoreCase)).ToList();
+        if (teams.Count != 1)
+        {
+            SetOwnershipResolutionFailure("Shared Identity 的保管人 Team 無法唯一對應該部門可用 Team，請人工確認。", clear: true);
+            return;
+        }
+
+        _form.DepartmentOptionId = department.Id;
+        _form.OwnerTeamOptionId = teams[0].Id;
+        _ownershipNeedsAttention = false;
+        _ownershipMessage = RequiresOwnershipChangeConfirmation
+            ? "所選保管人屬於不同部門或 Team；請確認這是合法的設備歸屬變更。"
+            : string.Empty;
+    }
+
+    private void EvaluateExistingOwnership()
+    {
+        if (!_form.DepartmentOptionId.HasValue || !_form.OwnerTeamOptionId.HasValue)
+        {
+            SetOwnershipResolutionFailure("既有設備缺少部門或 Team 歸屬，請修正後再儲存。", clear: false);
+            return;
+        }
+
+        var departments = _ownershipOptions.Departments
+            .Where(x => x.Id == _form.DepartmentOptionId.Value).ToList();
+        var department = departments.Count == 1 ? departments[0] : null;
+        var teams = department is null ? [] : DepartmentTeamRules.GetAllowedTeamsForDepartment(
+                department.Value, _ownershipOptions.Teams, item => item.Name, item => item.Value)
+            .Where(x => x.Id == _form.OwnerTeamOptionId.Value).ToList();
+        var team = teams.Count == 1 ? teams[0] : null;
+        var custodians = _ownershipOptions.Users.Where(x =>
+            string.Equals(x.Account, _form.CustodianAccount, StringComparison.OrdinalIgnoreCase)).ToList();
+        var custodian = custodians.Count == 1 ? custodians[0] : null;
+        if (department is null || team is null || custodian is null ||
+            !string.Equals(custodian.Department?.Trim(), department.Value?.Trim(), StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(custodian.TeamCode?.Trim(), team.Value?.Trim(), StringComparison.OrdinalIgnoreCase))
+        {
+            SetOwnershipResolutionFailure("既有歸屬與目前 Shared Identity 正式資料不一致，請確認必要的部門與 Team。", clear: false);
+            return;
+        }
+
+        _ownershipNeedsAttention = false;
+        _ownershipMessage = string.Empty;
+    }
+
+    private void SetOwnershipResolutionFailure(string message, bool clear)
+    {
+        if (clear)
+        {
+            _form.DepartmentOptionId = null;
+            _form.OwnerTeamOptionId = null;
+        }
+        _ownershipNeedsAttention = true;
+        _ownershipMessage = message;
+    }
+
+    private void UpdateManualOwnershipState()
+    {
+        if (!_form.DepartmentOptionId.HasValue || !_form.OwnerTeamOptionId.HasValue ||
+            string.IsNullOrWhiteSpace(_form.CustodianAccount))
+        {
+            _ownershipNeedsAttention = true;
+            _ownershipMessage = "請確認保管人的部門與設備所屬 Team；伺服器將以 Shared Identity 再次驗證。";
+            return;
+        }
+
+        var allowed = GetAllowedCustodians().Any(x =>
+            string.Equals(x.Account, _form.CustodianAccount, StringComparison.OrdinalIgnoreCase));
+        _ownershipNeedsAttention = !allowed;
+        _ownershipMessage = allowed && RequiresOwnershipChangeConfirmation
+            ? "部門或 Team 與原設備歸屬不同；請確認這是合法的歸屬變更。"
+            : allowed ? string.Empty : "所選保管人不屬於目前部門與 Team，請重新選擇。";
     }
 
     private IReadOnlyList<ApparatusCustodianOptionDto> GetAllowedCustodians()
@@ -1059,7 +1264,7 @@
         if (string.IsNullOrWhiteSpace(_form.CustodianAccount))
             return;
 
-        if (AllowedCustodians.All(user =>
+        if (GetAllowedCustodians().All(user =>
                 !string.Equals(user.Account, _form.CustodianAccount, StringComparison.OrdinalIgnoreCase)))
         {
             _form.CustodianAccount = null;

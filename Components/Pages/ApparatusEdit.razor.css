@@ -17,19 +17,21 @@
 .environment-warning { margin-top:1rem; padding:.75rem; border-radius:8px; color:#b45309; background:#fffbeb; }
 .environment-actions { margin-top:1rem; }
 
-.equipment-brand-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:1rem; }
-.equipment-brand-fields > div { display:grid; gap:.35rem; }
-.equipment-brand-fields span, .equipment-brand-group small { color:var(--text-muted,#64748b); }
+.equipment-brand-group small { color:var(--text-muted,#64748b); }
 .equipment-warning { display:block; margin-top:.5rem; color:#b45309 !important; }
 .equipment-details { margin-top:1rem; border-top:1px solid var(--border-color,#d6dbe3); padding-top:.75rem; }
 .equipment-details summary { cursor:pointer; font-weight:700; margin-bottom:1rem; }
+.equipment-ownership-auto { margin-top:.5rem; color:var(--text-muted,#64748b); font-size:.875rem; }
+.equipment-ownership-correction { border:1px solid #f59e0b; border-radius:8px; padding:.85rem; background:#fffbeb; }
+.equipment-ownership-correction .equipment-warning { margin:0 0 1rem; }
+.equipment-ownership-confirm { display:flex; align-items:center; gap:.5rem; margin-top:.75rem; font-weight:600; }
+.equipment-ownership-confirm input { width:auto; margin:0; }
 
 @media (max-width: 800px) {
     .resource-capability-row {
         grid-template-columns: 1fr;
     }
     .environment-membership-grid { grid-template-columns:1fr; }
-    .equipment-brand-fields { grid-template-columns:1fr; }
 }
 .apparatus-file-thumbnail {
     width: 72px;

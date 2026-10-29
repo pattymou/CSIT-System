@@ -51,6 +51,31 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.Contains("background:rgba(16,185,129,.16)", fileCss);
     }
 
+    [Fact]
+    public void EquipmentEdit_UsesSingleVendorSelector_AutomaticOwnership_AndScopedViewSpacing()
+    {
+        var edit = Read("Components", "Pages", "ApparatusEdit.razor");
+        var editCss = Read("Components", "Pages", "ApparatusEdit.razor.css");
+        var view = Read("Components", "Pages", "ApparatusView.razor");
+        var viewCss = Read("Components", "Pages", "ApparatusView.razor.css");
+        var service = Read("Services", "Implementations", "ApparatusService.cs");
+
+        Assert.DoesNotContain("既有廠牌文字（Brand）", edit);
+        Assert.DoesNotContain("正式廠商主檔 *", edit);
+        Assert.Contains("value=\"@VendorSelectionValue\" @onchange=\"OnVendorChanged\"", edit);
+        Assert.Contains("原始廠牌：@_form.Brand（尚未連結）", edit);
+        Assert.Contains("@bind:after=\"OnCustodianChanged\"", edit);
+        Assert.Contains("@if (ShowOwnershipCorrection)", edit);
+        Assert.Contains("Shared Identity 正式資料驗證", edit);
+        Assert.Contains("@bind=\"_form.ConfirmOwnershipChange\"", edit);
+        Assert.Contains(".equipment-ownership-confirm input { width:auto", editCss);
+        Assert.Contains("Brand = moduleCode == \"equipment\" ? selectedVendor?.Name : request.Brand", service);
+        Assert.Contains("設備部門或 Team 歸屬變更必須明確確認", service);
+        Assert.Contains("form-actions apparatus-view-actions", view);
+        Assert.Contains("margin-bottom: 20px", viewCss);
+        Assert.Contains("@Display(_item.VendorName ?? _item.Brand)", view);
+    }
+
     private static int Count(string source, string value) =>
         source.Split(value, StringSplitOptions.None).Length - 1;
 

@@ -20,7 +20,7 @@
 }
 else
 {
-    <div class="form-actions">
+    <div class="form-actions apparatus-view-actions">
         <button class="primary-btn" @onclick="Edit">修改設備資訊</button>
         <button class="table-chip-btn danger" @onclick="DeleteAsync">刪除此設備資訊</button>
         <button class="btn-secondary" @onclick="Back">上一頁</button>
@@ -41,7 +41,7 @@ else
             <div class="record-detail-item"><span>財產編號</span><strong>@Display(_item.ProductsId)</strong></div>
             <div class="record-detail-item"><span>設備分類</span><strong>@Display(_item.Kind)</strong></div>
             <div class="record-detail-item"><span>設備名稱</span><strong>@Display(_item.Name)</strong></div>
-            <div class="record-detail-item"><span>廠牌</span><strong>@Display(_item.Brand)</strong><small>正式廠商主檔：@Display(_item.VendorName)</small>@if (!_item.VendorId.HasValue && !string.IsNullOrWhiteSpace(_item.Manufacturer)) { <small>舊廠商文字：@_item.Manufacturer</small> }</div>
+            <div class="record-detail-item"><span>廠牌</span><strong>@Display(_item.VendorName ?? _item.Brand)</strong>@if (!_item.VendorId.HasValue && !string.IsNullOrWhiteSpace(_item.Brand)) { <small>原始廠牌值（尚未連結廠商主檔）</small> }</div>
             <div class="record-detail-item"><span>型號</span><strong>@Display(_item.Model)</strong></div>
             <div class="record-detail-item"><span>序號</span><strong>@Display(_item.Number)</strong></div>
             <div class="record-detail-item"><span>設備位置</span><strong>@Display(_item.Place)</strong></div>

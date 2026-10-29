@@ -122,6 +122,7 @@ public class ApparatusUpsertRequest
     public string? CustodianAccount { get; set; }
     public Guid? DepartmentOptionId { get; set; }
     public Guid? OwnerTeamOptionId { get; set; }
+    public bool ConfirmOwnershipChange { get; set; }
     public string? Agent { get; set; }
     public string? ReservationStatus { get; set; }
     public string? Feature { get; set; }

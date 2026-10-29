@@ -239,10 +239,18 @@ public sealed class EquipmentVendorManagementTests
             var apparatus = new ApparatusService(db, Options.Create(new ApparatusSettings()), raw,
                 rawExport, ProvisioningClient(), new ManagedAssetFileStorage(db));
             var request = Request(vendorId, ownership.DepartmentId, ownership.TeamId);
+            request.Brand = "untrusted typed brand";
             var equipmentId = await apparatus.CreateAsync("equipment", request);
             var stored = await db.Apparatuses.SingleAsync(x => x.Id == equipmentId);
             Assert.Equal(vendorId, stored.VendorId);
             Assert.Equal("Anritsu", stored.Manufacturer);
+            Assert.Equal("Anritsu", stored.Brand);
+
+            var sameVendorUpdate = Request(vendorId, ownership.DepartmentId, ownership.TeamId);
+            sameVendorUpdate.Name = "Updated without changing vendor";
+            sameVendorUpdate.Brand = "must not overwrite the stored brand";
+            Assert.True(await apparatus.UpdateAsync("equipment", equipmentId, sameVendorUpdate));
+            Assert.Equal("Anritsu", (await db.Apparatuses.SingleAsync(x => x.Id == equipmentId)).Brand);
 
             var approvedFiles = new[]
             {
@@ -343,7 +351,7 @@ public sealed class EquipmentVendorManagementTests
             db.Apparatuses.Add(new Apparatus
             {
                 Id = "LEGACY-EQ", ModuleCode = "equipment", Name = "Legacy", Kind = "Tester",
-                Manufacturer = "Legacy Text Vendor", DepartmentOptionId = ownership.DepartmentId,
+                Manufacturer = "Legacy Text Vendor", Brand = "Legacy Brand", DepartmentOptionId = ownership.DepartmentId,
                 OwnerTeamOptionId = ownership.TeamId, CustodianAccount = "tester",
                 CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
             });
@@ -352,8 +360,52 @@ public sealed class EquipmentVendorManagementTests
             legacyRequest.Id = "LEGACY-EQ";
             legacyRequest.Name = "Legacy Updated";
             legacyRequest.Manufacturer = "Legacy Text Vendor";
+            legacyRequest.Brand = "must not overwrite legacy brand";
             Assert.True(await apparatus.UpdateAsync("equipment", "LEGACY-EQ", legacyRequest));
             Assert.Equal("Legacy Text Vendor", (await db.Apparatuses.SingleAsync(x => x.Id == "LEGACY-EQ")).Manufacturer);
+            Assert.Equal("Legacy Brand", (await db.Apparatuses.SingleAsync(x => x.Id == "LEGACY-EQ")).Brand);
+        }
+        finally { DeleteRoot(root); }
+    }
+
+    [Fact]
+    public async Task Equipment_OwnershipTransfer_RequiresExplicitServerValidatedConfirmation()
+    {
+        await using var db = NewDb();
+        var root = NewRoot();
+        try
+        {
+            var ownership = await SeedRootAndOwnershipAsync(db, root);
+            var alternateTeamId = Guid.NewGuid();
+            db.SystemOptions.Add(new SystemOption
+            {
+                Id = alternateTeamId, Category = SystemOptionCategories.Team,
+                Name = "Lab Alternate", Value = "LAB", IsEnabled = true,
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            var vendorId = Guid.NewGuid();
+            db.Vendors.Add(new Vendor
+            {
+                Id = vendorId, Name = "Vendor", StorageFolderName = "Vendor", Types = [], IsActive = true,
+                CreatedBy = "tester", UpdatedBy = "tester", CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+            });
+            await db.SaveChangesAsync();
+
+            var apparatus = new ApparatusService(db, Options.Create(new ApparatusSettings()),
+                Options.Create(new RawDataSettings { Enabled = false }), new CapturingRawDataExportService(),
+                ProvisioningClient(), new ManagedAssetFileStorage(db));
+            var id = await apparatus.CreateAsync("equipment",
+                Request(vendorId, ownership.DepartmentId, ownership.TeamId));
+            var transfer = Request(vendorId, ownership.DepartmentId, alternateTeamId);
+
+            var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                apparatus.UpdateAsync("equipment", id, transfer));
+            Assert.Contains("必須明確確認", error.Message);
+
+            transfer.ConfirmOwnershipChange = true;
+            Assert.True(await apparatus.UpdateAsync("equipment", id, transfer));
+            Assert.Equal(alternateTeamId,
+                (await db.Apparatuses.SingleAsync(x => x.Id == id)).OwnerTeamOptionId);
         }
         finally { DeleteRoot(root); }
     }
