@@ -338,7 +338,96 @@ public sealed class ApprovalSubmissionService(
                 logger?.LogWarning(ex, "Approval staging cleanup will retry for submission {SubmissionId}", id);
             }
         }
+
+        var committedEquipmentIds = await (
+            from submission in db.PendingSubmissions.AsNoTracking()
+            join deletion in db.EquipmentDeletionJobs.AsNoTracking()
+                on submission.ContextId equals deletion.EquipmentId
+            where submission.StagingStorageKey != null &&
+                submission.SourceModuleCode == "equipment" &&
+                submission.ContextType == "Asset" &&
+                submission.Status == ApprovalStatus.Committed &&
+                deletion.Status == EquipmentDeletionStatuses.Completed
+            orderby submission.UpdatedAt
+            select submission.Id).Take(20).ToListAsync(cancellationToken);
+        foreach (var id in committedEquipmentIds)
+        {
+            try
+            {
+                if (await CleanCompletedEquipmentStagingAsync(id, cancellationToken)) cleaned++;
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger?.LogWarning(ex,
+                    "Completed equipment staging cleanup will retry for submission {SubmissionId}", id);
+            }
+        }
         return cleaned;
+    }
+
+    private async Task<bool> CleanCompletedEquipmentStagingAsync(Guid id,
+        CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
+        var item = await LoadForUpdateAsync(db, id, cancellationToken);
+        if (item.StagingStorageKey is null) return false;
+
+        string? reason = null;
+        if (item.SourceModuleCode != "equipment" || item.ContextType != "Asset" ||
+            item.Status != ApprovalStatus.Committed)
+            reason = "submission is not a committed equipment Asset submission";
+        else if (!Guid.TryParseExact(item.CommitResultKey, "N", out var resultId) || resultId != item.Id)
+            reason = "formal commit result is missing or does not match the submission";
+        else if (item.ReviewerAccount is null || item.ReviewedAt is null ||
+            item.CommitLeaseToken is not null || item.CommitLeaseExpiresAt is not null)
+            reason = "approval or commit processing is incomplete";
+        else if (!await db.EquipmentDeletionJobs.AsNoTracking().AnyAsync(x =>
+            x.EquipmentId == item.ContextId && x.Status == EquipmentDeletionStatuses.Completed &&
+            x.DbRecordDeletedAt != null && x.CompletedAt != null, cancellationToken))
+            reason = "equipment deletion is not complete";
+        else if (await db.Apparatuses.AsNoTracking().AnyAsync(x => x.Id == item.ContextId,
+            cancellationToken) || await db.ApparatusFiles.AsNoTracking().AnyAsync(x =>
+            x.ApparatusId == item.ContextId, cancellationToken))
+            reason = "equipment or formal attachment records still exist";
+        else if (!await db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+            x.ApparatusFileId == item.Id && x.EquipmentId == item.ContextId &&
+            x.Status == EquipmentFileDeletionStatuses.Completed && x.DbRecordDeletedAt != null &&
+            x.PhysicalFileDeletedAt != null && x.CompletedAt != null, cancellationToken))
+            reason = "the matching formal attachment deletion is not complete";
+        else if (await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
+            x.SourceEntityType == "ApparatusFile" && x.SourceEntityId == item.Id,
+            cancellationToken))
+            reason = "a KM outbox record still references the attachment";
+        else
+        {
+            var auditActions = await db.ApprovalAuditEvents.AsNoTracking()
+                .Where(x => x.SubmissionId == item.Id)
+                .Select(x => x.Action).ToListAsync(cancellationToken);
+            if (!auditActions.Contains(ApprovalAuditActions.Submitted) ||
+                !auditActions.Contains(ApprovalAuditActions.Approved) ||
+                !auditActions.Contains(ApprovalAuditActions.Committed))
+                reason = "required approval audit history is incomplete";
+        }
+
+        if (reason is null && await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
+            x.Id != item.Id && x.StagingStorageKey == item.StagingStorageKey, cancellationToken))
+            reason = "the staging key is referenced by another submission";
+
+        if (reason is not null)
+        {
+            logger?.LogWarning(
+                "Skipped completed equipment staging cleanup for submission {SubmissionId}: {Reason}",
+                id, reason);
+            return false;
+        }
+
+        await stagingStorage.DeleteAsync(id, item.StagingStorageKey, cancellationToken);
+        item.ClearCommittedEquipmentStagingFile(DateTime.UtcNow);
+        await db.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return true;
     }
 
     private static Task<PendingSubmission> LoadForUpdateAsync(AppDbContext db, Guid id,

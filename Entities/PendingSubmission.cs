@@ -148,6 +148,18 @@ public sealed class PendingSubmission
         UpdatedAt = now;
     }
 
+    public void ClearCommittedEquipmentStagingFile(DateTime now)
+    {
+        if (Status != ApprovalStatus.Committed || SourceModuleCode != "equipment" ||
+            ContextType != "Asset" || string.IsNullOrWhiteSpace(CommitResultKey) ||
+            ReviewerAccount is null || ReviewedAt is null || CommitLeaseToken is not null ||
+            CommitLeaseExpiresAt is not null)
+            throw new InvalidOperationException(
+                "Only a completed equipment approval can clear committed staging metadata.");
+        StagingStorageKey = null;
+        UpdatedAt = now;
+    }
+
     public void StartCommit(Guid leaseToken, DateTime now, TimeSpan leaseDuration)
     {
         EnsureStatus(ApprovalStatus.ApprovedPendingCommit);
