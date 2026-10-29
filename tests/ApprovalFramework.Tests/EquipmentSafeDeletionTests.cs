@@ -260,7 +260,7 @@ public sealed class EquipmentSafeDeletionTests
                     .Select(x => x.FilePath).SingleAsync();
 
             var directory = new DirectoryInfo(folder);
-            originalAcl = directory.GetAccessControl(AccessControlSections.All);
+            originalAcl = directory.GetAccessControl(AccessControlSections.Access);
             filePath = Path.Combine(folder, "restricted.pdf");
             currentSid = WindowsIdentity.GetCurrent().User
                 ?? throw new InvalidOperationException("Windows test identity has no SID.");
