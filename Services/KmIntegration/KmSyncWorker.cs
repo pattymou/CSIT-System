@@ -73,7 +73,10 @@ public sealed class KmSyncWorker(
                     AND deletion.status IN ('WaitingForKm', 'KmVerified', 'LocalReady', 'LocalCleanup', 'Completed')))
                   OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile')
                   OR (@vendor_enabled AND event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile')
-                  OR (@equipment_enabled AND event_type = 'EquipmentDocumentArchived' AND source_entity_type = 'ApparatusFile')) AND
+                  OR (@equipment_enabled AND event_type = 'EquipmentDocumentArchived' AND source_entity_type = 'ApparatusFile'
+                    AND NOT EXISTS (SELECT 1 FROM equipment_file_deletion_jobs AS equipment_deletion
+                      WHERE equipment_deletion.apparatus_file_id = km_integration_outbox.source_entity_id
+                        AND equipment_deletion.status <> 'Completed'))) AND
                   (status = 'Pending' OR retry_count < @max) AND
                   (status = 'Pending' OR
                    (status = 'Failed' AND next_retry_at <= @now) OR
@@ -128,7 +131,10 @@ public sealed class KmSyncWorker(
                        x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile) ||
                       (options.EquipmentEnabled &&
                        x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
-                       x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile)) &&
+                       x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
+                       !db.EquipmentFileDeletionJobs.Any(deletion =>
+                           deletion.ApparatusFileId == x.SourceEntityId &&
+                           deletion.Status != EquipmentFileDeletionStatuses.Completed))) &&
                     (x.Status == KmIntegrationStatus.Pending ||
                     x.RetryCount < options.MaxRetryCount) &&
                     (x.Status == KmIntegrationStatus.Pending ||
@@ -354,6 +360,10 @@ public sealed class KmSyncWorker(
             !Uri.TryCreate(options.ServiceBaseUrl, UriKind.Absolute, out var serviceBase) ||
             serviceBase.Scheme != Uri.UriSchemeHttps || serviceBase.AbsolutePath != "/" ||
             !string.IsNullOrEmpty(serviceBase.Query) || !string.IsNullOrEmpty(serviceBase.Fragment))
+            return null;
+        if (await db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+            x.ApparatusFileId == row.SourceEntityId &&
+            x.Status != EquipmentFileDeletionStatuses.Completed, cancellationToken))
             return null;
         var file = await db.ApparatusFiles.AsNoTracking().Include(x => x.Apparatus).ThenInclude(x => x.Vendor)
             .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);

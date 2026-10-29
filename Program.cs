@@ -267,7 +267,11 @@ else
 builder.Services.AddHttpClient<IKmIntegrationClient, KmIntegrationClient>();
 builder.Services.AddSingleton<IKmDeletionAccessTokenProvider, KmDeletionAccessTokenProvider>();
 builder.Services.AddHttpClient<IKmDeletionClient, KmDeletionClient>();
+builder.Services.AddSingleton<IEquipmentDocumentDeletionAdapter,
+    UnavailableEquipmentDocumentDeletionAdapter>();
 builder.Services.AddScoped<KmDeletionCallbackService>();
+builder.Services.AddScoped<EquipmentFileDeletionCallbackService>();
+builder.Services.AddScoped<EquipmentFileDeletionService>();
 builder.Services.AddScoped<KmDeletionDispatchService>();
 builder.Services.AddHostedService<KmDeletionBackgroundService>();
 builder.Services.AddScoped<VerificationCaseDeletionPreparationService>();

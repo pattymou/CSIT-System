@@ -9,6 +9,7 @@ public sealed class KmDeletionOptions
 {
     public const string SectionName = "KmDeletion";
     public bool Enabled { get; set; }
+    public bool EquipmentEnabled { get; set; }
     public string? Scope { get; set; }
 }
 

@@ -17,6 +17,7 @@ public interface IApparatusService : IAssetFormalUploadService
 
     Task<List<ApparatusFileDto>> GetFilesAsync(string moduleCode, string apparatusId);
     Task<(byte[] Content, string FileName, string ContentType)> GetFileContentAsync(Guid fileId);
-    Task<bool> DeleteFileAsync(Guid fileId);
+    Task<EquipmentFileDeletionRequestResult?> DeleteFileAsync(Guid fileId,
+        string actor = "SYSTEM", CancellationToken cancellationToken = default);
     Task<bool> ReviewFileMetadataAsync(Guid fileId, EquipmentMetadataReviewRequest request, string actor);
 }

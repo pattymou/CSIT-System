@@ -949,6 +949,8 @@
 
     private async Task DeleteFileAsync(Guid fileId)
     {
+        if (!await JS.InvokeAsync<bool>("confirm", "確定要刪除此設備附件嗎？已送達 KM 的文件會先等待 KM 清理確認。"))
+            return;
         Console.WriteLine($"[ApparatusEdit] DeleteFile start. fileId={fileId}");
 
         var response = await Api.DeleteAsync($"/api/assets/files/{fileId}");

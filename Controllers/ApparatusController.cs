@@ -257,8 +257,12 @@ public class ApparatusController : ControllerBase
     {
         try
         {
-            var ok = await _service.DeleteFileAsync(fileId);
-            return ok ? NoContent() : NotFound("找不到檔案");
+            var actor = User.FindFirstValue("account") ?? User.Identity?.Name ?? "SYSTEM";
+            var result = await _service.DeleteFileAsync(fileId, actor, HttpContext.RequestAborted);
+            if (result is null) return NotFound("找不到檔案");
+            return result.CompletedLocally
+                ? NoContent()
+                : Accepted(new { requestId = result.RequestId, status = result.Status });
         }
         catch (InvalidOperationException ex)
         {

@@ -317,6 +317,11 @@ public sealed class KmIntegrationController(
             row.SourceEntityId != callback.DocumentId || row.Version != callback.Version)
             return Conflict(new { error = "callback_mismatch" });
 
+        if (await db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+            x.ApparatusFileId == row.SourceEntityId &&
+            x.Status != EquipmentFileDeletionStatuses.Completed, cancellationToken))
+            return Conflict(new { error = "equipment_document_deletion_pending" });
+
         var file = await db.ApparatusFiles.Include(x => x.Apparatus)
             .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);
         if (file?.Apparatus is null || file.Apparatus.ModuleCode != "equipment" ||

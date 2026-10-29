@@ -21,6 +21,7 @@ public class ApparatusService : IApparatusService
     private readonly SharedIdentityProvisioningClient _provisioningClient;
     private readonly ManagedAssetFileStorage _managedStorage;
     private readonly KmIntegrationOptions _kmOptions;
+    private readonly EquipmentFileDeletionService _fileDeletion;
 
     public ApparatusService(
         AppDbContext db,
@@ -29,7 +30,8 @@ public class ApparatusService : IApparatusService
         IRawDataExportService rawDataExportService,
         SharedIdentityProvisioningClient provisioningClient,
         ManagedAssetFileStorage? managedStorage = null,
-        IOptions<KmIntegrationOptions>? kmOptions = null)
+        IOptions<KmIntegrationOptions>? kmOptions = null,
+        EquipmentFileDeletionService? fileDeletion = null)
     {
         _db = db;
         _settings = options.Value;
@@ -38,6 +40,7 @@ public class ApparatusService : IApparatusService
         _provisioningClient = provisioningClient;
         _managedStorage = managedStorage ?? new ManagedAssetFileStorage(db);
         _kmOptions = kmOptions?.Value ?? new KmIntegrationOptions();
+        _fileDeletion = fileDeletion ?? new EquipmentFileDeletionService(db);
     }
 
     public async Task<string> GenerateNewIdAsync()
@@ -212,6 +215,7 @@ public class ApparatusService : IApparatusService
             _db,
             [entity.CustodianAccount]);
         var outboxes = await LoadEquipmentOutboxesAsync(entity.Files);
+        var deletions = await LoadEquipmentDeletionsAsync(entity.Files);
         var verifiedFiles = await VerifyFormalFilesAsync(entity.Files);
         var lifecycleRecords = moduleCode == "equipment"
             ? await _db.ReservationItems.AsNoTracking()
@@ -232,7 +236,7 @@ public class ApparatusService : IApparatusService
         return ToDetailDto(
             entity,
             ApparatusCustodianResolver.GetDisplayName(custodianNames, entity.CustodianAccount),
-            outboxes, verifiedFiles, lifecycleRecords);
+            outboxes, deletions, verifiedFiles, lifecycleRecords);
     }
 
     public async Task<string> CreateAsync(string moduleCode, ApparatusUpsertRequest request)
@@ -453,8 +457,10 @@ public class ApparatusService : IApparatusService
             .OrderByDescending(x => x.CreatedAt)
             .ToListAsync();
         var outboxes = await LoadEquipmentOutboxesAsync(files);
+        var deletions = await LoadEquipmentDeletionsAsync(files);
         var verifiedFiles = await VerifyFormalFilesAsync(files);
-        return files.Select(x => ToFileDto(x, outboxes, verifiedFiles.Contains(x.Id))).ToList();
+        return files.Select(x => ToFileDto(x, outboxes, deletions,
+            verifiedFiles.Contains(x.Id))).ToList();
     }
 
     public async Task UploadFilesAsync(string moduleCode, string apparatusId, IReadOnlyList<IFormFile> files,
@@ -597,19 +603,24 @@ public class ApparatusService : IApparatusService
         return (bytes, originalName, contentType ?? "application/octet-stream");
     }
 
-    public async Task<bool> DeleteFileAsync(Guid fileId)
+    public async Task<EquipmentFileDeletionRequestResult?> DeleteFileAsync(Guid fileId,
+        string actor = "SYSTEM", CancellationToken cancellationToken = default)
     {
-        var file = await _db.ApparatusFiles.FirstOrDefaultAsync(x => x.Id == fileId);
+        var file = await _db.ApparatusFiles.Include(x => x.Apparatus)
+            .FirstOrDefaultAsync(x => x.Id == fileId, cancellationToken);
         if (file == null)
         {
-            return false;
+            return null;
         }
 
-        if (await _db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
-                x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
-                x.SourceEntityId == fileId))
-            throw new InvalidOperationException(
-                "此設備文件已進入 KM 追蹤流程，尚未有正式刪除契約，禁止直接刪除。");
+        if (file.Apparatus.ModuleCode == "equipment")
+        {
+            _db.ChangeTracker.Clear();
+            var result = await _fileDeletion.RequestAsync(fileId, actor, cancellationToken);
+            if (result?.CompletedLocally == true)
+                await RebuildLatestRawDataAsync("equipment", file.ApparatusId);
+            return result;
+        }
 
         var apparatusId = file.ApparatusId;
 
@@ -621,12 +632,12 @@ public class ApparatusService : IApparatusService
         DeletePhysicalFile(file);
 
         _db.ApparatusFiles.Remove(file);
-        await _db.SaveChangesAsync();
+        await _db.SaveChangesAsync(cancellationToken);
 
         await RebuildLatestRawDataAsync(moduleCode, apparatusId);
 
         Console.WriteLine($"[ApparatusService] Deleted asset file record. fileId={fileId}, apparatusId={apparatusId}");
-        return true;
+        return new(Guid.Empty, EquipmentFileDeletionStatuses.Completed, true);
     }
 
     public async Task<bool> ReviewFileMetadataAsync(
@@ -635,6 +646,9 @@ public class ApparatusService : IApparatusService
         var file = await _db.ApparatusFiles.Include(x => x.Apparatus)
             .SingleOrDefaultAsync(x => x.Id == fileId);
         if (file is null) return false;
+        if (await _db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+            x.ApparatusFileId == fileId && x.Status != EquipmentFileDeletionStatuses.Completed))
+            throw new InvalidOperationException("設備附件正在執行安全刪除，禁止更新 Metadata。");
         if (file.Apparatus.ModuleCode != "equipment" || string.IsNullOrWhiteSpace(file.MetadataJson))
             throw new InvalidOperationException("此檔案目前沒有可確認的設備 Metadata 建議。");
         if (request.Status is not (MetadataVerificationStatuses.Verified or MetadataVerificationStatuses.Rejected))
@@ -902,6 +916,7 @@ public class ApparatusService : IApparatusService
 
     private ApparatusDetailDto ToDetailDto(Apparatus x, string? custodianDisplayName,
         IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes,
+        IReadOnlyDictionary<Guid, EquipmentFileDeletionJob> deletions,
         IReadOnlySet<Guid> verifiedFiles,
         List<EquipmentLifecycleRecordDto> lifecycleRecords)
     {
@@ -959,16 +974,19 @@ public class ApparatusService : IApparatusService
             LifecycleRecords = lifecycleRecords,
             Files = x.Files
                 .OrderByDescending(f => f.CreatedAt)
-                .Select(file => ToFileDto(file, outboxes, verifiedFiles.Contains(file.Id)))
+                .Select(file => ToFileDto(file, outboxes, deletions,
+                    verifiedFiles.Contains(file.Id)))
                 .ToList()
         };
     }
 
     private ApparatusFileDto ToFileDto(ApparatusFile x,
         IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes,
+        IReadOnlyDictionary<Guid, EquipmentFileDeletionJob> deletions,
         bool isFormalArchiveVerified = false)
     {
         outboxes.TryGetValue(x.Id, out var outbox);
+        deletions.TryGetValue(x.Id, out var deletion);
         var isDocument = x.Apparatus?.ModuleCode == "equipment" &&
             !ManagedAssetFileStorage.IsImage(x.ContentType, x.OriginalFileName ?? x.FileName);
         return new ApparatusFileDto
@@ -996,7 +1014,11 @@ public class ApparatusService : IApparatusService
             MetadataSource = x.MetadataSource,
             MetadataVersion = x.MetadataVersion,
             MetadataVerificationStatus = x.MetadataVerificationStatus,
-            CanDelete = outbox is null,
+            DeletionRequestId = deletion?.Id,
+            DeletionStatus = deletion?.Status,
+            DeletionError = deletion?.LastErrorMessage ?? deletion?.LastErrorCode,
+            CanDelete = deletion is null ||
+                deletion.Status == EquipmentFileDeletionStatuses.CleanupFailed,
             IsFormalArchiveVerified = isFormalArchiveVerified
         };
     }
@@ -1047,6 +1069,17 @@ public class ApparatusService : IApparatusService
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                 ids.Contains(x.SourceEntityId))
             .ToDictionaryAsync(x => x.SourceEntityId);
+    }
+
+    private async Task<IReadOnlyDictionary<Guid, EquipmentFileDeletionJob>> LoadEquipmentDeletionsAsync(
+        IEnumerable<ApparatusFile> files)
+    {
+        var ids = files.Select(x => x.Id).ToArray();
+        if (ids.Length == 0) return new Dictionary<Guid, EquipmentFileDeletionJob>();
+        return await _db.EquipmentFileDeletionJobs.AsNoTracking()
+            .Where(x => ids.Contains(x.ApparatusFileId) &&
+                x.Status != EquipmentFileDeletionStatuses.Completed)
+            .ToDictionaryAsync(x => x.ApparatusFileId);
     }
 
     private async Task<Vendor?> ValidateNewEquipmentVendorAsync(string moduleCode, ApparatusUpsertRequest request)

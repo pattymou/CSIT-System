@@ -35,8 +35,8 @@ else
                         </td>
                         <td>@(file.IsImage ? "設備照片" : "Manual／Datasheet／設備文件")</td>
                         <td><span class="attachment-status @ArchiveClass(file)">@ArchiveText(file)</span>@if (!string.IsNullOrWhiteSpace(file.ArchiveError)) { <small class="error-text">@file.ArchiveError</small> }</td>
-                        <td><span class="attachment-status @KmClass(file)">@KmText(file)</span>@if (!string.IsNullOrWhiteSpace(file.KmError)) { <small class="error-text">@file.KmError</small> }</td>
-                        <td class="action-cell"><a class="table-link-btn" href="@file.DownloadUrl" target="_blank" rel="noopener" download>下載</a>@if (OnDelete.HasDelegate) { <button type="button" class="table-chip-btn danger" disabled="@(!file.CanDelete)" title="@(file.CanDelete ? null : "已建立 KM 排程，禁止直接刪除")" @onclick="() => OnDelete.InvokeAsync(file.Id)">刪除</button> }</td>
+                        <td><span class="attachment-status @KmClass(file)">@KmText(file)</span>@if (!string.IsNullOrWhiteSpace(file.DeletionError ?? file.KmError)) { <small class="error-text">@(file.DeletionError ?? file.KmError)</small> }</td>
+                        <td class="action-cell"><a class="table-link-btn" href="@file.DownloadUrl" target="_blank" rel="noopener" download>下載</a>@if (OnDelete.HasDelegate) { <button type="button" class="table-chip-btn danger" disabled="@(!file.CanDelete)" title="@(file.CanDelete ? "啟動安全刪除流程" : "設備附件刪除流程處理中")" @onclick="() => OnDelete.InvokeAsync(file.Id)">刪除</button> }</td>
                     </tr>
                 }
             </tbody>
@@ -82,6 +82,13 @@ else
     };
     private static string KmText(ApparatusFileDto file)
     {
+        if (!string.IsNullOrWhiteSpace(file.DeletionStatus)) return file.DeletionStatus switch
+        {
+            EquipmentFileDeletionStatuses.Failed => "KM 刪除失敗，等待安全重試",
+            EquipmentFileDeletionStatuses.CleanupFailed => "本地清理失敗，等待安全重試",
+            EquipmentFileDeletionStatuses.Completed => "刪除完成",
+            _ => "等待 KM 刪除確認"
+        };
         if (file.IsImage) return "照片不進行 KM 分析";
         if (!file.HasKmSchedule) return "未建立 KM 排程";
         if (!file.KmEnabled && file.KmStatus == nameof(KmIntegrationStatus.Pending)) return "KM 尚未啟用";
@@ -98,6 +105,9 @@ else
     }
     private static string KmClass(ApparatusFileDto file)
     {
+        if (!string.IsNullOrWhiteSpace(file.DeletionStatus))
+            return file.DeletionStatus is EquipmentFileDeletionStatuses.Failed or
+                EquipmentFileDeletionStatuses.CleanupFailed ? "failed" : "processing";
         if (file.IsImage || !file.HasKmSchedule ||
             (!file.KmEnabled && file.KmStatus == nameof(KmIntegrationStatus.Pending))) return string.Empty;
         return file.KmStatus switch

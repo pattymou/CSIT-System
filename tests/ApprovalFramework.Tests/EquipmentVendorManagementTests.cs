@@ -306,7 +306,7 @@ public sealed class EquipmentVendorManagementTests
                 Assert.Equal(1, file.KmVersion);
                 Assert.Equal(KmIntegrationStatus.Pending.ToString(), file.KmStatus);
                 Assert.False(file.KmEnabled);
-                Assert.False(file.CanDelete);
+                Assert.True(file.CanDelete);
             });
             Assert.Equal(2, detail.Files.Count(x => x.IsImage));
             Assert.All(detail.Files.Where(x => x.IsImage), photo =>
