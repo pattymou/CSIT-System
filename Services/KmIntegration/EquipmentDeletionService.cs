@@ -42,10 +42,10 @@ public sealed class EquipmentDeletionService(
         return new EquipmentDeletionPreviewDto
         {
             Exists = equipment is not null,
-            EquipmentId = equipment?.Id ?? job!.EquipmentId,
-            EquipmentName = equipment?.Name ?? job!.EquipmentName,
-            ProductsId = equipment?.ProductsId ?? job!.ProductsId,
-            AttachmentCount = equipment?.AttachmentCount ?? job!.AttachmentCount,
+            EquipmentId = equipment is null ? job!.EquipmentId : equipment.Id,
+            EquipmentName = equipment is null ? job!.EquipmentName : equipment.Name,
+            ProductsId = equipment is null ? job!.ProductsId : equipment.ProductsId,
+            AttachmentCount = equipment is null ? job!.AttachmentCount : equipment.AttachmentCount,
             HasReservationHistory = reasons.Contains(ReservationHistoryMessage),
             HasEnvironmentGroupMembership = reasons.Contains(EnvironmentGroupMessage),
             BlockingReasons = reasons,

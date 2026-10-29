@@ -11,6 +11,49 @@ namespace ApprovalFramework.Tests;
 public sealed class EquipmentSafeDeletionTests
 {
     [Fact]
+    public async Task PreviewSupportsLegacyEquipmentWithNullableMetadataAndNoDeletionJob()
+    {
+        var factory = new Factory();
+        await using (var db = factory.CreateDbContext())
+        {
+            var equipment = Equipment("LEGACY-EQUIPMENT", null);
+            equipment.ProductsId = null;
+            equipment.Brand = null;
+            equipment.CustodianAccount = null;
+            db.Apparatuses.Add(equipment);
+            db.ApparatusFiles.AddRange(
+                new ApparatusFile
+                {
+                    Id = Guid.NewGuid(), ApparatusId = equipment.Id, Apparatus = equipment,
+                    FileName = "photo.jpg", OriginalFileName = "photo.jpg",
+                    FilePath = "legacy", ContentType = "image/jpeg", FileSize = 1,
+                    CreatedAt = DateTime.UtcNow
+                },
+                new ApparatusFile
+                {
+                    Id = Guid.NewGuid(), ApparatusId = equipment.Id, Apparatus = equipment,
+                    FileName = "manual.pdf", OriginalFileName = "manual.pdf",
+                    FilePath = "legacy", ContentType = "application/pdf", FileSize = 1,
+                    CreatedAt = DateTime.UtcNow
+                });
+            await db.SaveChangesAsync();
+        }
+
+        await using var verify = factory.CreateDbContext();
+        var preview = await Service(verify).GetPreviewAsync("LEGACY-EQUIPMENT");
+
+        Assert.NotNull(preview);
+        Assert.True(preview.Exists);
+        Assert.Equal("LEGACY-EQUIPMENT", preview.EquipmentId);
+        Assert.Equal("LEGACY-EQUIPMENT", preview.EquipmentName);
+        Assert.Null(preview.ProductsId);
+        Assert.Equal(2, preview.AttachmentCount);
+        Assert.Empty(preview.BlockingReasons);
+        Assert.Null(preview.DeletionJobId);
+        Assert.True(preview.CanStart);
+    }
+
+    [Fact]
     public async Task PreviewAndRequestReturnBothPermanentReservationAndEnvironmentBlockers()
     {
         var factory = new Factory();

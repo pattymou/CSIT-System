@@ -342,9 +342,9 @@ else
                 $"/api/assets/equipment/{Uri.EscapeDataString(Id)}/deletion-preview");
             _showDeleteDialog = true;
         }
-        catch (Exception ex)
+        catch
         {
-            _message = $"無法取得刪除預覽：{ex.Message}";
+            _message = "無法取得刪除預覽，請稍後再試。設備資料未變更。";
         }
     }
 
@@ -379,7 +379,7 @@ else
             if (_deletePreview.DeletionStatus == EquipmentDeletionStatuses.Completed)
                 Nav.NavigateTo($"/assets/{EffectiveModuleCode}");
         }
-        catch (Exception ex) { _message = $"無法更新刪除狀態：{ex.Message}"; }
+        catch { _message = "無法更新刪除狀態，請稍後再試。設備資料未變更。"; }
         finally { _deleteWorking = false; }
     }
 
