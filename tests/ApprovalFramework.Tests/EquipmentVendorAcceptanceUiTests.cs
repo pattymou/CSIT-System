@@ -18,7 +18,7 @@ public sealed class EquipmentVendorAcceptanceUiTests
     }
 
     [Fact]
-    public void EquipmentView_HasSystemMetadataAndRealPhotoSections_WithoutOwnershipPanel()
+    public void EquipmentView_HasCompactTimestampsKmMetadataAndRealPhotoSections_WithoutDuplicateSystemPanel()
     {
         var view = Read("Components", "Pages", "ApparatusView.razor");
         var files = Read("Components", "Shared", "EquipmentFileTable.razor");
@@ -26,9 +26,12 @@ public sealed class EquipmentVendorAcceptanceUiTests
         var metadata = Read("Components", "Shared", "EquipmentMetadataSummary.razor");
 
         Assert.DoesNotContain("歸屬／管理設定", view);
-        Assert.Contains("B. 系統自動新增／維護", view);
-        Assert.Contains("Equipment ID", view);
-        Assert.Contains("LifecycleRecords", view);
+        Assert.DoesNotContain("B. 系統自動新增／維護", view);
+        Assert.DoesNotContain("Equipment ID", view);
+        Assert.DoesNotContain("LifecycleRecords", view);
+        Assert.Contains("class=\"equipment-record-timestamps\"", view);
+        Assert.Contains("建立：@DisplayDateTime(_item.CreatedAt)", view);
+        Assert.Contains("更新：@DisplayDateTime(_item.UpdatedAt)", view);
         Assert.Contains("equipment-photo-gallery", view);
         Assert.Contains("src=\"@photo.ImageUrl\"", view);
         Assert.Contains("href=\"@photo.ImageUrl\"", view);
