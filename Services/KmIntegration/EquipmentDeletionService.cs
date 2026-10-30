@@ -253,7 +253,7 @@ public sealed class EquipmentDeletionService(
                 Directory.Delete(quarantineFolder, true);
             if (legacyRawDataSourceFolder is not null)
                 await rawDataExport!.DeleteLatestPackageByLocalFolderAsync(
-                    legacyRawDataSourceFolder);
+                    legacyRawDataSourceFolder, "Apparatus", "equipment", job.EquipmentId);
             job.MarkCompleted(DateTime.UtcNow);
             await db.SaveChangesAsync(cancellationToken);
             return true;

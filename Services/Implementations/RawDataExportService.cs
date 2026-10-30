@@ -313,7 +313,8 @@ public class RawDataExportService : IRawDataExportService
         return targetFolder;
     }
 
-    public Task DeleteLatestPackageByLocalFolderAsync(string localFolderPath)
+    public Task DeleteLatestPackageByLocalFolderAsync(string localFolderPath,
+        string expectedSourceType, string expectedModuleCode, string expectedEntityId)
     {
         if (string.IsNullOrWhiteSpace(_settings.NasRootPath))
             throw new InvalidOperationException("RawData:NasRootPath 未設定");
@@ -328,9 +329,169 @@ public class RawDataExportService : IRawDataExportService
         if (!Directory.Exists(targetFolder)) return Task.CompletedTask;
 
         EnsureNoReparsePoints(rawRoot, targetFolder);
+        ValidateLatestPackageManifest(targetFolder, localFolderPath, expectedSourceType,
+            expectedModuleCode, expectedEntityId);
         Directory.Delete(targetFolder, recursive: true);
         Console.WriteLine($"[RawDataExportService] Latest package deleted by local folder: {targetFolder}");
         return Task.CompletedTask;
+    }
+
+    private static void ValidateLatestPackageManifest(string targetFolder, string localFolderPath,
+        string expectedSourceType, string expectedModuleCode, string expectedEntityId)
+    {
+        if (string.IsNullOrWhiteSpace(expectedSourceType) ||
+            string.IsNullOrWhiteSpace(expectedModuleCode) ||
+            string.IsNullOrWhiteSpace(expectedEntityId))
+            throw new InvalidOperationException("RawData cleanup ownership values are incomplete.");
+
+        var manifestPath = Path.Combine(targetFolder, "rawdata.json");
+        if (!File.Exists(manifestPath))
+            throw new InvalidOperationException(
+                $"RawData manifest is missing; ownership requires manual review: {manifestPath}");
+
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(manifestPath));
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                throw new InvalidOperationException("RawData manifest root must be an object.");
+
+            RequireEqual(root, "sourceType", expectedSourceType, StringComparison.OrdinalIgnoreCase);
+            RequireEqual(root, "moduleCode", expectedModuleCode, StringComparison.OrdinalIgnoreCase);
+            RequireEqual(root, "entityId", expectedEntityId, StringComparison.Ordinal);
+
+            var expectedLocalRoot = Path.GetFullPath(localFolderPath);
+            var expectedRawFolder = Path.GetFullPath(targetFolder);
+            RequirePathEqual(root, "localRootFolder", expectedLocalRoot);
+            RequirePathEqual(root, "nasFolderPath", expectedRawFolder);
+
+            if (!root.TryGetProperty("metadata", out var metadata) ||
+                metadata.ValueKind != JsonValueKind.Object)
+                throw new InvalidOperationException(
+                    "RawData manifest metadata is missing or cannot prove equipment ownership.");
+            RequireEqual(metadata, "id", expectedEntityId, StringComparison.Ordinal);
+            RequireEqual(metadata, "moduleCode", expectedModuleCode,
+                StringComparison.OrdinalIgnoreCase);
+
+            if (!root.TryGetProperty("files", out var files) ||
+                files.ValueKind != JsonValueKind.Array)
+                throw new InvalidOperationException("RawData manifest files must be an array.");
+
+            var comparer = OperatingSystem.IsWindows()
+                ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+            var expectedFileIds = new HashSet<Guid>();
+            var expectedFiles = new HashSet<string>(comparer);
+            var expectedDirectories = new HashSet<string>(comparer);
+            foreach (var file in files.EnumerateArray())
+            {
+                if (file.ValueKind != JsonValueKind.Object)
+                    throw new InvalidOperationException("RawData manifest contains an invalid file entry.");
+                var fileId = RequiredString(file, "fileId");
+                if (!Guid.TryParse(fileId, out var parsedFileId) ||
+                    !expectedFileIds.Add(parsedFileId))
+                    throw new InvalidOperationException($"RawData manifest fileId is invalid: {fileId}");
+                var fileName = RequiredString(file, "fileName");
+                var localFilePath = RequiredString(file, "localFilePath");
+                var nasFilePath = RequiredString(file, "nasFilePath");
+                if (!file.TryGetProperty("fileSize", out var sizeElement) ||
+                    !sizeElement.TryGetInt64(out var expectedSize) || expectedSize < 0)
+                    throw new InvalidOperationException(
+                        $"RawData manifest fileSize is invalid: {fileName}");
+
+                var localRelative = SafeRelativePath(expectedLocalRoot, localFilePath,
+                    "localFilePath");
+                var nasRelative = SafeRelativePath(expectedRawFolder, nasFilePath,
+                    "nasFilePath");
+                if (!comparer.Equals(localRelative, nasRelative) ||
+                    !comparer.Equals(Path.GetFileName(nasRelative), fileName))
+                    throw new InvalidOperationException(
+                        $"RawData manifest path mapping is inconsistent: {fileName}");
+                if (comparer.Equals(nasRelative, "rawdata.json") || !expectedFiles.Add(nasRelative))
+                    throw new InvalidOperationException(
+                        $"RawData manifest contains a duplicate or reserved file path: {nasRelative}");
+
+                var physicalFile = Path.Combine(expectedRawFolder, nasRelative);
+                if (!File.Exists(physicalFile) || new FileInfo(physicalFile).Length != expectedSize)
+                    throw new InvalidOperationException(
+                        $"RawData mirror file is missing or has the wrong size: {physicalFile}");
+                AddParentDirectories(nasRelative, expectedDirectories);
+            }
+
+            var actualFiles = Directory.EnumerateFiles(expectedRawFolder, "*",
+                    SearchOption.AllDirectories)
+                .Select(x => Path.GetRelativePath(expectedRawFolder, x))
+                .Where(x => !comparer.Equals(x, "rawdata.json"))
+                .ToHashSet(comparer);
+            if (!actualFiles.SetEquals(expectedFiles))
+                throw new InvalidOperationException(
+                    "RawData mirror contains files that are missing from the manifest or vice versa.");
+
+            var actualDirectories = Directory.EnumerateDirectories(expectedRawFolder, "*",
+                    SearchOption.AllDirectories)
+                .Select(x => Path.GetRelativePath(expectedRawFolder, x))
+                .ToHashSet(comparer);
+            if (!actualDirectories.SetEquals(expectedDirectories))
+                throw new InvalidOperationException(
+                    "RawData mirror contains directories that are missing from the manifest or vice versa.");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"RawData manifest is malformed and requires manual review: {manifestPath}", ex);
+        }
+    }
+
+    private static void RequireEqual(JsonElement element, string propertyName, string expected,
+        StringComparison comparison)
+    {
+        var actual = RequiredString(element, propertyName);
+        if (!string.Equals(actual, expected, comparison))
+            throw new InvalidOperationException(
+                $"RawData manifest {propertyName} does not match the requested equipment.");
+    }
+
+    private static void RequirePathEqual(JsonElement element, string propertyName, string expected)
+    {
+        var actual = RequiredString(element, propertyName);
+        if (!Path.IsPathFullyQualified(actual) ||
+            !string.Equals(Path.GetFullPath(actual), Path.GetFullPath(expected),
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase :
+                StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"RawData manifest {propertyName} does not match the safe path mapping.");
+    }
+
+    private static string RequiredString(JsonElement element, string propertyName)
+    {
+        if (!element.TryGetProperty(propertyName, out var property) ||
+            property.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(property.GetString()))
+            throw new InvalidOperationException(
+                $"RawData manifest {propertyName} is missing or invalid.");
+        return property.GetString()!;
+    }
+
+    private static string SafeRelativePath(string root, string candidate, string propertyName)
+    {
+        if (!Path.IsPathFullyQualified(candidate))
+            throw new InvalidOperationException(
+                $"RawData manifest {propertyName} must be fully qualified.");
+        var relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(candidate));
+        if (relative == "." || Path.IsPathRooted(relative) || relative == ".." ||
+            relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+            relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"RawData manifest {propertyName} is outside the expected root.");
+        return relative;
+    }
+
+    private static void AddParentDirectories(string relativeFilePath, ISet<string> directories)
+    {
+        var parent = Path.GetDirectoryName(relativeFilePath);
+        while (!string.IsNullOrWhiteSpace(parent) && parent != ".")
+        {
+            directories.Add(parent);
+            parent = Path.GetDirectoryName(parent);
+        }
     }
 
     private string BuildNasFilePathByLocalPath(string localFilePath)

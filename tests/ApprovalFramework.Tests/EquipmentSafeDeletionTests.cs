@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
+using System.Text.Json;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
@@ -402,12 +403,15 @@ public sealed class EquipmentSafeDeletionTests
         try
         {
             await SeedStorageAsync(factory, assetRoot);
-            await SeedLegacyEquipmentFileAsync(factory, assetRoot, "EQ-LEGACY-RAW", "legacy.pdf");
+            var fileId = await SeedLegacyEquipmentFileAsync(factory, assetRoot,
+                "EQ-LEGACY-RAW", "legacy.pdf");
             var localFolder = Path.Combine(assetRoot, "EQ-LEGACY-RAW");
-            var rawFolder = rawData.ResolveLatestPackageFolderByLocalFolder(localFolder);
-            Directory.CreateDirectory(Path.Combine(rawFolder, "mirror"));
-            await File.WriteAllTextAsync(Path.Combine(rawFolder, "mirror", "legacy.pdf"), "mirror");
-            await File.WriteAllTextAsync(Path.Combine(rawFolder, "rawdata.json"), "{}");
+            string localFilePath;
+            await using (var read = factory.CreateDbContext())
+                localFilePath = await read.ApparatusFiles.Where(x => x.Id == fileId)
+                    .Select(x => Path.Combine(x.FilePath, x.FileName)).SingleAsync();
+            var rawFolder = await CreateValidRawMirrorAsync(rawData, localFolder,
+                "EQ-LEGACY-RAW", fileId, localFilePath);
             var otherFolder = Path.Combine(rawRoot, "keep-other-equipment");
             Directory.CreateDirectory(otherFolder);
             await File.WriteAllTextAsync(Path.Combine(otherFolder, "keep.txt"), "keep");
@@ -576,9 +580,133 @@ public sealed class EquipmentSafeDeletionTests
             Directory.CreateSymbolicLink(Path.Combine(rawFolder, "linked"), outside);
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                rawData.DeleteLatestPackageByLocalFolderAsync(localRoot));
+                rawData.DeleteLatestPackageByLocalFolderAsync(localRoot, "Apparatus",
+                    "equipment", "EQ-REPARSE"));
             Assert.True(Directory.Exists(rawFolder));
             Assert.True(Directory.Exists(outside));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task RawDataCleanupRejectsManifestForAnotherEquipment()
+    {
+        var root = NewRoot();
+        var localRoot = Path.Combine(root, "Assets", "equipment", "EQ-EXPECTED");
+        var sourceFolder = Path.Combine(localRoot, Guid.NewGuid().ToString("N"));
+        var rawRoot = Path.Combine(root, "RawData");
+        Directory.CreateDirectory(sourceFolder);
+        Directory.CreateDirectory(rawRoot);
+        var localFile = Path.Combine(sourceFolder, "file.pdf");
+        await File.WriteAllTextAsync(localFile, "content");
+        var rawData = RawData(rawRoot);
+        try
+        {
+            var rawFolder = await CreateValidRawMirrorAsync(rawData, localRoot,
+                "EQ-OTHER", Guid.NewGuid(), localFile);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                rawData.DeleteLatestPackageByLocalFolderAsync(localRoot, "Apparatus",
+                    "equipment", "EQ-EXPECTED"));
+            Assert.True(Directory.Exists(rawFolder));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task RawDataCleanupRejectsMetadataForAnotherEquipment()
+    {
+        var root = NewRoot();
+        var localRoot = Path.Combine(root, "Assets", "equipment", "EQ-METADATA");
+        var sourceFolder = Path.Combine(localRoot, Guid.NewGuid().ToString("N"));
+        var rawRoot = Path.Combine(root, "RawData");
+        Directory.CreateDirectory(sourceFolder);
+        Directory.CreateDirectory(rawRoot);
+        var localFile = Path.Combine(sourceFolder, "file.pdf");
+        await File.WriteAllTextAsync(localFile, "content");
+        var rawData = RawData(rawRoot);
+        try
+        {
+            var rawFolder = await CreateValidRawMirrorAsync(rawData, localRoot,
+                "EQ-METADATA", Guid.NewGuid(), localFile, "EQ-OTHER-METADATA");
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                rawData.DeleteLatestPackageByLocalFolderAsync(localRoot, "Apparatus",
+                    "equipment", "EQ-METADATA"));
+            Assert.True(Directory.Exists(rawFolder));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task RawDataCleanupRejectsUnknownFile()
+    {
+        var root = NewRoot();
+        var localRoot = Path.Combine(root, "Assets", "equipment", "EQ-UNKNOWN-RAW");
+        var sourceFolder = Path.Combine(localRoot, Guid.NewGuid().ToString("N"));
+        var rawRoot = Path.Combine(root, "RawData");
+        Directory.CreateDirectory(sourceFolder);
+        Directory.CreateDirectory(rawRoot);
+        var localFile = Path.Combine(sourceFolder, "listed.pdf");
+        await File.WriteAllTextAsync(localFile, "listed");
+        var rawData = RawData(rawRoot);
+        try
+        {
+            var rawFolder = await CreateValidRawMirrorAsync(rawData, localRoot,
+                "EQ-UNKNOWN-RAW", Guid.NewGuid(), localFile);
+            await File.WriteAllTextAsync(Path.Combine(rawFolder, "unknown.bin"), "unknown");
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                rawData.DeleteLatestPackageByLocalFolderAsync(localRoot, "Apparatus",
+                    "equipment", "EQ-UNKNOWN-RAW"));
+            Assert.True(File.Exists(Path.Combine(rawFolder, "unknown.bin")));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RawDataCleanupRejectsMissingOrMalformedManifest(bool malformed)
+    {
+        var root = NewRoot();
+        var localRoot = Path.Combine(root, "Assets", "equipment", "EQ-BAD-MANIFEST");
+        var rawRoot = Path.Combine(root, "RawData");
+        Directory.CreateDirectory(localRoot);
+        Directory.CreateDirectory(rawRoot);
+        var rawData = RawData(rawRoot);
+        try
+        {
+            var rawFolder = rawData.ResolveLatestPackageFolderByLocalFolder(localRoot);
+            Directory.CreateDirectory(rawFolder);
+            if (malformed)
+                await File.WriteAllTextAsync(Path.Combine(rawFolder, "rawdata.json"), "{bad-json");
+
+            var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                rawData.DeleteLatestPackageByLocalFolderAsync(localRoot, "Apparatus",
+                    "equipment", "EQ-BAD-MANIFEST"));
+            Assert.Contains(malformed ? "malformed" : "missing", exception.Message,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.True(Directory.Exists(rawFolder));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task RawDataCleanupIsIdempotentWhenMirrorDoesNotExist()
+    {
+        var root = NewRoot();
+        var localRoot = Path.Combine(root, "Assets", "equipment", "EQ-NO-MIRROR");
+        var rawRoot = Path.Combine(root, "RawData");
+        Directory.CreateDirectory(localRoot);
+        Directory.CreateDirectory(rawRoot);
+        var rawData = RawData(rawRoot);
+        try
+        {
+            await rawData.DeleteLatestPackageByLocalFolderAsync(localRoot, "Apparatus",
+                "equipment", "EQ-NO-MIRROR");
+            Assert.False(Directory.Exists(
+                rawData.ResolveLatestPackageFolderByLocalFolder(localRoot)));
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
@@ -671,6 +799,45 @@ public sealed class EquipmentSafeDeletionTests
         return id;
     }
 
+    private static RawDataExportService RawData(string rawRoot) =>
+        new(Options.Create(new RawDataSettings { Enabled = true, NasRootPath = rawRoot }));
+
+    private static async Task<string> CreateValidRawMirrorAsync(RawDataExportService rawData,
+        string localRoot, string equipmentId, Guid fileId, string localFilePath,
+        string? metadataEquipmentId = null)
+    {
+        var rawFolder = rawData.ResolveLatestPackageFolderByLocalFolder(localRoot);
+        var relative = Path.GetRelativePath(localRoot, localFilePath);
+        var rawFilePath = Path.Combine(rawFolder, relative);
+        Directory.CreateDirectory(Path.GetDirectoryName(rawFilePath)!);
+        File.Copy(localFilePath, rawFilePath, overwrite: true);
+        var manifest = new
+        {
+            schemaVersion = "2.0",
+            mode = "latest-package-mirror-local-path",
+            sourceSystem = "CSIT",
+            sourceType = "Apparatus",
+            moduleCode = "equipment",
+            entityId = equipmentId,
+            localRootFolder = Path.GetFullPath(localRoot),
+            nasFolderPath = Path.GetFullPath(rawFolder),
+            metadata = new { id = metadataEquipmentId ?? equipmentId, moduleCode = "equipment" },
+            files = new[]
+            {
+                new
+                {
+                    fileId = fileId.ToString(), fileName = Path.GetFileName(localFilePath),
+                    fileSize = new FileInfo(localFilePath).Length,
+                    localFilePath = Path.GetFullPath(localFilePath),
+                    nasFilePath = Path.GetFullPath(rawFilePath)
+                }
+            }
+        };
+        await File.WriteAllTextAsync(Path.Combine(rawFolder, "rawdata.json"),
+            JsonSerializer.Serialize(manifest));
+        return rawFolder;
+    }
+
     private static Apparatus Equipment(string id, string? folder) => new()
     {
         Id = id, ModuleCode = "equipment", Name = id, ProductsId = "P-" + id,
@@ -738,7 +905,8 @@ public sealed class EquipmentSafeDeletionTests
             ResolveAttempts++;
             return Path.Combine(rawRoot, "legacy-package");
         }
-        public Task DeleteLatestPackageByLocalFolderAsync(string localFolderPath)
+        public Task DeleteLatestPackageByLocalFolderAsync(string localFolderPath,
+            string expectedSourceType, string expectedModuleCode, string expectedEntityId)
         {
             DeleteAttempts++;
             if (DeleteAttempts == 1) throw new IOException("Synthetic RawData cleanup failure.");

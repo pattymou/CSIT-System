@@ -542,6 +542,8 @@ public sealed class EquipmentVendorManagementTests
         public Task<bool> DeleteLatestPackageAsync(string sourceType, string moduleCode, string entityId) =>
             Task.FromResult(true);
         public string ResolveLatestPackageFolderByLocalFolder(string localFolderPath) => localFolderPath;
-        public Task DeleteLatestPackageByLocalFolderAsync(string localFolderPath) => Task.CompletedTask;
+        public Task DeleteLatestPackageByLocalFolderAsync(string localFolderPath,
+            string expectedSourceType, string expectedModuleCode, string expectedEntityId) =>
+            Task.CompletedTask;
     }
 }

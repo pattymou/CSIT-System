@@ -12,5 +12,6 @@ public interface IRawDataExportService
 
     string ResolveLatestPackageFolderByLocalFolder(string localFolderPath);
 
-    Task DeleteLatestPackageByLocalFolderAsync(string localFolderPath);
+    Task DeleteLatestPackageByLocalFolderAsync(string localFolderPath, string expectedSourceType,
+        string expectedModuleCode, string expectedEntityId);
 }
