@@ -1,8 +1,11 @@
 using System.Data;
 using System.Security.Claims;
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
+using SIT.DepartmentSystem.Web.Models.Config;
 
 namespace SIT.DepartmentSystem.Web.Services.Approval;
 
@@ -20,14 +23,31 @@ public sealed record ApprovalSubmissionDto(
 
 public sealed record MySubmissionCounts(int Pending, int Rejected);
 
+public enum CommittedStagingDryRunCategory
+{
+    SafeToClean,
+    FormalFileMissing,
+    FileMismatch,
+    CommitOrAuditIncomplete,
+    StagingMissing,
+    Other
+}
+
+public sealed record CommittedStagingDryRunSummary(
+    int Total, IReadOnlyDictionary<CommittedStagingDryRunCategory, int> Counts);
+
 public sealed class ApprovalSubmissionService(
     IDbContextFactory<AppDbContext> dbFactory,
     ApprovalReviewerScopeResolver reviewerScope,
     IApprovalCommitHandlerRegistry handlers,
     IApprovalStagingRootResolver stagingRoot,
     IApprovalStagingStorage stagingStorage,
-    ILogger<ApprovalSubmissionService>? logger = null)
+    ILogger<ApprovalSubmissionService>? logger = null,
+    IOptions<ApprovalStagingCleanupOptions>? cleanupOptions = null)
 {
+    private readonly ApprovalStagingCleanupOptions committedCleanup =
+        cleanupOptions?.Value ?? new ApprovalStagingCleanupOptions();
+
     public async Task<IReadOnlyList<ApprovalSourceDto>> ListActiveSourcesAsync(CancellationToken cancellationToken = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -339,6 +359,8 @@ public sealed class ApprovalSubmissionService(
             }
         }
 
+        cleaned += await CleanCommittedStagingBatchAsync(cancellationToken);
+
         var committedEquipmentIds = await (
             from submission in db.PendingSubmissions.AsNoTracking()
             join deletion in db.EquipmentDeletionJobs.AsNoTracking()
@@ -364,6 +386,296 @@ public sealed class ApprovalSubmissionService(
         }
         return cleaned;
     }
+
+    private async Task<int> CleanCommittedStagingBatchAsync(CancellationToken cancellationToken)
+    {
+        var cutoff = NormalizeCutoff(committedCleanup.NewSubmissionNotBeforeUtc);
+        if (!committedCleanup.EnableNewSubmissionCleanup && !committedCleanup.EnableHistoricalCleanup)
+            return 0;
+        if (committedCleanup.EnableNewSubmissionCleanup && cutoff is null)
+        {
+            logger?.LogWarning(
+                "Approval committed staging cleanup is disabled because NewSubmissionNotBeforeUtc is missing.");
+            if (!committedCleanup.EnableHistoricalCleanup) return 0;
+        }
+
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var query = db.PendingSubmissions.AsNoTracking().Where(x =>
+            x.Status == ApprovalStatus.Committed && x.StagingStorageKey != null);
+        if (committedCleanup.EnableNewSubmissionCleanup && cutoff is not null &&
+            !committedCleanup.EnableHistoricalCleanup)
+            query = query.Where(x => x.SubmittedAt >= cutoff.Value);
+        else if (!committedCleanup.EnableNewSubmissionCleanup &&
+            committedCleanup.EnableHistoricalCleanup && cutoff is not null)
+            query = query.Where(x => x.SubmittedAt < cutoff.Value);
+
+        var batchSize = Math.Clamp(committedCleanup.BatchSize, 1, 100);
+        var candidateIds = await query.OrderBy(x => x.UpdatedAt).Select(x => x.Id)
+            .Take(batchSize).ToListAsync(cancellationToken);
+        var cleaned = 0;
+        foreach (var id in candidateIds)
+        {
+            try
+            {
+                if (await TryCleanCommittedStagingAsync(id, cancellationToken)) cleaned++;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger?.LogWarning(ex,
+                    "Committed staging cleanup will retry for submission {SubmissionId}", id);
+            }
+        }
+        return cleaned;
+    }
+
+    public async Task<CommittedStagingDryRunSummary> DryRunCommittedStagingAsync(
+        CancellationToken cancellationToken = default)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var items = await db.PendingSubmissions.AsNoTracking()
+            .Where(x => x.Status == ApprovalStatus.Committed && x.StagingStorageKey != null)
+            .OrderBy(x => x.SubmittedAt).ToListAsync(cancellationToken);
+        var counts = Enum.GetValues<CommittedStagingDryRunCategory>()
+            .ToDictionary(x => x, _ => 0);
+        foreach (var item in items)
+        {
+            CommittedStagingInspection inspection;
+            try
+            {
+                inspection = await InspectCommittedStagingAsync(db, item, cancellationToken);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                logger?.LogWarning(ex,
+                    "Committed staging dry-run could not inspect submission {SubmissionId}", item.Id);
+                inspection = Inspection(CommittedStagingDryRunCategory.Other,
+                    "the submission could not be inspected safely");
+            }
+            counts[inspection.Category]++;
+        }
+        return new CommittedStagingDryRunSummary(items.Count, counts);
+    }
+
+    private async Task<bool> TryCleanCommittedStagingAsync(Guid id,
+        CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
+        var item = await LoadForUpdateAsync(db, id, cancellationToken);
+        if (item.StagingStorageKey is null) return false;
+        var inspection = await InspectCommittedStagingAsync(db, item, cancellationToken);
+        if (!inspection.FormalFileSafe)
+        {
+            logger?.LogWarning(
+                "Skipped committed staging cleanup for submission {SubmissionId}: {Reason}",
+                id, inspection.Reason);
+            return false;
+        }
+
+        await stagingStorage.DeleteAsync(id, item.StagingStorageKey, cancellationToken);
+        item.ClearCommittedStagingFile(DateTime.UtcNow);
+        await db.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return true;
+    }
+
+    private async Task<CommittedStagingInspection> InspectCommittedStagingAsync(AppDbContext db,
+        PendingSubmission item, CancellationToken cancellationToken)
+    {
+        if (item.Status != ApprovalStatus.Committed ||
+            !Guid.TryParseExact(item.CommitResultKey, "N", out var resultId) ||
+            item.FileSize is null or <= 0 || !IsSha256(item.FileHash) ||
+            item.ReviewerAccount is null || item.ReviewedAt is null ||
+            item.CommitLeaseToken is not null || item.CommitLeaseExpiresAt is not null)
+            return Inspection(CommittedStagingDryRunCategory.CommitOrAuditIncomplete,
+                "commit metadata or lease is incomplete");
+
+        var auditActions = await db.ApprovalAuditEvents.AsNoTracking()
+            .Where(x => x.SubmissionId == item.Id).Select(x => x.Action)
+            .ToListAsync(cancellationToken);
+        if (!auditActions.Contains(ApprovalAuditActions.Submitted) ||
+            !auditActions.Contains(ApprovalAuditActions.Approved) ||
+            !auditActions.Contains(ApprovalAuditActions.Committed))
+            return Inspection(CommittedStagingDryRunCategory.CommitOrAuditIncomplete,
+                "required Submitted, Approved, or Committed audit is missing");
+
+        if (await db.PendingSubmissions.AsNoTracking().AnyAsync(x => x.Id != item.Id &&
+            x.StagingStorageKey != null && x.StagingStorageKey == item.StagingStorageKey,
+            cancellationToken))
+            return Inspection(CommittedStagingDryRunCategory.Other,
+                "the staging key is referenced by another submission");
+
+        var formal = item.SourceModuleCode.ToLowerInvariant() switch
+        {
+            "equipment" or "goods" => await InspectAssetFormalFileAsync(db, item, resultId,
+                cancellationToken),
+            "certification" or "verification" => await InspectThreeLevelFormalFileAsync(db,
+                item, resultId, cancellationToken),
+            _ => Inspection(CommittedStagingDryRunCategory.Other,
+                "the approval module has no committed staging cleanup verifier")
+        };
+        if (!formal.FormalFileSafe) return formal;
+
+        try
+        {
+            await using var staged = await stagingStorage.OpenReadAsync(item.Id,
+                item.StagingStorageKey!, cancellationToken);
+            return Inspection(CommittedStagingDryRunCategory.SafeToClean,
+                "formal file and staging file are verified", true);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return Inspection(CommittedStagingDryRunCategory.StagingMissing,
+                "staging file is already absent after formal file verification", true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return Inspection(CommittedStagingDryRunCategory.Other,
+                "staging file cannot be read");
+        }
+    }
+
+    private static async Task<CommittedStagingInspection> InspectAssetFormalFileAsync(
+        AppDbContext db, PendingSubmission item, Guid resultId,
+        CancellationToken cancellationToken)
+    {
+        var file = await db.ApparatusFiles.AsNoTracking().Include(x => x.Apparatus)
+            .SingleOrDefaultAsync(x => x.Id == resultId, cancellationToken);
+        if (file is null)
+            return Inspection(CommittedStagingDryRunCategory.FormalFileMissing,
+                "the formal asset record was removed or never committed");
+        if (file.Apparatus is null || file.ApparatusId != item.ContextId ||
+            !string.Equals(file.Apparatus.ModuleCode, item.SourceModuleCode,
+                StringComparison.OrdinalIgnoreCase))
+            return Inspection(CommittedStagingDryRunCategory.Other,
+                "the formal asset record belongs to another context");
+        if (file.FileSize != item.FileSize ||
+            !string.Equals(file.Sha256, item.FileHash, StringComparison.OrdinalIgnoreCase))
+            return Inspection(CommittedStagingDryRunCategory.FileMismatch,
+                "the formal asset database size or SHA256 does not match the submission");
+
+        var formal = await InspectPhysicalFileAsync(Path.Combine(file.FilePath, file.FileName),
+            item.FileSize.Value, item.FileHash!, cancellationToken);
+        if (!formal.FormalFileSafe) return formal;
+        if (!file.IsRawDataExported || string.IsNullOrWhiteSpace(file.NasFolderPath) ||
+            string.IsNullOrWhiteSpace(file.RawJsonPath) || !File.Exists(file.RawJsonPath))
+            return Inspection(CommittedStagingDryRunCategory.Other,
+                "the required asset RAW mirror or manifest is incomplete");
+        var mirrorPath = Path.Combine(file.NasFolderPath, file.Id.ToString("N"), file.FileName);
+        return await InspectPhysicalFileAsync(mirrorPath, item.FileSize.Value, item.FileHash!,
+            cancellationToken, "RAW mirror");
+    }
+
+    private static async Task<CommittedStagingInspection> InspectThreeLevelFormalFileAsync(
+        AppDbContext db, PendingSubmission item, Guid resultId,
+        CancellationToken cancellationToken)
+    {
+        var file = await db.ModuleCaseFiles.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == resultId, cancellationToken);
+        if (file is null)
+            return Inspection(CommittedStagingDryRunCategory.FormalFileMissing,
+                "the formal three-level record was removed or never committed");
+        var moduleCode = await db.ModuleRecords.AsNoTracking().Where(x => x.Id == file.RecordId)
+            .Select(x => x.Module.Code).SingleOrDefaultAsync(cancellationToken);
+        if (!string.Equals(moduleCode, item.SourceModuleCode, StringComparison.OrdinalIgnoreCase))
+            return Inspection(CommittedStagingDryRunCategory.Other,
+                "the formal three-level record belongs to another module");
+
+        ThreeLevelUploadTarget target;
+        try { target = ThreeLevelUploadTarget.FromContext(item.ContextType, item.ContextId); }
+        catch (Exception ex) when (ex is InvalidOperationException or FormatException)
+        {
+            return Inspection(CommittedStagingDryRunCategory.CommitOrAuditIncomplete,
+                "the committed three-level context is invalid");
+        }
+        if (!await ThreeLevelContextMatchesAsync(db, file, target, cancellationToken))
+            return Inspection(CommittedStagingDryRunCategory.Other,
+                "the formal three-level record belongs to another context");
+        var isTestReport = target.Kind is ThreeLevelUploadKind.TestReport or
+            ThreeLevelUploadKind.TestReportByTaskNo or ThreeLevelUploadKind.TestReportVersion;
+        if (isTestReport && (file.FileKind != ModuleCaseFileKinds.TestReport ||
+            file.ReviewStatus != TestReportReviewStatuses.Approved))
+            return Inspection(CommittedStagingDryRunCategory.Other,
+                "the formal test report is not approved");
+        if (!isTestReport && file.FileKind != ModuleCaseFileKinds.Attachment)
+            return Inspection(CommittedStagingDryRunCategory.Other,
+                "the formal attachment kind does not match the approval context");
+        if (file.FileSize != item.FileSize ||
+            !string.Equals(file.Sha256, item.FileHash, StringComparison.OrdinalIgnoreCase))
+            return Inspection(CommittedStagingDryRunCategory.FileMismatch,
+                "the formal three-level database size or SHA256 does not match the submission");
+
+        var formal = await InspectPhysicalFileAsync(Path.Combine(file.FilePath, file.FileName),
+            item.FileSize.Value, item.FileHash!, cancellationToken);
+        if (!formal.FormalFileSafe) return formal;
+        if (!file.IsRawDataExported || string.IsNullOrWhiteSpace(file.NasFilePath) ||
+            string.IsNullOrWhiteSpace(file.RawJsonPath) || !File.Exists(file.RawJsonPath))
+            return Inspection(CommittedStagingDryRunCategory.Other,
+                "the required three-level RAW mirror or manifest is incomplete");
+        return await InspectPhysicalFileAsync(file.NasFilePath, item.FileSize.Value,
+            item.FileHash!, cancellationToken, "RAW mirror");
+    }
+
+    private static async Task<bool> ThreeLevelContextMatchesAsync(AppDbContext db,
+        ModuleCaseFile file, ThreeLevelUploadTarget target, CancellationToken cancellationToken)
+    {
+        return target.Kind switch
+        {
+            ThreeLevelUploadKind.CaseAttachment => file.CaseId == target.Id,
+            ThreeLevelUploadKind.CaseAttachmentByNo => file.RecordId == target.Id &&
+                string.Equals(file.CaseNo, target.Number, StringComparison.OrdinalIgnoreCase),
+            ThreeLevelUploadKind.TaskAttachment or ThreeLevelUploadKind.TestReport =>
+                file.TaskId == target.Id,
+            ThreeLevelUploadKind.TaskAttachmentByNo or ThreeLevelUploadKind.TestReportByTaskNo =>
+                file.CaseId == target.Id &&
+                string.Equals(file.TaskNo, target.Number, StringComparison.OrdinalIgnoreCase),
+            ThreeLevelUploadKind.TestReportVersion => await db.ModuleCaseFiles.AsNoTracking()
+                .AnyAsync(x => x.Id == target.Id && x.FileKind == ModuleCaseFileKinds.TestReport &&
+                    x.DocumentId == file.DocumentId && x.RecordId == file.RecordId &&
+                    x.CaseId == file.CaseId && x.TaskId == file.TaskId, cancellationToken),
+            _ => false
+        };
+    }
+
+    private static async Task<CommittedStagingInspection> InspectPhysicalFileAsync(string path,
+        long expectedSize, string expectedHash, CancellationToken cancellationToken,
+        string label = "formal file")
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return Inspection(CommittedStagingDryRunCategory.FormalFileMissing,
+                $"the {label} does not exist");
+        var info = new FileInfo(path);
+        if (info.Length != expectedSize)
+            return Inspection(CommittedStagingDryRunCategory.FileMismatch,
+                $"the {label} size does not match the submission");
+        await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.Read, 81920, FileOptions.Asynchronous);
+        var hash = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken));
+        return string.Equals(hash, expectedHash, StringComparison.OrdinalIgnoreCase)
+            ? Inspection(CommittedStagingDryRunCategory.SafeToClean,
+                $"the {label} is verified", true)
+            : Inspection(CommittedStagingDryRunCategory.FileMismatch,
+                $"the {label} SHA256 does not match the submission");
+    }
+
+    private static bool IsSha256(string? value) => value is { Length: 64 } &&
+        value.All(Uri.IsHexDigit);
+
+    private static DateTime? NormalizeCutoff(DateTime? value) => value switch
+    {
+        null => null,
+        { Kind: DateTimeKind.Utc } utc => utc,
+        { Kind: DateTimeKind.Local } local => local.ToUniversalTime(),
+        { } unspecified => DateTime.SpecifyKind(unspecified, DateTimeKind.Utc)
+    };
+
+    private static CommittedStagingInspection Inspection(
+        CommittedStagingDryRunCategory category, string reason, bool formalFileSafe = false) =>
+        new(category, reason, formalFileSafe);
+
+    private sealed record CommittedStagingInspection(
+        CommittedStagingDryRunCategory Category, string Reason, bool FormalFileSafe);
 
     private async Task<bool> CleanCompletedEquipmentStagingAsync(Guid id,
         CancellationToken cancellationToken)

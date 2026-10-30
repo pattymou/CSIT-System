@@ -393,6 +393,8 @@ builder.Services.AddScoped<IVerificationCaseDeletionPreviewService, Verification
 
 builder.Services.Configure<RawDataSettings>(
     builder.Configuration.GetSection("RawData"));
+builder.Services.Configure<ApprovalStagingCleanupOptions>(
+    builder.Configuration.GetSection("ApprovalStagingCleanup"));
 
 builder.Services.AddScoped<IRawDataExportService, RawDataExportService>();
 builder.Services.AddScoped<ISystemOptionService, SystemOptionService>();

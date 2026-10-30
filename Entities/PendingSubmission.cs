@@ -160,6 +160,17 @@ public sealed class PendingSubmission
         UpdatedAt = now;
     }
 
+    public void ClearCommittedStagingFile(DateTime now)
+    {
+        if (Status != ApprovalStatus.Committed || string.IsNullOrWhiteSpace(CommitResultKey) ||
+            ReviewerAccount is null || ReviewedAt is null || CommitLeaseToken is not null ||
+            CommitLeaseExpiresAt is not null)
+            throw new InvalidOperationException(
+                "Only a fully committed approval can clear committed staging metadata.");
+        StagingStorageKey = null;
+        UpdatedAt = now;
+    }
+
     public void StartCommit(Guid leaseToken, DateTime now, TimeSpan leaseDuration)
     {
         EnsureStatus(ApprovalStatus.ApprovedPendingCommit);
