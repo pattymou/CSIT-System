@@ -2,6 +2,16 @@
 
 The `CSIT DEV Ready Watcher` Windows task runs every minute as `NT AUTHORITY\LOCAL SERVICE`. It reads public GitHub tags but has no GitHub write credential, Production credential, or Production Service control rights. Only a `dev-ready-YYYYMMDDHHMMSS-<8-character SHA>` tag pointing to the current head of `feature/km-stage-integration` can start a deployment. An ordinary commit does nothing.
 
+The same single watcher also has an at-startup trigger. When the newest ready tag still matches
+`state\current.json`, it checks the recorded PID, executable path, release manifest, DLL hash, 7296/7444
+listeners, HTTPS endpoints, and OIDC redirect. A healthy runtime is left untouched. If no DEV runtime
+exists, `Restart-DevCurrent.ps1` may restart only the already tested release recorded in `current.json`;
+it does not fetch, build, test, publish, create a tag, or select a different SHA. Recovery requires a
+healthy Production 5010 guard, the DEV database, every configured DEV storage root, Shared Identity DEV,
+and no active equipment deletion job. Existing or duplicate processes fail closed. Attempts use the
+deployment lock, a five-minute cooldown, and a maximum of three starts per hour; results are written to
+`state\runtime-recovery.json` and `logs\runtime-recovery.log`.
+
 `Release-DevReady.ps1` is the release command for Codex after source review, Build/Test, commit, and push. It independently builds and tests the pushed commit in a clean checkout before pushing the ready tag. `Watch-DevReady.ps1` then invokes `Deploy-DevReady.ps1` from the protected local automation directory. The deployer clones the exact commit, builds it, runs the full test suite, and publishes the tested DLL into `C:\ProgramData\CSIT-DEV\releases\<SHA>`. A file lock permits one deployment at a time.
 
 The deployer reads only `C:\ProgramData\CSIT-DEV\secrets\runtime.json`, which targets `sit_department_system_dev` as `csit_runtime_dev`. It never pushes secrets or artifacts to GitHub. A change involving migration files stops before activation for DEV DBA review and backup. The current release stays live during Build/Test. After activation, HTTPS, OIDC redirect, static assets, Blazor WebSocket, and 7444 guards are checked. If a subsequent release fails smoke checks, the previous successful DEV release is restarted. A failed ready tag is recorded in `state\failed.json` and is not retried every minute.

@@ -22,19 +22,30 @@ try {
 }
 
 try {
+    $current = if (Test-Path -LiteralPath $currentFile) {
+        Get-Content -LiteralPath $currentFile -Raw | ConvertFrom-Json
+    } else { $null }
     $lines = @(& 'C:\Program Files\Git\cmd\git.exe' ls-remote --tags --refs $remote 'refs/tags/dev-ready-*')
-    if ($LASTEXITCODE -ne 0) { throw 'Could not read DEV ready tags.' }
+    if ($LASTEXITCODE -ne 0) {
+        if ($current) { & (Join-Path $root 'automation\Restart-DevCurrent.ps1') }
+        throw 'Could not read DEV ready tags.'
+    }
     $candidates = @($lines | ForEach-Object {
         if ($_ -match '^([0-9a-f]{40})\s+refs/tags/(dev-ready-([0-9]{14})-([0-9a-f]{8}))$' -and
             $Matches[1].StartsWith($Matches[4])) {
             [pscustomobject] @{ Sha = $Matches[1]; Tag = $Matches[2]; Timestamp = $Matches[3] }
         }
     } | Sort-Object Timestamp -Descending)
-    if ($candidates.Count -eq 0) { return }
+    if ($candidates.Count -eq 0) {
+        if ($current) { & (Join-Path $root 'automation\Restart-DevCurrent.ps1') }
+        return
+    }
     $ready = $candidates[0]
-    if (Test-Path -LiteralPath $currentFile) {
-        $current = Get-Content -LiteralPath $currentFile -Raw | ConvertFrom-Json
-        if ($current.Sha -eq $ready.Sha -and $current.Tag -eq $ready.Tag) { return }
+    if ($current) {
+        if ($current.Sha -eq $ready.Sha -and $current.Tag -eq $ready.Tag) {
+            & (Join-Path $root 'automation\Restart-DevCurrent.ps1')
+            return
+        }
     }
     if (Test-Path -LiteralPath $failedFile) {
         $failed = Get-Content -LiteralPath $failedFile -Raw | ConvertFrom-Json

@@ -45,7 +45,8 @@ foreach ($restricted in @($automationRoot, $reviewRoot)) {
     if ($LASTEXITCODE -ne 0) { throw 'DEV restricted directory ACL update failed.' }
 }
 $names = @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevMigrationReview.ps1',
-    'Approve-DevMigrationReview.ps1', 'Initialize-DevManagedAssetStorage.ps1')
+    'Approve-DevMigrationReview.ps1', 'Initialize-DevManagedAssetStorage.ps1',
+    'Restart-DevCurrent.ps1')
 foreach ($name in $names) {
     $source = Join-Path $PSScriptRoot $name
     $target = Join-Path $automationRoot $name
@@ -57,6 +58,10 @@ foreach ($name in $names) {
         throw 'DEV automation script verification failed.'
     }
 }
+$periodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
+$startupTrigger = New-ScheduledTaskTrigger -AtStartup
+Set-ScheduledTask -TaskName $taskName -Trigger @($startupTrigger, $periodicTrigger) | Out-Null
 if (@(Get-NetTCPConnection -State Listen -LocalPort 5010 |
         Select-Object -ExpandProperty OwningProcess -Unique)[0] -ne $productionBefore[0]) {
     throw 'Production PID changed during DEV watcher automation update.'

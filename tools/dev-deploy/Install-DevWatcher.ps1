@@ -59,7 +59,8 @@ foreach ($thumbprint in @('46BFDA36B073576B3116CB5E52D7ABE1FC595F2D',
 
 $scriptRoot = $PSScriptRoot
 foreach ($name in @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevMigrationReview.ps1',
-        'Approve-DevMigrationReview.ps1', 'Initialize-DevManagedAssetStorage.ps1')) {
+        'Approve-DevMigrationReview.ps1', 'Initialize-DevManagedAssetStorage.ps1',
+        'Restart-DevCurrent.ps1')) {
     $target = Join-Path $root ('automation\' + $name)
     Copy-Item -LiteralPath (Join-Path $scriptRoot $name) -Destination $target -Force
     & icacls.exe $target /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-19:R' | Out-Null
@@ -74,13 +75,15 @@ if (-not (Test-Path -LiteralPath $baselineFile)) {
 $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument `
     ('-NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File "' +
         (Join-Path $root 'automation\Watch-DevReady.ps1') + '"')
-$trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+$periodicTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
     -RepetitionInterval (New-TimeSpan -Minutes 1) -RepetitionDuration (New-TimeSpan -Days 3650)
+$startupTrigger = New-ScheduledTaskTrigger -AtStartup
 $principal = New-ScheduledTaskPrincipal -UserId 'NT AUTHORITY\LOCAL SERVICE' `
     -LogonType ServiceAccount -RunLevel Limited
 $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Minutes 30) `
     -MultipleInstances IgnoreNew -StartWhenAvailable
-Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $trigger `
+Register-ScheduledTask -TaskName $taskName -Action $action `
+    -Trigger @($startupTrigger, $periodicTrigger) `
     -Principal $principal -Settings $settings -Force | Out-Null
 if (@(Get-NetTCPConnection -State Listen -LocalPort 5010 |
         Select-Object -ExpandProperty OwningProcess -Unique)[0] -ne $productionBefore[0]) {
