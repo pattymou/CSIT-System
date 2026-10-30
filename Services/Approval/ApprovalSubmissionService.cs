@@ -271,7 +271,8 @@ public sealed class ApprovalSubmissionService(
         CancellationToken cancellationToken)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
         var submission = await LoadForUpdateAsync(db, id, cancellationToken);
         await reviewerScope.DemandReviewAsync(reviewer, submission, cancellationToken);
         var actor = ApprovalIdentity.Account(reviewer);
@@ -282,7 +283,7 @@ public sealed class ApprovalSubmissionService(
             reject ? ApprovalAuditActions.Rejected : ApprovalAuditActions.Approved, actor, now,
             ApprovalStatus.Pending, submission.Status, reject ? submission.RejectReason : null));
         await db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
     }
 
     public async Task WithdrawMineAsync(Guid id, ClaimsPrincipal user,
@@ -558,6 +559,13 @@ public sealed class ApprovalSubmissionService(
         var formal = await InspectPhysicalFileAsync(Path.Combine(file.FilePath, file.FileName),
             item.FileSize.Value, item.FileHash!, cancellationToken);
         if (!formal.FormalFileSafe) return formal;
+        var managedEquipment = item.SourceModuleCode.Equals("equipment",
+            StringComparison.OrdinalIgnoreCase) && file.ArchiveStatus is not null;
+        if (managedEquipment)
+            return file.ArchiveStatus == FileArchiveStatuses.Archived
+                ? formal
+                : Inspection(CommittedStagingDryRunCategory.Other,
+                    "the managed equipment archive is not complete");
         if (!file.IsRawDataExported || string.IsNullOrWhiteSpace(file.NasFolderPath) ||
             string.IsNullOrWhiteSpace(file.RawJsonPath) || !File.Exists(file.RawJsonPath))
             return Inspection(CommittedStagingDryRunCategory.Other,

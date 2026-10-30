@@ -19,10 +19,9 @@ public sealed class ApprovalCommitWorker(
         PendingSubmission submission;
         await using (var db = await dbFactory.CreateDbContextAsync(cancellationToken))
         {
-            await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-            submission = await db.PendingSubmissions
-                .FromSqlInterpolated($"SELECT * FROM pending_submissions WHERE id = {submissionId} FOR UPDATE")
-                .SingleAsync(cancellationToken);
+            await using var transaction = db.Database.IsRelational()
+                ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
+            submission = await LoadForUpdateAsync(db, submissionId, cancellationToken);
             if (submission.Status == ApprovalStatus.Committed) return;
             if (submission.Status != ApprovalStatus.ApprovedPendingCommit) return;
             // Resolve before claiming. Unknown modules fail closed and do not become formal data.
@@ -33,7 +32,7 @@ public sealed class ApprovalCommitWorker(
                 ApprovalAuditActions.CommitStarted, "ApprovalWorker", now,
                 ApprovalStatus.ApprovedPendingCommit, ApprovalStatus.ApprovedPendingCommit));
             await db.SaveChangesAsync(cancellationToken);
-            await transaction.CommitAsync(cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         }
 
         try
@@ -125,10 +124,9 @@ public sealed class ApprovalCommitWorker(
         CancellationToken cancellationToken)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        await using var transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken);
-        var submission = await db.PendingSubmissions
-            .FromSqlInterpolated($"SELECT * FROM pending_submissions WHERE id = {id} FOR UPDATE")
-            .SingleAsync(cancellationToken);
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
+        var submission = await LoadForUpdateAsync(db, id, cancellationToken);
         var now = DateTime.UtcNow;
         if (submission.Status == ApprovalStatus.Committed && safeError is not null) return;
         if (safeError is null) submission.Commit(lease, resultKey ?? string.Empty, now);
@@ -138,8 +136,16 @@ public sealed class ApprovalCommitWorker(
             "ApprovalWorker", now, ApprovalStatus.ApprovedPendingCommit, submission.Status,
             details: safeError));
         await db.SaveChangesAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
     }
+
+    private static Task<PendingSubmission> LoadForUpdateAsync(AppDbContext db, Guid id,
+        CancellationToken cancellationToken) =>
+        db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true
+            ? db.PendingSubmissions
+                .FromSqlInterpolated($"SELECT * FROM pending_submissions WHERE id = {id} FOR UPDATE")
+                .SingleAsync(cancellationToken)
+            : db.PendingSubmissions.SingleAsync(x => x.Id == id, cancellationToken);
 }
 
 public sealed class ApprovalCommitBackgroundService(IServiceScopeFactory scopeFactory,

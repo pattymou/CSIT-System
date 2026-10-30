@@ -51,22 +51,37 @@ public sealed class AssetUploadApprovalCommitHandler(
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var result = await db.ApparatusFiles.AsNoTracking()
             .SingleAsync(x => x.Id == submission.Id, cancellationToken);
+        var managedEquipment = ModuleCode.Equals("equipment", StringComparison.OrdinalIgnoreCase) &&
+            result.ArchiveStatus is not null;
         if (result.ApparatusId != submission.ContextId || result.FileSize != submission.FileSize ||
-            !File.Exists(Path.Combine(result.FilePath, result.FileName)) ||
-            !result.IsRawDataExported || string.IsNullOrWhiteSpace(result.NasFolderPath) ||
+            !File.Exists(Path.Combine(result.FilePath, result.FileName)))
+            throw new InvalidOperationException("Formal Asset file is incomplete.");
+        if (managedEquipment)
+        {
+            if (result.ArchiveStatus != FileArchiveStatuses.Archived ||
+                !string.Equals(result.Sha256, submission.FileHash, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Managed equipment archive is incomplete.");
+        }
+        else if (!result.IsRawDataExported || string.IsNullOrWhiteSpace(result.NasFolderPath) ||
             string.IsNullOrWhiteSpace(result.RawJsonPath) || !File.Exists(result.RawJsonPath))
-            throw new InvalidOperationException("Formal Asset file or RAW export is incomplete.");
+            throw new InvalidOperationException("Legacy Asset RAW export is incomplete.");
         var formalPath = Path.Combine(result.FilePath, result.FileName);
-        var mirrorPath = Path.Combine(result.NasFolderPath, result.Id.ToString("N"), result.FileName);
-        if (!File.Exists(mirrorPath))
-            throw new InvalidOperationException("Formal Asset RAW mirror is missing.");
+        if (new FileInfo(formalPath).Length != submission.FileSize)
+            throw new InvalidOperationException("Formal Asset file size changed.");
         await using var formalFile = File.OpenRead(formalPath);
-        await using var mirrorFile = File.OpenRead(mirrorPath);
         var formalHash = Convert.ToHexString(await SHA256.HashDataAsync(formalFile, cancellationToken));
-        var mirrorHash = Convert.ToHexString(await SHA256.HashDataAsync(mirrorFile, cancellationToken));
-        if (!string.Equals(formalHash, submission.FileHash, StringComparison.OrdinalIgnoreCase) ||
-            !string.Equals(mirrorHash, submission.FileHash, StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Formal Asset file or RAW mirror checksum changed.");
+        if (!string.Equals(formalHash, submission.FileHash, StringComparison.OrdinalIgnoreCase))
+            throw new InvalidOperationException("Formal Asset file checksum changed.");
+        if (!managedEquipment)
+        {
+            var mirrorPath = Path.Combine(result.NasFolderPath!, result.Id.ToString("N"), result.FileName);
+            if (!File.Exists(mirrorPath))
+                throw new InvalidOperationException("Formal Asset RAW mirror is missing.");
+            await using var mirrorFile = File.OpenRead(mirrorPath);
+            var mirrorHash = Convert.ToHexString(await SHA256.HashDataAsync(mirrorFile, cancellationToken));
+            if (!string.Equals(mirrorHash, submission.FileHash, StringComparison.OrdinalIgnoreCase))
+                throw new InvalidOperationException("Formal Asset RAW mirror checksum changed.");
+        }
         return new ApprovalCommitResult(result.Id.ToString("N"));
     }
 }
