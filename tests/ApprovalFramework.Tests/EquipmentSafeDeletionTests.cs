@@ -6,7 +6,10 @@ using System.Security.Principal;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services;
+using SIT.DepartmentSystem.Web.Services.Implementations;
+using SIT.DepartmentSystem.Web.Services.Interfaces;
 using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace ApprovalFramework.Tests;
@@ -383,8 +386,207 @@ public sealed class EquipmentSafeDeletionTests
         finally { Directory.Delete(root, true); }
     }
 
-    private static EquipmentDeletionService Service(AppDbContext db) =>
-        new(db, new EquipmentFileDeletionService(db), new ManagedAssetFileStorage(db));
+    [Fact]
+    public async Task LegacyEquipmentDeletionRemovesExactRawDataMirrorAndPreservesOtherEquipment()
+    {
+        var factory = new Factory();
+        var root = NewRoot();
+        var assetRoot = Path.Combine(root, "Assets", "equipment");
+        var rawRoot = Path.Combine(root, "RawData");
+        Directory.CreateDirectory(assetRoot);
+        Directory.CreateDirectory(rawRoot);
+        var rawData = new RawDataExportService(Options.Create(new RawDataSettings
+        {
+            Enabled = true, NasRootPath = rawRoot
+        }));
+        try
+        {
+            await SeedStorageAsync(factory, assetRoot);
+            await SeedLegacyEquipmentFileAsync(factory, assetRoot, "EQ-LEGACY-RAW", "legacy.pdf");
+            var localFolder = Path.Combine(assetRoot, "EQ-LEGACY-RAW");
+            var rawFolder = rawData.ResolveLatestPackageFolderByLocalFolder(localFolder);
+            Directory.CreateDirectory(Path.Combine(rawFolder, "mirror"));
+            await File.WriteAllTextAsync(Path.Combine(rawFolder, "mirror", "legacy.pdf"), "mirror");
+            await File.WriteAllTextAsync(Path.Combine(rawFolder, "rawdata.json"), "{}");
+            var otherFolder = Path.Combine(rawRoot, "keep-other-equipment");
+            Directory.CreateDirectory(otherFolder);
+            await File.WriteAllTextAsync(Path.Combine(otherFolder, "keep.txt"), "keep");
+
+            await using (var db = factory.CreateDbContext())
+            {
+                var result = await Service(db, rawData).RequestAsync("EQ-LEGACY-RAW", "writer");
+                Assert.True(result.Completed);
+            }
+
+            await using var verify = factory.CreateDbContext();
+            Assert.False(await verify.Apparatuses.AnyAsync(x => x.Id == "EQ-LEGACY-RAW"));
+            Assert.False(Directory.Exists(localFolder));
+            Assert.False(Directory.Exists(rawFolder));
+            Assert.True(File.Exists(Path.Combine(otherFolder, "keep.txt")));
+            Assert.Equal(EquipmentDeletionStatuses.Completed,
+                (await verify.EquipmentDeletionJobs.SingleAsync()).Status);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task LegacyRawDataCleanupFailureLeavesRetryableMasterJob()
+    {
+        var factory = new Factory();
+        var root = NewRoot();
+        var assetRoot = Path.Combine(root, "Assets", "equipment");
+        Directory.CreateDirectory(assetRoot);
+        var rawData = new FlakyRawDataExportService(Path.Combine(root, "RawData"));
+        try
+        {
+            await SeedStorageAsync(factory, assetRoot);
+            await SeedLegacyEquipmentFileAsync(factory, assetRoot, "EQ-RAW-RETRY", "retry.pdf");
+
+            await using (var db = factory.CreateDbContext())
+            {
+                var result = await Service(db, rawData).RequestAsync("EQ-RAW-RETRY", "writer");
+                Assert.False(result.Completed);
+                var job = await db.EquipmentDeletionJobs.SingleAsync();
+                Assert.Equal(EquipmentDeletionStatuses.CleanupFailed, job.Status);
+                Assert.Equal("FILE_IO_FAILED", job.LastErrorCode);
+                Assert.NotNull(job.DbRecordDeletedAt);
+            }
+
+            await using (var retry = factory.CreateDbContext())
+                Assert.Equal(1, await Service(retry, rawData).ProcessPendingAsync());
+            await using var verify = factory.CreateDbContext();
+            Assert.Equal(2, rawData.DeleteAttempts);
+            Assert.Equal(EquipmentDeletionStatuses.Completed,
+                (await verify.EquipmentDeletionJobs.SingleAsync()).Status);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task ManagedEquipmentDeletionDoesNotTouchLegacyRawDataMirror()
+    {
+        var factory = new Factory();
+        var root = NewRoot();
+        var rawData = new FlakyRawDataExportService(Path.Combine(root, "RawData"));
+        try
+        {
+            await SeedStorageAsync(factory, root);
+            await SeedEquipmentFileAsync(factory, root, "EQ-MANAGED", "managed.pdf", false, false);
+
+            await using var db = factory.CreateDbContext();
+            var result = await Service(db, rawData).RequestAsync("EQ-MANAGED", "writer");
+            Assert.True(result.Completed);
+            Assert.Equal(0, rawData.DeleteAttempts);
+            Assert.Equal(0, rawData.ResolveAttempts);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task LegacyRawDataCleanupStopsWhenAnotherEquipmentReferencesMirror()
+    {
+        var factory = new Factory();
+        var root = NewRoot();
+        var assetRoot = Path.Combine(root, "Assets", "equipment");
+        var rawRoot = Path.Combine(root, "RawData");
+        Directory.CreateDirectory(assetRoot);
+        Directory.CreateDirectory(rawRoot);
+        var rawData = new RawDataExportService(Options.Create(new RawDataSettings
+        {
+            Enabled = true, NasRootPath = rawRoot
+        }));
+        try
+        {
+            await SeedStorageAsync(factory, assetRoot);
+            await SeedLegacyEquipmentFileAsync(factory, assetRoot, "EQ-SHARED", "delete.pdf");
+            var localFolder = Path.Combine(assetRoot, "EQ-SHARED");
+            var rawFolder = rawData.ResolveLatestPackageFolderByLocalFolder(localFolder);
+            Directory.CreateDirectory(rawFolder);
+            await File.WriteAllTextAsync(Path.Combine(rawFolder, "rawdata.json"), "{}");
+            await using (var seed = factory.CreateDbContext())
+            {
+                var other = Equipment("EQ-OTHER-REF", "EQ-OTHER-REF");
+                seed.Apparatuses.Add(other);
+                seed.ApparatusFiles.Add(new ApparatusFile
+                {
+                    Id = Guid.NewGuid(), ApparatusId = other.Id, Apparatus = other,
+                    FileName = "keep.pdf", OriginalFileName = "keep.pdf",
+                    FilePath = Path.Combine(assetRoot, "EQ-OTHER-REF"),
+                    NasFolderPath = rawFolder, FileSize = 1, CreatedAt = DateTime.UtcNow
+                });
+                await seed.SaveChangesAsync();
+            }
+
+            await using var db = factory.CreateDbContext();
+            var result = await Service(db, rawData).RequestAsync("EQ-SHARED", "writer");
+            Assert.False(result.Completed);
+            Assert.Equal(EquipmentDeletionStatuses.CleanupFailed,
+                (await db.EquipmentDeletionJobs.SingleAsync()).Status);
+            Assert.True(await db.Apparatuses.AnyAsync(x => x.Id == "EQ-SHARED"));
+            Assert.True(Directory.Exists(rawFolder));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task LegacyDeletionStopsWhenFormalFolderContainsUnknownFile()
+    {
+        var factory = new Factory();
+        var root = NewRoot();
+        var assetRoot = Path.Combine(root, "Assets", "equipment");
+        Directory.CreateDirectory(assetRoot);
+        var rawData = new FlakyRawDataExportService(Path.Combine(root, "RawData"));
+        try
+        {
+            await SeedStorageAsync(factory, assetRoot);
+            await SeedLegacyEquipmentFileAsync(factory, assetRoot, "EQ-UNKNOWN", "known.pdf");
+            var localFolder = Path.Combine(assetRoot, "EQ-UNKNOWN");
+            await File.WriteAllTextAsync(Path.Combine(localFolder, "unknown.bin"), "do-not-delete");
+
+            await using var db = factory.CreateDbContext();
+            var result = await Service(db, rawData).RequestAsync("EQ-UNKNOWN", "writer");
+            Assert.False(result.Completed);
+            Assert.Equal(EquipmentDeletionStatuses.CleanupFailed,
+                (await db.EquipmentDeletionJobs.SingleAsync()).Status);
+            Assert.True(await db.Apparatuses.AnyAsync(x => x.Id == "EQ-UNKNOWN"));
+            Assert.True(File.Exists(Path.Combine(localFolder, "unknown.bin")));
+            Assert.Equal(0, rawData.DeleteAttempts);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task RawDataCleanupRefusesReparsePoint()
+    {
+        var root = NewRoot();
+        var localRoot = Path.Combine(root, "Assets", "equipment", "EQ-REPARSE");
+        var rawRoot = Path.Combine(root, "RawData");
+        var outside = Path.Combine(root, "outside");
+        Directory.CreateDirectory(localRoot);
+        Directory.CreateDirectory(rawRoot);
+        Directory.CreateDirectory(outside);
+        var rawData = new RawDataExportService(Options.Create(new RawDataSettings
+        {
+            Enabled = true, NasRootPath = rawRoot
+        }));
+        try
+        {
+            var rawFolder = rawData.ResolveLatestPackageFolderByLocalFolder(localRoot);
+            Directory.CreateDirectory(rawFolder);
+            Directory.CreateSymbolicLink(Path.Combine(rawFolder, "linked"), outside);
+
+            await Assert.ThrowsAsync<InvalidOperationException>(() =>
+                rawData.DeleteLatestPackageByLocalFolderAsync(localRoot));
+            Assert.True(Directory.Exists(rawFolder));
+            Assert.True(Directory.Exists(outside));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+    }
+
+    private static EquipmentDeletionService Service(AppDbContext db,
+        IRawDataExportService? rawDataExport = null) =>
+        new(db, new EquipmentFileDeletionService(db), new ManagedAssetFileStorage(db),
+            rawDataExport);
 
     private static KmDeletionDispatchService Dispatcher(Factory factory,
         IEquipmentDocumentDeletionAdapter adapter) => new(factory, new NoopCaseDeletionClient(),
@@ -447,6 +649,28 @@ public sealed class EquipmentSafeDeletionTests
         return id;
     }
 
+    private static async Task<Guid> SeedLegacyEquipmentFileAsync(Factory factory, string assetRoot,
+        string equipmentId, string name)
+    {
+        await using var db = factory.CreateDbContext();
+        var equipment = Equipment(equipmentId, null);
+        db.Apparatuses.Add(equipment);
+        var id = Guid.NewGuid();
+        var folder = Path.Combine(assetRoot, equipmentId, id.ToString("N"));
+        Directory.CreateDirectory(folder);
+        var path = Path.Combine(folder, name);
+        await File.WriteAllTextAsync(path, "legacy-" + id);
+        db.ApparatusFiles.Add(new ApparatusFile
+        {
+            Id = id, ApparatusId = equipment.Id, Apparatus = equipment,
+            FileName = name, OriginalFileName = name, FilePath = folder,
+            ContentType = "application/pdf", FileSize = new FileInfo(path).Length,
+            CreatedAt = DateTime.UtcNow
+        });
+        await db.SaveChangesAsync();
+        return id;
+    }
+
     private static Apparatus Equipment(string id, string? folder) => new()
     {
         Id = id, ModuleCode = "equipment", Name = id, ProductsId = "P-" + id,
@@ -497,6 +721,29 @@ public sealed class EquipmentSafeDeletionTests
         public Task<KmDeletionDeliveryResult> SubmitAsync(KmDeletionRequest request,
             CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("Verification deletion is out of scope.");
+    }
+
+    private sealed class FlakyRawDataExportService(string rawRoot) : IRawDataExportService
+    {
+        public int DeleteAttempts { get; private set; }
+        public int ResolveAttempts { get; private set; }
+        public Task<RawDataExportResult> ExportAsync(RawDataExportRequest request) =>
+            throw new NotSupportedException();
+        public Task<RawDataExportResult> ExportLatestPackageAsync(RawDataLatestPackageRequest request) =>
+            throw new NotSupportedException();
+        public Task<bool> DeleteLatestPackageAsync(string sourceType, string moduleCode,
+            string entityId) => throw new NotSupportedException();
+        public string ResolveLatestPackageFolderByLocalFolder(string localFolderPath)
+        {
+            ResolveAttempts++;
+            return Path.Combine(rawRoot, "legacy-package");
+        }
+        public Task DeleteLatestPackageByLocalFolderAsync(string localFolderPath)
+        {
+            DeleteAttempts++;
+            if (DeleteAttempts == 1) throw new IOException("Synthetic RawData cleanup failure.");
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class Factory : IDbContextFactory<AppDbContext>

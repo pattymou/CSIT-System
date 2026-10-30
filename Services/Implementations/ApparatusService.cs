@@ -403,7 +403,8 @@ public class ApparatusService : IApparatusService
 
         if (moduleCode == "equipment")
         {
-            var result = await new EquipmentDeletionService(_db, _fileDeletion, _managedStorage)
+            var result = await new EquipmentDeletionService(_db, _fileDeletion, _managedStorage,
+                    _rawDataExportService)
                 .RequestAsync(id, "SYSTEM");
             return result.Completed;
         }

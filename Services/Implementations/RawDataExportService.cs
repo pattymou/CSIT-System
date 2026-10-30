@@ -289,6 +289,50 @@ public class RawDataExportService : IRawDataExportService
         }
     }
 
+    public string ResolveLatestPackageFolderByLocalFolder(string localFolderPath)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.NasRootPath))
+            throw new InvalidOperationException("RawData:NasRootPath 未設定");
+        if (string.IsNullOrWhiteSpace(localFolderPath) || !Path.IsPathFullyQualified(localFolderPath))
+            throw new InvalidOperationException("Local folder path must be fully qualified.");
+
+        var rawRoot = Path.GetFullPath(_settings.NasRootPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var fullLocalFolder = Path.GetFullPath(localFolderPath);
+        var localRoot = Path.GetPathRoot(fullLocalFolder);
+        if (string.IsNullOrWhiteSpace(localRoot))
+            throw new InvalidOperationException($"無法解析本機資料夾根目錄：{localFolderPath}");
+
+        var relativePath = fullLocalFolder[localRoot.Length..].TrimStart(
+            Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (string.IsNullOrWhiteSpace(relativePath))
+            throw new InvalidOperationException("Refusing to map a drive root into RawData.");
+
+        var targetFolder = Path.GetFullPath(Path.Combine(rawRoot, relativePath));
+        EnsureStrictDescendant(rawRoot, targetFolder);
+        return targetFolder;
+    }
+
+    public Task DeleteLatestPackageByLocalFolderAsync(string localFolderPath)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.NasRootPath))
+            throw new InvalidOperationException("RawData:NasRootPath 未設定");
+        var rawRoot = Path.GetFullPath(_settings.NasRootPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (!Directory.Exists(rawRoot))
+            throw new DirectoryNotFoundException($"RawData root is unavailable: {rawRoot}");
+
+        var targetFolder = ResolveLatestPackageFolderByLocalFolder(localFolderPath);
+        if (File.Exists(targetFolder))
+            throw new InvalidOperationException($"RawData package path is not a directory: {targetFolder}");
+        if (!Directory.Exists(targetFolder)) return Task.CompletedTask;
+
+        EnsureNoReparsePoints(rawRoot, targetFolder);
+        Directory.Delete(targetFolder, recursive: true);
+        Console.WriteLine($"[RawDataExportService] Latest package deleted by local folder: {targetFolder}");
+        return Task.CompletedTask;
+    }
+
     private string BuildNasFilePathByLocalPath(string localFilePath)
     {
         var fullLocalPath = Path.GetFullPath(localFilePath);
@@ -308,19 +352,49 @@ public class RawDataExportService : IRawDataExportService
 
     private string BuildNasFolderPathByLocalFolder(string localFolderPath)
     {
-        var fullLocalFolder = Path.GetFullPath(localFolderPath);
+        return ResolveLatestPackageFolderByLocalFolder(localFolderPath);
+    }
 
-        var root = Path.GetPathRoot(fullLocalFolder);
-        if (string.IsNullOrWhiteSpace(root))
+    private static void EnsureStrictDescendant(string root, string candidate)
+    {
+        var relative = Path.GetRelativePath(root, candidate);
+        if (string.IsNullOrWhiteSpace(relative) || relative == "." || Path.IsPathRooted(relative) ||
+            relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar,
+                StringComparison.Ordinal) || relative.StartsWith(".." + Path.AltDirectorySeparatorChar,
+                StringComparison.Ordinal))
+            throw new InvalidOperationException($"Path is outside the managed RawData root: {candidate}");
+    }
+
+    private static void EnsureNoReparsePoints(string root, string target)
+    {
+        EnsureStrictDescendant(root, target);
+        var current = root;
+        if ((File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+            throw new InvalidOperationException($"RawData cleanup refuses a reparse point: {current}");
+
+        var relative = Path.GetRelativePath(root, target);
+        foreach (var part in relative.Split(
+                     [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                     StringSplitOptions.RemoveEmptyEntries))
         {
-            throw new InvalidOperationException($"無法解析本機資料夾根目錄：{localFolderPath}");
+            current = Path.Combine(current, part);
+            if (Directory.Exists(current) &&
+                (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"RawData cleanup refuses a reparse point: {current}");
         }
 
-        var relativePath = fullLocalFolder[root.Length..].TrimStart(
-            Path.DirectorySeparatorChar,
-            Path.AltDirectorySeparatorChar);
-
-        return Path.Combine(_settings.NasRootPath, relativePath);
+        var pending = new Stack<DirectoryInfo>();
+        pending.Push(new DirectoryInfo(target));
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            foreach (var item in directory.EnumerateFileSystemInfos())
+            {
+                if ((item.Attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException($"RawData cleanup refuses a reparse point: {item.FullName}");
+                if (item is DirectoryInfo child) pending.Push(child);
+            }
+        }
     }
 
     private string ResolveLocalRootFolder(RawDataLatestPackageRequest request)

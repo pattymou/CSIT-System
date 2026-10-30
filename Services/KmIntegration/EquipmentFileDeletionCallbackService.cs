@@ -4,10 +4,12 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
+using SIT.DepartmentSystem.Web.Services.Interfaces;
 
 namespace SIT.DepartmentSystem.Web.Services.KmIntegration;
 
-public sealed class EquipmentFileDeletionCallbackService(IDbContextFactory<AppDbContext> dbFactory)
+public sealed class EquipmentFileDeletionCallbackService(IDbContextFactory<AppDbContext> dbFactory,
+    IRawDataExportService? rawDataExport = null)
 {
     public async Task<KmDeletionCallbackOutcome> ApplyAsync(
         EquipmentDocumentDeletionCallback callback,
@@ -70,7 +72,8 @@ public sealed class EquipmentFileDeletionCallbackService(IDbContextFactory<AppDb
                 .TryCompleteLocalCleanupAsync(callback.DeletionRequestId, cancellationToken);
             if (equipmentId is not null)
                 await new EquipmentDeletionService(cleanupDb,
-                        new EquipmentFileDeletionService(cleanupDb), new ManagedAssetFileStorage(cleanupDb))
+                        new EquipmentFileDeletionService(cleanupDb), new ManagedAssetFileStorage(cleanupDb),
+                        rawDataExport)
                     .TryAdvanceByEquipmentIdAsync(equipmentId, cancellationToken);
         }
         return KmDeletionCallbackOutcome.Accepted;

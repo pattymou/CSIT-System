@@ -9,4 +9,8 @@ public interface IRawDataExportService
     Task<RawDataExportResult> ExportLatestPackageAsync(RawDataLatestPackageRequest request);
 
     Task<bool> DeleteLatestPackageAsync(string sourceType, string moduleCode, string entityId);
+
+    string ResolveLatestPackageFolderByLocalFolder(string localFolderPath);
+
+    Task DeleteLatestPackageByLocalFolderAsync(string localFolderPath);
 }

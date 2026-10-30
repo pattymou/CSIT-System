@@ -3,6 +3,7 @@ using Microsoft.EntityFrameworkCore;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Services.Interfaces;
 
 namespace SIT.DepartmentSystem.Web.Services.KmIntegration;
 
@@ -15,7 +16,8 @@ public sealed class EquipmentDeletionBlockedException(IReadOnlyList<string> reas
 public sealed class EquipmentDeletionService(
     AppDbContext db,
     EquipmentFileDeletionService fileDeletion,
-    ManagedAssetFileStorage storage)
+    ManagedAssetFileStorage storage,
+    IRawDataExportService? rawDataExport = null)
 {
     public const string ReservationHistoryMessage =
         "無法刪除此設備。此設備已有預約歷史，為保留預約紀錄及稽核資料，禁止刪除設備主檔。建議將設備狀態改為『不可借用』。";
@@ -172,6 +174,7 @@ public sealed class EquipmentDeletionService(
 
         string? originalFolder = null;
         string? quarantineFolder = null;
+        string? legacyRawDataSourceFolder = null;
         var moved = false;
         var dbCommitted = job.DbRecordDeletedAt is not null;
         try
@@ -184,6 +187,20 @@ public sealed class EquipmentDeletionService(
                     throw new InvalidOperationException("設備正式目錄可能與其他設備共用，已停止清理。");
                 originalFolder = await storage.EquipmentFolderAsync(job.StorageFolderName, cancellationToken);
                 quarantineFolder = originalFolder + ".csit-delete-" + job.Id.ToString("N");
+            }
+            else
+            {
+                legacyRawDataSourceFolder = await LegacyEquipmentFolderAsync(job.EquipmentId,
+                    cancellationToken);
+                originalFolder = legacyRawDataSourceFolder;
+                quarantineFolder = originalFolder + ".csit-delete-" + job.Id.ToString("N");
+                EnsureLegacyFormalFolderContainsOnlyEmptyDirectories(originalFolder);
+                if (rawDataExport is null)
+                    throw new InvalidOperationException("RawData cleanup service is unavailable.");
+                var rawDataFolder = rawDataExport
+                    .ResolveLatestPackageFolderByLocalFolder(legacyRawDataSourceFolder);
+                await EnsureLegacyStorageNotSharedAsync(job.EquipmentId, legacyRawDataSourceFolder,
+                    rawDataFolder, cancellationToken);
             }
 
             if (job.DbRecordDeletedAt is null)
@@ -234,6 +251,9 @@ public sealed class EquipmentDeletionService(
 
             if (quarantineFolder is not null && Directory.Exists(quarantineFolder))
                 Directory.Delete(quarantineFolder, true);
+            if (legacyRawDataSourceFolder is not null)
+                await rawDataExport!.DeleteLatestPackageByLocalFolderAsync(
+                    legacyRawDataSourceFolder);
             job.MarkCompleted(DateTime.UtcNow);
             await db.SaveChangesAsync(cancellationToken);
             return true;
@@ -258,6 +278,82 @@ public sealed class EquipmentDeletionService(
             }
             return false;
         }
+    }
+
+    private async Task<string> LegacyEquipmentFolderAsync(string equipmentId,
+        CancellationToken cancellationToken)
+    {
+        var configuredRoot = await db.SystemOptions.AsNoTracking()
+            .Where(x => x.Category == "AssetRootPath" && x.IsEnabled && x.Name == "equipment")
+            .Select(x => x.Value).SingleAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(configuredRoot) || !Path.IsPathFullyQualified(configuredRoot))
+            throw new InvalidOperationException("Equipment storage root is not fully qualified.");
+
+        var root = Path.GetFullPath(configuredRoot)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var folder = Path.GetFullPath(Path.Combine(root, equipmentId));
+        if (!string.Equals(Directory.GetParent(folder)?.FullName, root,
+                OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                "Legacy equipment folder is outside the managed equipment root.");
+        return folder;
+    }
+
+    private async Task EnsureLegacyStorageNotSharedAsync(string equipmentId, string localFolder,
+        string rawDataFolder, CancellationToken cancellationToken)
+    {
+        var references = await db.ApparatusFiles.AsNoTracking()
+            .Where(x => x.ApparatusId != equipmentId)
+            .Select(x => new
+            {
+                x.ApparatusId, x.FilePath, x.NasFolderPath, x.NasFilePath, x.RawJsonPath
+            }).ToListAsync(cancellationToken);
+        foreach (var reference in references)
+        {
+            foreach (var path in new[]
+                     {
+                         reference.FilePath, reference.NasFolderPath, reference.NasFilePath,
+                         reference.RawJsonPath
+                     }.Where(x => !string.IsNullOrWhiteSpace(x)))
+            {
+                if (IsSameOrDescendant(localFolder, path!) ||
+                    IsSameOrDescendant(rawDataFolder, path!))
+                    throw new InvalidOperationException(
+                        $"Legacy equipment storage is referenced by another equipment: {reference.ApparatusId}");
+            }
+        }
+    }
+
+    private static void EnsureLegacyFormalFolderContainsOnlyEmptyDirectories(string folder)
+    {
+        if (!Directory.Exists(folder)) return;
+        var pending = new Stack<DirectoryInfo>();
+        pending.Push(new DirectoryInfo(folder));
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            if ((directory.Attributes & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException(
+                    $"Legacy equipment cleanup refuses a reparse point: {directory.FullName}");
+            foreach (var item in directory.EnumerateFileSystemInfos())
+            {
+                if ((item.Attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException(
+                        $"Legacy equipment cleanup refuses a reparse point: {item.FullName}");
+                if (item is FileInfo)
+                    throw new InvalidOperationException(
+                        $"Legacy equipment folder contains an untracked file: {item.FullName}");
+                pending.Push((DirectoryInfo)item);
+            }
+        }
+    }
+
+    private static bool IsSameOrDescendant(string root, string candidate)
+    {
+        var relative = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(candidate));
+        return relative == "." || (!Path.IsPathRooted(relative) && relative != ".." &&
+            !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+            !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal));
     }
 
     private async Task<List<string>> BlockingReasonsAsync(string equipmentId,
