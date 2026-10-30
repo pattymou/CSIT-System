@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Security.AccessControl;
 using System.Security.Principal;
@@ -562,30 +563,65 @@ public sealed class EquipmentSafeDeletionTests
     [Fact]
     public async Task RawDataCleanupRefusesReparsePoint()
     {
-        var root = NewRoot();
+        var root = OperatingSystem.IsWindows() ? NewShortRoot() : NewRoot();
         var localRoot = Path.Combine(root, "Assets", "equipment", "EQ-REPARSE");
         var rawRoot = Path.Combine(root, "RawData");
-        var outside = Path.Combine(root, "outside");
+        var outside = OperatingSystem.IsWindows() ? NewShortRoot() : NewRoot();
+        var outsideFile = Path.Combine(outside, "must-survive.txt");
         Directory.CreateDirectory(localRoot);
         Directory.CreateDirectory(rawRoot);
-        Directory.CreateDirectory(outside);
+        await File.WriteAllTextAsync(outsideFile, "must-survive");
         var rawData = new RawDataExportService(Options.Create(new RawDataSettings
         {
             Enabled = true, NasRootPath = rawRoot
         }));
+        string? linkPath = null;
+        var reparsePointCreated = false;
         try
         {
             var rawFolder = rawData.ResolveLatestPackageFolderByLocalFolder(localRoot);
             Directory.CreateDirectory(rawFolder);
-            Directory.CreateSymbolicLink(Path.Combine(rawFolder, "linked"), outside);
+            linkPath = Path.Combine(rawFolder, "linked");
+            if (OperatingSystem.IsWindows())
+                await RunJunctionCommandAsync("mklink", linkPath, outside);
+            else
+                Directory.CreateSymbolicLink(linkPath, outside);
+            reparsePointCreated = true;
+
+            Assert.True((File.GetAttributes(linkPath) & FileAttributes.ReparsePoint) != 0,
+                "The test link was not created as a reparse point.");
 
             await Assert.ThrowsAsync<InvalidOperationException>(() =>
                 rawData.DeleteLatestPackageByLocalFolderAsync(localRoot, "Apparatus",
                     "equipment", "EQ-REPARSE"));
             Assert.True(Directory.Exists(rawFolder));
             Assert.True(Directory.Exists(outside));
+            Assert.True(File.Exists(outsideFile));
+            Assert.Equal("must-survive", await File.ReadAllTextAsync(outsideFile));
         }
-        finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
+        finally
+        {
+            if (linkPath is not null && Directory.Exists(linkPath))
+            {
+                if (OperatingSystem.IsWindows())
+                    await RunJunctionCommandAsync("rmdir", linkPath);
+                else
+                    Directory.Delete(linkPath);
+            }
+            if (reparsePointCreated)
+            {
+                Assert.False(Directory.Exists(linkPath));
+                Assert.True(Directory.Exists(outside));
+                Assert.True(File.Exists(outsideFile));
+            }
+            if (Directory.Exists(root)) Directory.Delete(root, true);
+            if (reparsePointCreated)
+            {
+                Assert.True(Directory.Exists(outside));
+                Assert.True(File.Exists(outsideFile));
+            }
+            if (Directory.Exists(outside)) Directory.Delete(outside, true);
+        }
     }
 
     [Fact]
@@ -866,6 +902,45 @@ public sealed class EquipmentSafeDeletionTests
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
+    }
+
+    private static string NewShortRoot()
+    {
+        var path = Path.Combine(Path.GetTempPath(), "crp-" +
+            Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static async Task RunJunctionCommandAsync(string command, params string[] paths)
+    {
+        var start = new ProcessStartInfo
+        {
+            FileName = "cmd.exe",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        var quotedPaths = string.Join(" ", paths.Select(path =>
+            $"\"{path.Replace("\"", "\"\"")}\""));
+        start.Arguments = command.Equals("mklink", StringComparison.OrdinalIgnoreCase)
+            ? $"/d /c mklink /J {quotedPaths}"
+            : $"/d /c {command} {quotedPaths}";
+
+        using var process = Process.Start(start) ??
+            throw new InvalidOperationException($"Could not start cmd.exe for junction {command}.");
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        var output = await outputTask;
+        var error = await errorTask;
+        if (process.ExitCode != 0)
+        {
+            throw new InvalidOperationException(
+                $"Junction {command} failed with exit code {process.ExitCode}. " +
+                $"stdout: {output.Trim()} stderr: {error.Trim()}");
+        }
     }
 
     private sealed class MockEquipmentDeletionApi : IEquipmentDocumentDeletionAdapter
