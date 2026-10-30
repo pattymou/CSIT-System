@@ -9,7 +9,7 @@ function Get-DevMigrationReviewMarkerPath {
 function Test-DevMigrationChanges {
     param([Parameter(Mandatory = $true)][string[]] $ChangedPaths)
     return @($ChangedPaths | Where-Object {
-        $_ -match '(^|/)(Migrations|migrations)(/|$)|migration|\.sql$'
+        $_ -match '(^|[\\/])Migrations([\\/]|$)|\.sql$'
     }).Count -gt 0
 }
 

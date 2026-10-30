@@ -16,6 +16,29 @@ $migrations = @('20261024033553_LinkVerificationApplicationAttachments',
 $root = Join-Path ([IO.Path]::GetTempPath()) ('csit-dev-migration-review-tests-' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $root | Out-Null
 try {
+    $nonSchemaChanges = @(
+        'tests/ApprovalFramework.Tests/DevDeploymentMigrationReviewTests.cs',
+        'tools/dev-deploy/DevMigrationReview.ps1'
+    )
+    if (Test-DevMigrationChanges -ChangedPaths $nonSchemaChanges) {
+        throw 'Non-schema files containing migration in their names triggered the DBA gate.'
+    }
+    Write-Output 'PASS non-schema migration names ignored'
+
+    $migrationFile = 'Migrations/20261024033553_LinkVerificationApplicationAttachments.cs'
+    $snapshotFile = 'Migrations/AppDbContextModelSnapshot.cs'
+    $sqlFile = 'tools/database/verify-schema.sql'
+    if (-not (Test-DevMigrationChanges -ChangedPaths @($migrationFile))) {
+        throw 'A real Migration source file did not trigger the DBA gate.'
+    }
+    if (-not (Test-DevMigrationChanges -ChangedPaths @($snapshotFile))) {
+        throw 'The Migration model snapshot did not trigger the DBA gate.'
+    }
+    if (-not (Test-DevMigrationChanges -ChangedPaths @($sqlFile))) {
+        throw 'A SQL file did not trigger the DBA gate.'
+    }
+    Write-Output 'PASS real migration and SQL changes trigger review'
+
     $changed = @('Migrations/20261024033553_LinkVerificationApplicationAttachments.cs',
         'Migrations/20261024033553_LinkVerificationApplicationAttachments.Designer.cs',
         'Migrations/20261024090000_PreventDuplicateVerificationApplicationFileNames.cs',
@@ -43,6 +66,7 @@ try {
             -Database 'sit_department_system_dev' -RequiredMigrationIds $migrations `
             -AppliedMigrationIds $migrations
     } '^DEV_MIGRATION_REVIEW_REQUIRED:' 'missing marker'
+    Write-Output 'PASS real migration requires valid DBA review'
 
     $badShaMarker = Get-DevMigrationReviewMarkerPath -ReviewRoot $root -Sha $otherSha
     Copy-Item -LiteralPath $markerPath -Destination $badShaMarker
