@@ -41,6 +41,26 @@ public sealed class EquipmentAttachmentSelectionUiTests
         Assert.Contains("RemoveAccumulatedUploadFileAsync", client);
     }
 
+    [Fact]
+    public void EquipmentAttachmentLists_HideHashAndLocalDeletionStatusWithoutChangingDeleteAction()
+    {
+        var table = Read("Components", "Shared", "EquipmentFileTable.razor");
+        var css = Read("Components", "Shared", "EquipmentFileTable.razor.css");
+        var edit = Read("Components", "Pages", "ApparatusEdit.razor");
+
+        Assert.DoesNotContain("SHA256", table, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("file.Sha256", edit);
+        Assert.DoesNotContain("LocalDeletionText", table);
+        Assert.DoesNotContain("LocalDeletionClass", table);
+        Assert.DoesNotContain("LocalDeletionError", table);
+        Assert.DoesNotContain("\u672c\u5730\u522a\u9664\u72c0\u614b", table);
+        Assert.Contains("disabled=\"@(!file.CanDelete)\"", table);
+        Assert.Contains("OnDelete.InvokeAsync(file.Id)", table);
+        Assert.Contains("width: 27%", css);
+        Assert.Contains("overflow-wrap: anywhere", css);
+        Assert.Contains("min-width: 1100px", css);
+    }
+
     private static string Read(params string[] parts) =>
         File.ReadAllText(Path.Combine([FindRepositoryRoot(), .. parts]));
 

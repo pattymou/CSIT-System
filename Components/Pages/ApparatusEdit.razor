@@ -503,10 +503,6 @@
                     <div>
                         <a href="@file.DownloadUrl" target="_blank" rel="noopener">@file.FileName</a>
                         <small>@FormatSize(file.FileSize) · @ArchiveStatusText(file.ArchiveStatus)</small>
-                        @if (!string.IsNullOrWhiteSpace(file.Sha256))
-                        {
-                            <small>SHA256：@file.Sha256</small>
-                        }
                     </div>
                     <button type="button" class="table-chip-btn danger" @onclick="() => DeleteFileAsync(file.Id)">
                         刪除

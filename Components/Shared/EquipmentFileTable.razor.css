@@ -1,4 +1,12 @@
+.equipment-file-table { table-layout: fixed; min-width: 1100px; }
+.equipment-file-table .equipment-file-name-column { width: 27%; }
+.equipment-file-table .equipment-file-type-column { width: 18%; }
+.equipment-file-table .equipment-file-archive-column { width: 20%; }
+.equipment-file-table .equipment-file-km-column { width: 20%; }
+.equipment-file-table .equipment-file-actions-column { width: 15%; }
 .equipment-file-table td { vertical-align: top; }
+.equipment-file-table td:first-child { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+.equipment-file-name { display: block; max-width: 100%; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .equipment-file-table small { display: block; margin-top: .25rem; color: var(--text-muted, #64748b); overflow-wrap: anywhere; }
 .equipment-file-thumbnail { width: 96px; height: 72px; object-fit: cover; border-radius: 8px; margin-right: .5rem; vertical-align: middle; }
 .metadata-suggestion { margin-top: .75rem; max-width: 720px; }
