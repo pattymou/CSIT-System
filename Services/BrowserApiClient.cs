@@ -48,6 +48,30 @@ public sealed class BrowserApiClient(IJSRuntime js) : IAsyncDisposable
         return await module.InvokeAsync<BrowserApiResponse>("uploadFiles", url, inputContainer, fileNames, clearInput);
     }
 
+    public async Task<BrowserUploadSelection> AccumulateUploadFilesAsync(
+        ElementReference inputContainer, int maxFiles)
+    {
+        var module = await GetModuleAsync();
+        return await module.InvokeAsync<BrowserUploadSelection>(
+            "accumulateUploadFiles", inputContainer, maxFiles);
+    }
+
+    public async Task<BrowserUploadSelection> RemoveAccumulatedUploadFileAsync(
+        ElementReference inputContainer, string fileId, int maxFiles)
+    {
+        var module = await GetModuleAsync();
+        return await module.InvokeAsync<BrowserUploadSelection>(
+            "removeAccumulatedUploadFile", inputContainer, fileId, maxFiles);
+    }
+
+    public async Task<BrowserApiResponse> UploadAccumulatedFilesAsync(
+        string url, ElementReference inputContainer)
+    {
+        var module = await GetModuleAsync();
+        return await module.InvokeAsync<BrowserApiResponse>(
+            "uploadAccumulatedFiles", url, inputContainer, true);
+    }
+
     private async Task<BrowserApiResponse> SendAsync(string method, string url, object? body)
     {
         var module = await GetModuleAsync();
@@ -78,6 +102,22 @@ public sealed class BrowserApiClient(IJSRuntime js) : IAsyncDisposable
             _module = null;
         }
     }
+}
+
+public sealed class BrowserUploadSelection
+{
+    public List<BrowserUploadFile> Files { get; set; } = [];
+    public List<string> DuplicateNames { get; set; } = [];
+    public List<string> RejectedNames { get; set; } = [];
+    public int MaxFiles { get; set; }
+}
+
+public sealed class BrowserUploadFile
+{
+    public string Id { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string? ContentType { get; set; }
+    public long Size { get; set; }
 }
 
 public sealed class BrowserApiResponse

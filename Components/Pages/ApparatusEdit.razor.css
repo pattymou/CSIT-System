@@ -45,3 +45,46 @@
     display: block;
     overflow-wrap: anywhere;
 }
+
+.attachment-section-title {
+    margin: 1rem 0 .65rem;
+    font-size: 1rem;
+}
+
+.uploaded-attachment-title {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border-color, #d6dbe3);
+}
+
+.upload-selection-actions,
+.pending-upload-actions {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    flex-wrap: wrap;
+}
+
+.upload-selection-actions {
+    margin-top: .65rem;
+}
+
+.pending-upload-file {
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.pending-upload-file > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+    .upload-selection-actions {
+        align-items: stretch;
+    }
+
+    .upload-selection-actions .primary-btn {
+        width: 100%;
+    }
+}

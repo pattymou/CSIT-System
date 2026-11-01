@@ -439,20 +439,27 @@
             <div class="case-kicker">FILE UPLOAD</div>
             <h3>@PageFileTitle</h3>
         </div>
-
-        @if (IsPersisted)
-        {
-            <button class="primary-btn"
-                    @onclick="UploadFilesAsync"
-                    disabled="@(_selectedFiles.Count == 0 || _uploading)">
-                @(_uploading ? "提交中..." : "提交所選附件")
-            </button>
-        }
     </div>
 
+    <h4 class="attachment-section-title">待上傳附件</h4>
     <div class="upload-box" @ref="_fileInputContainer">
-        <InputFile OnChange="OnFilesSelected" multiple />
-        <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案。新增設備時會與基本資料由同一個「確定」動作提交。</span>
+        <InputFile OnChange="OnFilesSelected" multiple disabled="@(_saving || _uploading)" />
+        <div class="upload-selection-actions">
+            <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案</span>
+            @if (IsPersisted)
+            {
+                <button type="button" class="primary-btn"
+                        @onclick="UploadFilesAsync"
+                        disabled="@(_selectedFiles.Count == 0 || _uploading || _saving)">
+                    @(_uploading ? "上傳中..." : "上傳")
+                </button>
+            }
+        </div>
+        <span class="empty-text">@UploadGuidanceText</span>
+        @if (!string.IsNullOrWhiteSpace(_selectionMessage))
+        {
+            <span class="equipment-warning">@_selectionMessage</span>
+        }
         @if (IsEquipment && string.IsNullOrWhiteSpace(_form.ProductsId))
         { <span class="equipment-warning">缺少財產編號時不能正式歸檔；系統不會以序號或假值取代既定 NAS 命名。</span> }
     </div>
@@ -462,14 +469,22 @@
         <div class="upload-list">
             @foreach (var f in _selectedFiles)
             {
-                <div class="upload-file-item">
+                <div class="upload-file-item pending-upload-file" @key="f.Id">
                     <span>@f.FileName</span>
-                    <strong>@FormatSize(f.Size)</strong>
+                    <div class="pending-upload-actions">
+                        <strong>@FormatSize(f.Size)</strong>
+                        <button type="button" class="table-chip-btn danger"
+                                disabled="@(_saving || _uploading)"
+                                @onclick="() => RemoveSelectedFileAsync(f.Id)">
+                            移除
+                        </button>
+                    </div>
                 </div>
             }
         </div>
     }
 
+    <h4 class="attachment-section-title uploaded-attachment-title">已上傳附件</h4>
     @if (IsEquipment)
     {
         <SIT.DepartmentSystem.Web.Components.Shared.EquipmentFileTable Files="_files"
@@ -504,7 +519,7 @@
 </div>
 
 <div class="form-actions">
-    <button class="primary-btn" @onclick="SaveAsync" disabled="@_saving">
+    <button class="primary-btn" @onclick="SaveAsync" disabled="@(_saving || _uploading)">
         @(_saving ? "儲存中..." : "確定")
     </button>
 
@@ -531,6 +546,7 @@
     private bool _saving;
     private bool _uploading;
     private string? _message;
+    private string? _selectionMessage;
     private ElementReference _fileInputContainer;
     private bool _reloadRequested;
     private bool _focusFilesAfterLoad;
@@ -563,6 +579,10 @@
     private string _ownershipMessage = string.Empty;
     private bool IsPersisted => _isEdit || !string.IsNullOrWhiteSpace(_createdAssetId);
     private string? CurrentAssetId => _createdAssetId ?? _form.Id;
+    private const int MaxPendingUploadFiles = 20;
+    private string UploadGuidanceText => IsPersisted
+        ? $"可分次選擇檔案，最多 {MaxPendingUploadFiles} 個；確認清單後按「上傳」。"
+        : $"可分次選擇檔案，最多 {MaxPendingUploadFiles} 個；按「確定」建立設備時會一併提交附件。";
     private string VendorSelectionValue => _form.VendorId?.ToString() ?? string.Empty;
     private IReadOnlyList<ApparatusOwnerTeamOptionDto> AllowedOwnerTeams => !_form.DepartmentOptionId.HasValue ? []
         : DepartmentTeamRules.GetAllowedTeamsForDepartment(
@@ -588,6 +608,7 @@
         _reloadRequested = true;
         _loading = true;
         _message = null;
+        _selectionMessage = null;
         _focusFilesAfterLoad = _isEdit &&
             string.Equals(Focus, "files", StringComparison.OrdinalIgnoreCase);
         _filesFocusCompleted = false;
@@ -876,7 +897,7 @@
                     _form.Id = createdId;
                     if (_selectedFiles.Count > 0 && !await UploadFilesForAssetAsync(createdId))
                     {
-                        _message = $"設備已建立（ID：{createdId}），但附件提交失敗；請保留本頁並按『提交所選附件』安全重試。{_message}";
+                        _message = $"設備已建立（ID：{createdId}），但附件提交失敗；請保留本頁並按『上傳』安全重試。{_message}";
                         return;
                     }
                     Nav.NavigateTo($"/assets/{Uri.EscapeDataString(EffectiveModuleCode)}");
@@ -902,21 +923,53 @@
         }
     }
 
-    private void OnFilesSelected(InputFileChangeEventArgs e)
+    private async Task OnFilesSelected(InputFileChangeEventArgs _)
     {
-        _selectedFiles.Clear();
-
-        foreach (var file in e.GetMultipleFiles(20))
+        try
         {
-            _selectedFiles.Add(new SelectedUploadFile
-            {
-                FileName = file.Name,
-                ContentType = file.ContentType,
-                Size = file.Size
-            });
+            var selection = await Api.AccumulateUploadFilesAsync(
+                _fileInputContainer, MaxPendingUploadFiles);
+            ApplyUploadSelection(selection);
+            Console.WriteLine($"[ApparatusEdit] Files selected. count={_selectedFiles.Count}");
         }
+        catch (Exception ex)
+        {
+            _selectionMessage = $"讀取所選檔案失敗：{ex.Message} 請重新選擇。";
+        }
+    }
 
-        Console.WriteLine($"[ApparatusEdit] Files selected. count={_selectedFiles.Count}");
+    private async Task RemoveSelectedFileAsync(string fileId)
+    {
+        if (_saving || _uploading) return;
+
+        try
+        {
+            var selection = await Api.RemoveAccumulatedUploadFileAsync(
+                _fileInputContainer, fileId, MaxPendingUploadFiles);
+            ApplyUploadSelection(selection);
+        }
+        catch (Exception ex)
+        {
+            _selectionMessage = $"移除待上傳檔案失敗：{ex.Message} 請稍後重試。";
+        }
+    }
+
+    private void ApplyUploadSelection(BrowserUploadSelection selection)
+    {
+        _selectedFiles = selection.Files.Select(file => new SelectedUploadFile
+        {
+            Id = file.Id,
+            FileName = file.FileName,
+            ContentType = file.ContentType,
+            Size = file.Size
+        }).ToList();
+
+        var messages = new List<string>();
+        if (selection.DuplicateNames.Count > 0)
+            messages.Add($"已略過重複檔名：{string.Join("、", selection.DuplicateNames.Distinct(StringComparer.OrdinalIgnoreCase))}。");
+        if (selection.RejectedNames.Count > 0)
+            messages.Add($"待上傳附件最多 {selection.MaxFiles} 個，未加入：{string.Join("、", selection.RejectedNames)}。");
+        _selectionMessage = messages.Count == 0 ? null : string.Join(" ", messages);
     }
 
     private async Task UploadFilesAsync()
@@ -960,7 +1013,7 @@
         _message = null;
         try
         {
-            var response = await Api.UploadFilesAsync(
+            var response = await Api.UploadAccumulatedFilesAsync(
                 $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(assetId)}/files",
                 _fileInputContainer);
             if (!response.IsSuccessStatusCode)
@@ -969,7 +1022,16 @@
                 return false;
             }
             _selectedFiles.Clear();
-            await LoadFilesAsync();
+            _selectionMessage = null;
+            try
+            {
+                await LoadFilesAsync();
+            }
+            catch (Exception ex)
+            {
+                _message = $"附件已上傳成功，但更新附件清單失敗：{ex.Message} 請重新整理頁面確認。";
+                return true;
+            }
             _message = response.StatusCode == 202
                 ? "附件已送主管審核，核准後才會建立正式檔案。"
                 : IsEquipment
@@ -1346,6 +1408,7 @@
 
     private class SelectedUploadFile
     {
+        public string Id { get; set; } = "";
         public string FileName { get; set; } = "";
         public string? ContentType { get; set; }
         public long Size { get; set; }
