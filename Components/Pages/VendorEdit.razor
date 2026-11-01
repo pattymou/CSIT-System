@@ -54,14 +54,20 @@ else
     <div class="form-card">
         <div class="case-card-head">
             <div><div class="case-kicker">FORMAL FILES</div><h3>廠商附件</h3></div>
-            @if (IsPersisted)
-            {
-                <button class="primary-btn" disabled="@(_selectedFiles.Count == 0 || _saving)" @onclick="UploadOnlyAsync">提交所選附件</button>
-            }
         </div>
         <div class="upload-box" @ref="_fileInputContainer">
-            <InputFile OnChange="OnFilesSelected" multiple />
-            <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案。新增廠商時會和主檔由同一個「儲存」動作提交。</span>
+            <InputFile OnChange="OnFilesSelected" multiple disabled="@_saving" />
+            <div class="upload-selection-actions">
+                <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案。新增廠商時會和主檔由同一個「儲存」動作提交。</span>
+                @if (IsPersisted)
+                {
+                    <button type="button" class="primary-btn"
+                            disabled="@(_selectedFiles.Count == 0 || _saving)"
+                            @onclick="UploadOnlyAsync">
+                        @(_saving ? "上傳中..." : "上傳")
+                    </button>
+                }
+            </div>
         </div>
         @if (_selectedFiles.Count > 0)
         {

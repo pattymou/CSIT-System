@@ -26,3 +26,33 @@
     margin: 0;
     padding: 0;
 }
+
+.upload-box {
+    flex-wrap: wrap;
+}
+
+.upload-selection-actions {
+    display: flex;
+    flex: 1 1 320px;
+    align-items: center;
+    justify-content: flex-end;
+    gap: .75rem;
+    flex-wrap: wrap;
+    margin-left: auto;
+}
+
+.upload-selection-actions .empty-text {
+    padding: 0;
+}
+
+@media (max-width: 600px) {
+    .upload-selection-actions {
+        flex-basis: 100%;
+        justify-content: flex-start;
+        margin-left: 0;
+    }
+
+    .upload-selection-actions .primary-btn {
+        width: 100%;
+    }
+}

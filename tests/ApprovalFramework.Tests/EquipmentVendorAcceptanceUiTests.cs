@@ -18,6 +18,23 @@ public sealed class EquipmentVendorAcceptanceUiTests
     }
 
     [Fact]
+    public void VendorAttachments_UseInlineResponsiveMultiFileUploadAction()
+    {
+        var edit = Read("Components", "Pages", "VendorEdit.razor");
+        var css = Read("Components", "Pages", "VendorEdit.razor.css");
+
+        Assert.Contains("<InputFile OnChange=\"OnFilesSelected\" multiple", edit);
+        Assert.Contains("args.GetMultipleFiles(20)", edit);
+        Assert.Contains("class=\"upload-selection-actions\"", edit);
+        Assert.Contains("@onclick=\"UploadOnlyAsync\"", edit);
+        Assert.Contains("@(_saving ? \"\u4e0a\u50b3\u4e2d...\" : \"\u4e0a\u50b3\")", edit);
+        Assert.DoesNotContain("\u63d0\u4ea4\u6240\u9078\u9644\u4ef6", edit);
+        Assert.Contains("justify-content: flex-end", css);
+        Assert.Contains("flex-wrap: wrap", css);
+        Assert.Contains("@media (max-width: 600px)", css);
+    }
+
+    [Fact]
     public void EquipmentView_HasCompactTimestampsKmMetadataAndRealPhotoSections_WithoutDuplicateSystemPanel()
     {
         var view = Read("Components", "Pages", "ApparatusView.razor");
