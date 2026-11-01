@@ -57,18 +57,20 @@ else
         </div>
         <div class="upload-box" @ref="_fileInputContainer">
             <InputFile OnChange="OnFilesSelected" multiple disabled="@_saving" />
-            <div class="upload-selection-actions">
-                <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案</span>
-                @if (IsPersisted)
-                {
-                    <button type="button" class="primary-btn"
-                            disabled="@(_selectedFiles.Count == 0 || _saving)"
-                            @onclick="UploadOnlyAsync">
-                        @(_saving ? "上傳中..." : "上傳")
-                    </button>
-                }
+            <div class="upload-control-footer">
+                <span class="empty-text upload-guidance">@(IsPersisted ? $"可分次選擇檔案，最多 {MaxPendingUploadFiles} 個；確認清單後按「上傳」。" : $"可分次選擇檔案，最多 {MaxPendingUploadFiles} 個；儲存廠商時會一併提交附件。")</span>
+                <div class="upload-selection-actions">
+                    <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案</span>
+                    @if (IsPersisted)
+                    {
+                        <button type="button" class="primary-btn"
+                                disabled="@(_selectedFiles.Count == 0 || _saving)"
+                                @onclick="UploadOnlyAsync">
+                            @(_saving ? "上傳中..." : "上傳")
+                        </button>
+                    }
+                </div>
             </div>
-            <span class="empty-text">@(IsPersisted ? $"可分次選擇檔案，最多 {MaxPendingUploadFiles} 個；確認清單後按「上傳」。" : $"可分次選擇檔案，最多 {MaxPendingUploadFiles} 個；儲存廠商時會一併提交附件。")</span>
             @if (!string.IsNullOrWhiteSpace(_selectionMessage))
             {
                 <span class="error-text">@_selectionMessage</span>

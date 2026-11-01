@@ -20,7 +20,12 @@ public sealed class EquipmentAttachmentSelectionUiTests
         Assert.Contains("\u5f85\u4e0a\u50b3\u9644\u4ef6\u6700\u591a", edit);
         Assert.Contains("RemoveSelectedFileAsync(f.Id)", edit);
         Assert.DoesNotContain("\u63d0\u4ea4\u6240\u9078\u9644\u4ef6", edit);
+        Assert.Contains("class=\"upload-control-footer\"", edit);
+        Assert.Contains("class=\"empty-text upload-guidance\">@UploadGuidanceText", edit);
+        Assert.DoesNotContain("\u7f3a\u5c11\u8ca1\u7522\u7de8\u865f\u6642\u4e0d\u80fd\u6b63\u5f0f\u6b78\u6a94", edit);
         Assert.Contains(".upload-selection-actions", css);
+        Assert.Contains(".upload-control-footer", css);
+        Assert.Contains("justify-content: space-between", css);
         Assert.Contains("flex-wrap: wrap", css);
     }
 

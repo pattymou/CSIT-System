@@ -444,24 +444,24 @@
     <h4 class="attachment-section-title">待上傳附件</h4>
     <div class="upload-box" @ref="_fileInputContainer">
         <InputFile OnChange="OnFilesSelected" multiple disabled="@(_saving || _uploading)" />
-        <div class="upload-selection-actions">
-            <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案</span>
-            @if (IsPersisted)
-            {
-                <button type="button" class="primary-btn"
-                        @onclick="UploadFilesAsync"
-                        disabled="@(_selectedFiles.Count == 0 || _uploading || _saving)">
-                    @(_uploading ? "上傳中..." : "上傳")
-                </button>
-            }
+        <div class="upload-control-footer">
+            <span class="empty-text upload-guidance">@UploadGuidanceText</span>
+            <div class="upload-selection-actions">
+                <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案</span>
+                @if (IsPersisted)
+                {
+                    <button type="button" class="primary-btn"
+                            @onclick="UploadFilesAsync"
+                            disabled="@(_selectedFiles.Count == 0 || _uploading || _saving)">
+                        @(_uploading ? "上傳中..." : "上傳")
+                    </button>
+                }
+            </div>
         </div>
-        <span class="empty-text">@UploadGuidanceText</span>
         @if (!string.IsNullOrWhiteSpace(_selectionMessage))
         {
             <span class="equipment-warning">@_selectionMessage</span>
         }
-        @if (IsEquipment && string.IsNullOrWhiteSpace(_form.ProductsId))
-        { <span class="equipment-warning">缺少財產編號時不能正式歸檔；系統不會以序號或假值取代既定 NAS 命名。</span> }
     </div>
 
     @if (_selectedFiles.Count > 0)

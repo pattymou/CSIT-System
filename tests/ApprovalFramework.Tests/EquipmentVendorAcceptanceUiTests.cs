@@ -30,6 +30,8 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.DoesNotContain("GetMultipleFiles(20)", edit);
         Assert.DoesNotContain("Api.UploadFilesAsync", edit);
         Assert.Contains("class=\"upload-selection-actions\"", edit);
+        Assert.Contains("class=\"upload-control-footer\"", edit);
+        Assert.Contains("class=\"empty-text upload-guidance\"", edit);
         Assert.Contains("@onclick=\"UploadOnlyAsync\"", edit);
         Assert.Contains("@(_saving ? \"\u4e0a\u50b3\u4e2d...\" : \"\u4e0a\u50b3\")", edit);
         Assert.DoesNotContain("\u63d0\u4ea4\u6240\u9078\u9644\u4ef6", edit);
@@ -38,6 +40,8 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.Contains("class=\"table-chip-btn danger\"", edit);
         Assert.Contains("_selectedFiles.Clear()", edit);
         Assert.Contains("justify-content: flex-end", css);
+        Assert.Contains(".upload-control-footer", css);
+        Assert.Contains("justify-content: space-between", css);
         Assert.Contains("flex-wrap: wrap", css);
         Assert.Contains(".pending-upload-actions", css);
         Assert.Contains("@media (max-width: 600px)", css);
