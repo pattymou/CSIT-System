@@ -58,7 +58,7 @@ else
         <div class="upload-box" @ref="_fileInputContainer">
             <InputFile OnChange="OnFilesSelected" multiple disabled="@_saving" />
             <div class="upload-selection-actions">
-                <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案。新增廠商時會和主檔由同一個「儲存」動作提交。</span>
+                <span class="empty-text">已選擇 @_selectedFiles.Count 個檔案</span>
                 @if (IsPersisted)
                 {
                     <button type="button" class="primary-btn"
@@ -68,10 +68,30 @@ else
                     </button>
                 }
             </div>
+            <span class="empty-text">@(IsPersisted ? $"可分次選擇檔案，最多 {MaxPendingUploadFiles} 個；確認清單後按「上傳」。" : $"可分次選擇檔案，最多 {MaxPendingUploadFiles} 個；儲存廠商時會一併提交附件。")</span>
+            @if (!string.IsNullOrWhiteSpace(_selectionMessage))
+            {
+                <span class="error-text">@_selectionMessage</span>
+            }
         </div>
         @if (_selectedFiles.Count > 0)
         {
-            <div class="upload-list">@foreach (var file in _selectedFiles) { <div class="upload-file-item"><span>@file.Name</span><strong>@FormatSize(file.Size)</strong></div> }</div>
+            <div class="upload-list">
+                @foreach (var file in _selectedFiles)
+                {
+                    <div class="upload-file-item pending-upload-file" @key="file.Id">
+                        <span>@file.FileName</span>
+                        <div class="pending-upload-actions">
+                            <strong>@FormatSize(file.Size)</strong>
+                            <button type="button" class="table-chip-btn danger"
+                                    disabled="@_saving"
+                                    @onclick="() => RemoveSelectedFileAsync(file.Id)">
+                                移除
+                            </button>
+                        </div>
+                    </div>
+                }
+            </div>
         }
         <SIT.DepartmentSystem.Web.Components.Shared.VendorAttachmentTable
             Files="_files" PendingUploads="_ownUploads" OnDelete="DeleteFileAsync" />
@@ -93,12 +113,14 @@ else
     private VendorUpsertRequest _form = new();
     private List<VendorFileDto> _files = [];
     private IReadOnlyList<SIT.DepartmentSystem.Web.Services.Approval.OwnApprovalUploadDto> _ownUploads = [];
-    private List<(string Name, long Size)> _selectedFiles = [];
+    private List<SelectedUploadFile> _selectedFiles = [];
     private ElementReference _fileInputContainer;
     private Guid? _createdId;
     private bool _loading = true;
     private bool _saving;
     private string? _message;
+    private string? _selectionMessage;
+    private const int MaxPendingUploadFiles = 20;
     private bool IsEdit => Id.HasValue || _createdId.HasValue;
     private bool IsPersisted => Id.HasValue || _createdId.HasValue;
     private Guid? CurrentId => Id ?? _createdId;
@@ -134,8 +156,52 @@ else
         _form.Types = values.ToArray();
     }
 
-    private void OnFilesSelected(InputFileChangeEventArgs args) => _selectedFiles = args.GetMultipleFiles(20)
-        .Select(x => (x.Name, x.Size)).ToList();
+    private async Task OnFilesSelected(InputFileChangeEventArgs _)
+    {
+        try
+        {
+            var selection = await Api.AccumulateUploadFilesAsync(
+                _fileInputContainer, MaxPendingUploadFiles);
+            ApplyUploadSelection(selection);
+        }
+        catch (Exception ex)
+        {
+            _selectionMessage = $"讀取所選檔案失敗：{ex.Message} 請重新選擇。";
+        }
+    }
+
+    private async Task RemoveSelectedFileAsync(string fileId)
+    {
+        if (_saving) return;
+
+        try
+        {
+            var selection = await Api.RemoveAccumulatedUploadFileAsync(
+                _fileInputContainer, fileId, MaxPendingUploadFiles);
+            ApplyUploadSelection(selection);
+        }
+        catch (Exception ex)
+        {
+            _selectionMessage = $"移除待上傳檔案失敗：{ex.Message} 請稍後重試。";
+        }
+    }
+
+    private void ApplyUploadSelection(BrowserUploadSelection selection)
+    {
+        _selectedFiles = selection.Files.Select(file => new SelectedUploadFile
+        {
+            Id = file.Id,
+            FileName = file.FileName,
+            Size = file.Size
+        }).ToList();
+
+        var messages = new List<string>();
+        if (selection.DuplicateNames.Count > 0)
+            messages.Add($"已略過重複檔名：{string.Join("、", selection.DuplicateNames.Distinct(StringComparer.OrdinalIgnoreCase))}。");
+        if (selection.RejectedNames.Count > 0)
+            messages.Add($"待上傳附件最多 {selection.MaxFiles} 個，未加入：{string.Join("、", selection.RejectedNames)}。");
+        _selectionMessage = messages.Count == 0 ? null : string.Join(" ", messages);
+    }
 
     private async Task SaveAsync()
     {
@@ -182,9 +248,10 @@ else
 
     private async Task<bool> UploadAsync(Guid id)
     {
-        var response = await Api.UploadFilesAsync($"/api/vendors/{id}/files", _fileInputContainer);
+        var response = await Api.UploadAccumulatedFilesAsync($"/api/vendors/{id}/files", _fileInputContainer);
         if (!response.IsSuccessStatusCode) { _message = $"附件送審失敗：{response.Body}"; return false; }
         _selectedFiles.Clear();
+        _selectionMessage = null;
         await ReloadAsync(id);
         _message = response.StatusCode == StatusCodes.Status202Accepted
             ? "附件已送主管審核；核准並正式入庫後才會建立 KM 排程。"
@@ -215,6 +282,12 @@ else
     }
 
     private static string FormatSize(long size) => size >= 1024 * 1024 ? $"{size / 1024d / 1024d:0.##} MB" : size >= 1024 ? $"{size / 1024d:0.##} KB" : $"{size} B";
+    private sealed class SelectedUploadFile
+    {
+        public string Id { get; set; } = string.Empty;
+        public string FileName { get; set; } = string.Empty;
+        public long Size { get; set; }
+    }
     private sealed class CreateVendorResponse { public Guid Id { get; set; } }
 }
 

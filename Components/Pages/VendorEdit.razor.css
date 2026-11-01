@@ -45,6 +45,23 @@
     padding: 0;
 }
 
+.pending-upload-actions {
+    display: flex;
+    align-items: center;
+    gap: .75rem;
+    flex-wrap: wrap;
+}
+
+.pending-upload-file {
+    justify-content: space-between;
+    gap: 1rem;
+}
+
+.pending-upload-file > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
+}
+
 @media (max-width: 600px) {
     .upload-selection-actions {
         flex-basis: 100%;
