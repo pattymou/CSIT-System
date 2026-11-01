@@ -48,6 +48,30 @@ public sealed class EquipmentVendorAcceptanceUiTests
     }
 
     [Fact]
+    public void VendorAttachmentTable_UsesEquipmentFiveColumnStatusLayout()
+    {
+        var table = Read("Components", "Shared", "VendorAttachmentTable.razor");
+        var css = Read("Components", "Shared", "VendorAttachmentTable.razor.css");
+
+        Assert.Contains("<th>檔案名稱</th><th>類型</th><th>正式入庫</th><th>KM 分析</th><th>操作</th>", table);
+        Assert.Equal(5, Count(table, "<th>"));
+        Assert.DoesNotContain("<th>審核狀態</th>", table);
+        Assert.DoesNotContain("record-status-pill", table);
+        Assert.Contains("file.IsImage", table);
+        Assert.Contains("PendingTypeText(upload.FileName)", table);
+        Assert.Contains("Manual／Datasheet／廠商文件", table);
+        Assert.Contains("attachment-status @ArchiveClass(file.ArchiveStatus)", table);
+        Assert.Contains("attachment-status @KmClass(file)", table);
+        Assert.Contains("原因：@upload.RejectReason", table);
+        Assert.Contains("href=\"/my-submissions\"", table);
+        Assert.Contains("disabled=\"@(!file.CanDelete)\"", table);
+        Assert.Contains("min-width: 900px", css);
+        Assert.Contains("width: 27%", css);
+        Assert.Contains(".attachment-status.completed", css);
+        Assert.Contains("overflow-wrap: anywhere", css);
+    }
+
+    [Fact]
     public void EquipmentView_HasCompactTimestampsKmMetadataAndRealPhotoSections_WithoutDuplicateSystemPanel()
     {
         var view = Read("Components", "Pages", "ApparatusView.razor");
