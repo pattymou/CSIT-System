@@ -508,13 +508,30 @@ public sealed class DocumentLibraryTests
         Assert.DoesNotContain("<span>📄</span><span>@l3.Name</span>", source);
         Assert.Contains("L@(SelectedFolderLevel)", source);
         Assert.Contains("共 @SelectedFileCount 份文件", source);
-        Assert.Contains("<th>審核狀態</th><th>正式入庫</th><th>KM 分析</th><th>來源</th><th>上傳者</th>", source);
-        Assert.Contains("colspan=\"9\"", source);
+        Assert.Contains("<th>檔案</th><th>正式入庫</th><th>KM 分析</th><th>來源</th><th>上傳者</th>", source);
+        Assert.DoesNotContain("<th>審核狀態</th>", source);
+        Assert.Contains("colspan=\"8\"", source);
         Assert.DoesNotContain("summary @onclick", source);
         Assert.DoesNotContain("<details class=\"tree-l2\" open>", source);
         var css = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "Components", "Pages", "DocumentLibrary.razor.css"));
         Assert.Contains("details[open]>summary::before", css);
         Assert.Contains("justify-content:space-between", css);
+        Assert.Contains(".download-link { display:inline-block; white-space:nowrap; }", css);
+    }
+
+    [Fact]
+    public void FolderManagement_HidesSystemManagedFoldersWithoutChangingBrowseTree()
+    {
+        var root = FindRepositoryRoot();
+        var management = File.ReadAllText(Path.Combine(root, "Components", "Pages", "System",
+            "DocumentFolderManagement.razor"));
+        var library = File.ReadAllText(Path.Combine(root, "Components", "Pages", "DocumentLibrary.razor"));
+
+        Assert.Contains("_folders=folders.Where(x=>!x.IsSystemManaged).ToList()", management);
+        Assert.Contains("_folders.Where(x=>x.Level<3)", management);
+        Assert.DoesNotContain("disabled=\"@folder.IsSystemManaged\"", management);
+        Assert.Contains("SystemChildrenOf", library);
+        Assert.Contains("DocumentLibraryService.GetSystemDocumentsAsync()", library);
     }
 
     private static DocumentLibraryService CreateService(TestFactory factory) => new(

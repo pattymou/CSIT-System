@@ -1,7 +1,7 @@
 .vendor-attachment-table { table-layout: fixed; min-width: 980px; }
 .vendor-attachment-table .vendor-file-name-column { width: 26%; }
 .vendor-attachment-table .vendor-file-type-column { width: 16%; }
-.vendor-attachment-table .vendor-file-review-column { width: 14%; }
+.vendor-attachment-table .vendor-file-uploader-column { width: 14%; }
 .vendor-attachment-table .vendor-file-archive-column { width: 16%; }
 .vendor-attachment-table .vendor-file-km-column { width: 16%; }
 .vendor-attachment-table .vendor-file-actions-column { width: 12%; }

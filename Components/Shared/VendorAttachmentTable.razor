@@ -14,13 +14,13 @@ else
             <colgroup>
                 <col class="vendor-file-name-column" />
                 <col class="vendor-file-type-column" />
-                <col class="vendor-file-review-column" />
+                <col class="vendor-file-uploader-column" />
                 <col class="vendor-file-archive-column" />
                 <col class="vendor-file-km-column" />
                 <col class="vendor-file-actions-column" />
             </colgroup>
             <thead>
-                <tr><th>檔案名稱</th><th>類型</th><th>審核狀態</th><th>正式入庫</th><th>KM 分析</th><th>操作</th></tr>
+                <tr><th>檔案名稱</th><th>類型</th><th>上傳者</th><th>正式入庫</th><th>KM 分析</th><th>操作</th></tr>
             </thead>
             <tbody>
                 @foreach (var upload in PendingUploads)
@@ -28,7 +28,7 @@ else
                     <tr>
                         <td><strong class="vendor-file-name">@upload.FileName</strong><small>@upload.SubmittedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</small></td>
                         <td>@PendingTypeText(upload.FileName)</td>
-                        <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Review(upload.Status)" /></td>
+                        <td>@Display(upload.UploadedBy)</td>
                         <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Archive(upload.Status)" />
                             @if (upload.Status == ApprovalStatus.Rejected && !string.IsNullOrWhiteSpace(upload.RejectReason))
                             { <small class="error-text">原因：@upload.RejectReason</small> }
@@ -46,7 +46,7 @@ else
                             <small>@FormatSize(file.FileSize)</small>
                         </td>
                         <td>@FileTypeText(file)</td>
-                        <td><AttachmentStatusPill Status="@(file.WasSupervisorApproved ? AttachmentStatusPresentation.Approved() : AttachmentStatusPresentation.Exempt())" /></td>
+                        <td>@Display(file.UploadedBy)<small>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</small></td>
                         <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Archive(file.ArchiveStatus)" Title="@file.ArchiveError" />
                             @if (!string.IsNullOrWhiteSpace(file.ArchiveError)) { <small class="error-text">@file.ArchiveError</small> }
                         </td>
@@ -87,6 +87,7 @@ else
         ? "廠商圖片"
         : "Manual／Datasheet／廠商文件";
 
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
     private static string FormatSize(long size) => size >= 1024 * 1024
         ? $"{size / 1024d / 1024d:0.##} MB"
         : size >= 1024 ? $"{size / 1024d:0.##} KB" : $"{size} B";

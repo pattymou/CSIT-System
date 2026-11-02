@@ -5,7 +5,7 @@ using System.Security.Claims;
 
 namespace SIT.DepartmentSystem.Web.Services.Approval;
 
-public sealed record OwnApprovalUploadDto(Guid Id, string FileName, DateTime SubmittedAt,
+public sealed record OwnApprovalUploadDto(Guid Id, string FileName, string? UploadedBy, DateTime SubmittedAt,
     ApprovalStatus Status, string? RejectReason, bool IsTestReport);
 
 /// <summary>Only the uploader's non-formal uploads for an existing Case or Task.</summary>
@@ -30,7 +30,7 @@ public sealed class ApprovalContextUploads(IDbContextFactory<AppDbContext> dbFac
                 x.ContextType == VendorApprovalSourceResolver.ContextType &&
                 x.ContextId == contextId && x.Status != ApprovalStatus.Committed)
             .OrderByDescending(x => x.SubmittedAt).Take(200)
-            .Select(x => new OwnApprovalUploadDto(x.Id, x.OriginalFileName ?? "-", x.SubmittedAt,
+            .Select(x => new OwnApprovalUploadDto(x.Id, x.OriginalFileName ?? "-", x.SubmittedByAccount, x.SubmittedAt,
                 x.Status, x.RejectReason, false))
             .ToListAsync(cancellationToken);
     }
@@ -46,7 +46,7 @@ public sealed class ApprovalContextUploads(IDbContextFactory<AppDbContext> dbFac
                 x.ContextType == "Asset" && x.ContextId == apparatusId &&
                 x.Status != ApprovalStatus.Committed)
             .OrderByDescending(x => x.SubmittedAt).Take(200)
-            .Select(x => new OwnApprovalUploadDto(x.Id, x.OriginalFileName ?? "-", x.SubmittedAt,
+            .Select(x => new OwnApprovalUploadDto(x.Id, x.OriginalFileName ?? "-", x.SubmittedByAccount, x.SubmittedAt,
                 x.Status, x.RejectReason, false))
             .ToListAsync(cancellationToken);
     }
@@ -102,7 +102,7 @@ public sealed class ApprovalContextUploads(IDbContextFactory<AppDbContext> dbFac
                 x.Status != ApprovalStatus.Committed && contextIds.Contains(x.ContextId))
             .OrderByDescending(x => x.SubmittedAt).Take(200).ToListAsync(cancellationToken);
         return rows.Where(x => keys.Contains((x.ContextType, x.ContextId)))
-            .Select(x => new OwnApprovalUploadDto(x.Id, x.OriginalFileName ?? "-", x.SubmittedAt,
+            .Select(x => new OwnApprovalUploadDto(x.Id, x.OriginalFileName ?? "-", x.SubmittedByAccount, x.SubmittedAt,
                 x.Status, x.RejectReason, x.ContextType is nameof(ThreeLevelUploadKind.TestReport)
                     or nameof(ThreeLevelUploadKind.TestReportByTaskNo)
                     or nameof(ThreeLevelUploadKind.TestReportVersion)))

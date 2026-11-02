@@ -62,16 +62,18 @@
 }
 
 .my-submission-table.pending .source { width: 13%; }
-.my-submission-table.pending .context { width: 31%; }
-.my-submission-table.pending .file { width: 27%; }
+.my-submission-table.pending .context { width: 25%; }
+.my-submission-table.pending .file { width: 22%; }
+.my-submission-table.pending .uploader { width: 12%; }
 .my-submission-table.pending .date { width: 16%; }
-.my-submission-table.pending .action { width: 13%; }
-.my-submission-table.rejected .source { width: 11%; }
-.my-submission-table.rejected .context { width: 21%; }
-.my-submission-table.rejected .file { width: 20%; }
-.my-submission-table.rejected .reason { width: 20%; }
+.my-submission-table.pending .action { width: 12%; }
+.my-submission-table.rejected .source { width: 10%; }
+.my-submission-table.rejected .context { width: 18%; }
+.my-submission-table.rejected .file { width: 17%; }
+.my-submission-table.rejected .uploader { width: 11%; }
+.my-submission-table.rejected .reason { width: 17%; }
 .my-submission-table.rejected .date { width: 12%; }
-.my-submission-table.rejected .action { width: 16%; }
+.my-submission-table.rejected .action { width: 15%; }
 
 .my-submission-table :is(th, td) {
     padding: 12px 8px;

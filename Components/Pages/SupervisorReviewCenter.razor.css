@@ -1,5 +1,6 @@
 .approval-review-layout {
     min-width: 0;
+    width: 100%;
 }
 
 .approval-source-tabs {
@@ -59,6 +60,7 @@
 .approval-review-results,
 .approval-review-table-wrap {
     min-width: 0;
+    width: 100%;
 }
 
 .approval-review-results .case-card-head {
@@ -75,14 +77,20 @@
     table-layout: fixed;
 }
 
-.approval-col-source { width: 10%; }
-.approval-col-context { width: 18%; }
-.approval-col-file { width: 18%; }
-.approval-col-submitter { width: 11%; }
-.approval-col-time { width: 13%; }
+.approval-col-source { width: 11%; }
+.approval-col-context { width: 20%; }
+.approval-col-file { width: 20%; }
+.approval-col-submitter { width: 13%; }
+.approval-col-time { width: 14%; }
 .approval-col-type { width: 10%; }
-.approval-col-status { width: 10%; }
-.approval-col-actions { width: 10%; }
+.approval-col-actions { width: 12%; }
+
+.verification-col-source { width: 12%; }
+.verification-col-context { width: 25%; }
+.verification-col-file { width: 24%; }
+.verification-col-uploader { width: 14%; }
+.verification-col-time { width: 15%; }
+.verification-col-type { width: 10%; }
 
 .approval-review-table :is(th, td) {
     padding: 12px 8px;
@@ -144,5 +152,5 @@
 }
 
 @media (max-width: 900px) {
-    .approval-review-table { min-width: 1050px; }
+    .approval-review-table { min-width: 920px; }
 }

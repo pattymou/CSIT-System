@@ -153,12 +153,12 @@
                     {
                     <div class="document-table-wrap">
                         <table class="document-table system-document-table">
-                            <colgroup><col class="system-file-name-column" /><col class="system-file-review-column" /><col class="system-file-archive-column" /><col class="system-file-km-column" /><col class="system-file-source-column" /><col class="system-file-uploader-column" /><col class="system-file-size-column" /><col class="system-file-time-column" /><col class="system-file-action-column" /></colgroup>
-                            <thead><tr><th>檔案</th><th>審核狀態</th><th>正式入庫</th><th>KM 分析</th><th>來源</th><th>上傳者</th><th>大小</th><th>時間</th><th></th></tr></thead>
+                            <colgroup><col class="system-file-name-column" /><col class="system-file-archive-column" /><col class="system-file-km-column" /><col class="system-file-source-column" /><col class="system-file-uploader-column" /><col class="system-file-size-column" /><col class="system-file-time-column" /><col class="system-file-action-column" /></colgroup>
+                            <thead><tr><th>檔案</th><th>正式入庫</th><th>KM 分析</th><th>來源</th><th>上傳者</th><th>大小</th><th>時間</th><th>操作</th></tr></thead>
                             <tbody>
                                 @if (_selectedSystemFolder.Files.Count == 0)
                                 {
-                                    <tr><td colspan="9" class="document-empty">此分類目前沒有正式文件。</td></tr>
+                                    <tr><td colspan="8" class="document-empty">此分類目前沒有正式文件。</td></tr>
                                 }
                                 else
                                 {
@@ -178,14 +178,13 @@
                                                 }
                                                 <span><strong>@file.FileName</strong><small>@FormatSize(file.FileSize)</small></span>
                                             </td>
-                                            <td><AttachmentStatusPill Status="@Status(file.ReviewStatusDisplay, file.ReviewStatusTone)" /></td>
                                             <td><AttachmentStatusPill Status="@Status(file.ArchiveStatusDisplay, file.ArchiveStatusTone)" /></td>
                                             <td><AttachmentStatusPill Status="@Status(file.KmStatusDisplay, file.KmStatusTone)" /></td>
                                             <td>@file.SourceModule</td>
                                             <td>@DisplayUploader(file.UploadedBy)</td>
                                             <td>@FormatSize(file.FileSize)</td>
                                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
-                                            <td><a class="download-link" href="@file.DownloadUrl">下載</a></td>
+                                            <td class="document-action-cell"><a class="download-link" href="@file.DownloadUrl">下載</a></td>
                                         </tr>
                                     }
                                 }
@@ -196,12 +195,13 @@
                     else
                     {
                     <div class="document-table-wrap">
-                        <table class="document-table">
-                            <thead><tr><th>原始檔名</th><th>審核狀態</th><th>正式入庫</th><th>KM 分析</th><th>大小</th><th>上傳者</th><th>上傳時間</th><th>SHA256</th><th></th></tr></thead>
+                        <table class="document-table custom-document-table">
+                            <colgroup><col class="custom-file-name-column" /><col class="custom-file-archive-column" /><col class="custom-file-km-column" /><col class="custom-file-size-column" /><col class="custom-file-uploader-column" /><col class="custom-file-time-column" /><col class="custom-file-sha-column" /><col class="custom-file-action-column" /></colgroup>
+                            <thead><tr><th>原始檔名</th><th>正式入庫</th><th>KM 分析</th><th>大小</th><th>上傳者</th><th>上傳時間</th><th>SHA256</th><th>操作</th></tr></thead>
                             <tbody>
                                 @if (_files.Count == 0)
                                 {
-                                    <tr><td colspan="9" class="document-empty">此資料夾尚無文件。</td></tr>
+                                    <tr><td colspan="8" class="document-empty">此資料夾尚無文件。</td></tr>
                                 }
                                 else
                                 {
@@ -221,14 +221,13 @@
                                                 }
                                                 <span><strong>@file.OriginalFileName</strong><small>@file.StandardFileName</small></span>
                                             </td>
-                                            <td><AttachmentStatusPill Status="@Status(file.ReviewStatusDisplay, file.ReviewStatusTone)" /></td>
                                             <td><AttachmentStatusPill Status="@Status(file.ArchiveStatusDisplay, file.ArchiveStatusTone)" Title="@file.ArchiveError" /></td>
                                             <td><AttachmentStatusPill Status="@Status(file.KmStatusDisplay, file.KmStatusTone)" Title="@file.ProcessingError" /></td>
                                             <td>@FormatSize(file.FileSize)</td>
-                                            <td>@file.UploadedBy</td>
+                                            <td>@DisplayUploader(file.UploadedBy)</td>
                                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
                                             <td><code title="@file.Sha256">@file.Sha256[..12]…</code></td>
-                                            <td><a class="download-link" href="@($"/api/document-library/files/{file.Id}/download")">下載</a></td>
+                                            <td class="document-action-cell"><a class="download-link" href="@($"/api/document-library/files/{file.Id}/download")">下載</a></td>
                                         </tr>
                                     }
                                 }

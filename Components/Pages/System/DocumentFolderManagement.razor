@@ -30,11 +30,11 @@
     <div class="folder-admin-grid">
         <section class="folder-list-card">
             <h2>目前結構</h2>
-            @if (_folders.Count == 0) { <div class="admin-empty">尚未建立資料夾。</div> }
+            @if (_folders.Count == 0) { <div class="admin-empty">尚未建立自訂資料夾。</div> }
             @foreach (var folder in OrderedFolders())
             {
-                <button type="button" class="folder-row @(_editingId == folder.Id ? "active" : "")" style="--level:@folder.Level" disabled="@folder.IsSystemManaged" @onclick="() => Edit(folder)">
-                    <span><strong>@folder.Name</strong><small>@Display(folder.Description)</small></span><span class="sort-badge">@(folder.IsSystemManaged ? "系統分類" : $"排序 {folder.SortOrder}")</span>
+                <button type="button" class="folder-row @(_editingId == folder.Id ? "active" : "")" style="--level:@folder.Level" @onclick="() => Edit(folder)">
+                    <span><strong>@folder.Name</strong><small>@Display(folder.Description)</small></span><span class="sort-badge">排序 @folder.SortOrder</span>
                 </button>
             }
         </section>
@@ -73,10 +73,10 @@
 @code {
     private List<DocumentFolderDto> _folders=[]; private DocumentFolderUpsertRequest _form=new(); private Guid? _editingId; private bool _saving; private bool _deleting; private bool _showDeleteConfirm; private bool _showMoveConfirm; private DocumentFolderDto? _deleteTarget; private string? _message; private bool _isError;
     protected override async Task OnInitializedAsync()=>await LoadAsync();
-    private async Task LoadAsync(){try{_folders=await Api.GetAsync<List<DocumentFolderDto>>("/api/document-library/folders");}catch(Exception ex){ShowError($"載入失敗：{ex.Message}");}}
+    private async Task LoadAsync(){try{var folders=await Api.GetAsync<List<DocumentFolderDto>>("/api/document-library/folders");_folders=folders.Where(x=>!x.IsSystemManaged).ToList();}catch(Exception ex){ShowError($"載入失敗：{ex.Message}");}}
     private IEnumerable<DocumentFolderDto> OrderedFolders(){var result=new List<DocumentFolderDto>();void Add(Guid? parent){foreach(var item in _folders.Where(x=>x.ParentId==parent).OrderBy(x=>x.SortOrder).ThenBy(x=>x.Name)){result.Add(item);Add(item.Id);}}Add(null);return result;}
     private DocumentFolderDto? EditingFolder=>_editingId is null?null:_folders.SingleOrDefault(x=>x.Id==_editingId.Value);
-    private IEnumerable<DocumentFolderDto> ParentOptions()=>_editingId is null?_folders.Where(x=>x.Level<3&&!x.IsSystemManaged).OrderBy(x=>x.Level).ThenBy(x=>x.SortOrder):EditingFolder is {Level:>1} folder?_folders.Where(x=>x.Level==folder.Level-1&&!x.IsSystemManaged).OrderBy(x=>x.SortOrder).ThenBy(x=>x.Name):[];
+    private IEnumerable<DocumentFolderDto> ParentOptions()=>_editingId is null?_folders.Where(x=>x.Level<3).OrderBy(x=>x.Level).ThenBy(x=>x.SortOrder):EditingFolder is {Level:>1} folder?_folders.Where(x=>x.Level==folder.Level-1).OrderBy(x=>x.SortOrder).ThenBy(x=>x.Name):[];
     private void StartCreate(){ResetForm();_message=null;}
     private void ResetForm(){_editingId=null;_form=new();_deleteTarget=null;_showDeleteConfirm=false;_showMoveConfirm=false;}
     private void ClearForm(){var parent=_editingId.HasValue?_form.ParentId:null;_form=new(){ParentId=parent};}

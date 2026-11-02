@@ -121,6 +121,7 @@ public sealed class VerificationWorkManagementService(
                                 KmAnalysisError = kmByReport.TryGetValue(file.Id, out var km) &&
                                     km.Status == KmIntegrationStatus.Failed
                                         ? SafeKmError(km.LastErrorCode, km.LastErrorMessage) : null,
+                                UploadedBy = file.UploadEmp,
                                 CreatedAt = file.CreatedAt
                             }).ToList()
                     })).ToList()

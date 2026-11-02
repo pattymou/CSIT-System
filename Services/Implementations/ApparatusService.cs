@@ -1050,7 +1050,8 @@ public class ApparatusService : IApparatusService
             CanDelete = deletion is null ||
                 deletion.Status == EquipmentFileDeletionStatuses.CleanupFailed,
             IsFormalArchiveVerified = isFormalArchiveVerified,
-            WasSupervisorApproved = wasSupervisorApproved
+            WasSupervisorApproved = wasSupervisorApproved,
+            UploadedBy = x.UploadEmp
         };
     }
 

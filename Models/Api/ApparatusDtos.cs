@@ -161,6 +161,7 @@ public class ApparatusFileDto
     public bool CanDelete { get; set; }
     public bool IsFormalArchiveVerified { get; set; }
     public bool WasSupervisorApproved { get; set; }
+    public string? UploadedBy { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 

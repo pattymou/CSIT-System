@@ -76,6 +76,7 @@ public sealed class VerificationWorkReportDto
     public string KmAnalysisStatus { get; set; } = "NotSent";
     public string KmAnalysisStatusDisplay { get; set; } = "尚未送 KM";
     public string? KmAnalysisError { get; set; }
+    public string? UploadedBy { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 

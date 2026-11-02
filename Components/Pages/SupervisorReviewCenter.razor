@@ -53,7 +53,10 @@ else
                 else
                 {
                     <div class="project-table-wrap approval-review-table-wrap"><table class="project-table approval-review-table verification-attachment-review-table">
-                        <thead><tr><th>所屬區域</th><th>主資料名稱</th><th>附件名稱</th><th>上傳者</th><th>上傳時間</th><th>類型</th><th>審核狀態</th></tr></thead>
+                        <colgroup><col class="verification-col-source" /><col class="verification-col-context" />
+                            <col class="verification-col-file" /><col class="verification-col-uploader" />
+                            <col class="verification-col-time" /><col class="verification-col-type" /></colgroup>
+                        <thead><tr><th>所屬區域</th><th>主資料名稱</th><th>附件名稱</th><th>上傳者</th><th>上傳時間</th><th>類型</th></tr></thead>
                         <tbody>
                         @foreach (var item in _verificationItems)
                         {
@@ -62,9 +65,8 @@ else
                                 <tr class="clickable-row verification-review-row" tabindex="0" role="link"
                                     @onclick="() => OpenVerification(item.Id)" @onkeydown="e => OpenVerificationByKeyboard(e, item.Id)">
                                     <td>驗證申請</td><td><strong>@item.ApplicationNo</strong><small>@Display(item.ProductModel ?? item.ProjectName) · @Display(item.ValidationRequest?.FormSnapshot?.ProductTypeLabel ?? item.ValidationRequest?.ProductTypeCode)</small></td><td>—</td>
-                                    <td title="@item.ApplicantAccount">@Display(item.ApplicantName)</td>
+                                    <td>—</td>
                                     <td>@item.SubmittedAt?.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td><td>—</td>
-                                    <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Review(item.Status)" /></td>
                                 </tr>
                             }
                             else
@@ -77,7 +79,6 @@ else
                                         <td title="@file.UploadedBy">@Display(file.UploadedBy)</td>
                                         <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
                                         <td>@FileType(file.ContentType, file.FileName)</td>
-                                        <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Review(item.Status)" /></td>
                                     </tr>
                                 }
                             }
@@ -98,8 +99,8 @@ else
                 <div class="project-table-wrap approval-review-table-wrap"><table class="project-table approval-review-table">
                     <colgroup><col class="approval-col-source" /><col class="approval-col-context" />
                         <col class="approval-col-file" /><col class="approval-col-submitter" /><col class="approval-col-time" />
-                        <col class="approval-col-type" /><col class="approval-col-status" /><col class="approval-col-actions" /></colgroup>
-                    <thead><tr><th>所屬區域</th><th>主資料名稱</th><th>附件名稱</th><th>上傳者</th><th>上傳時間</th><th>類型</th><th>審核狀態</th><th>操作</th></tr></thead>
+                        <col class="approval-col-type" /><col class="approval-col-actions" /></colgroup>
+                    <thead><tr><th>所屬區域</th><th>主資料名稱</th><th>附件名稱</th><th>上傳者</th><th>上傳時間</th><th>類型</th><th>操作</th></tr></thead>
                     <tbody>
                     @foreach (var item in _items)
                     {
@@ -128,7 +129,6 @@ else
                             <td title="@item.SubmittedByAccount">@item.SubmittedByAccount</td>
                             <td>@item.SubmittedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
                             <td>@FileType(item.ContentType, item.OriginalFileName)</td>
-                            <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Review(item.Status)" /></td>
                             <td class="approval-actions-cell"><div class="approval-actions">
                                 @if (_canWrite && item.Status == ApprovalStatus.Pending)
                                 {
@@ -147,7 +147,7 @@ else
                         </tr>
                         @if (_rejectingId == item.Id)
                         {
-                            <tr><td class="approval-reject-editor" colspan="8">
+                            <tr><td class="approval-reject-editor" colspan="7">
                                 <label for="reject-reason">退回原因（必填）</label>
                                 <textarea id="reject-reason" @bind="_rejectReason" @bind:event="oninput" maxlength="2000" required></textarea>
                                 <button class="table-chip-btn danger" disabled="@(string.IsNullOrWhiteSpace(_rejectReason))"

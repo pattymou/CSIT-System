@@ -41,14 +41,14 @@ public sealed class AttachmentStatusPresentationTests
     }
 
     [Fact]
-    public void SupervisorCenter_ShowsAttachmentDetailsWithoutChangingApprovalActions()
+    public void SupervisorCenter_ShowsWideUploaderDetailsWithoutReviewColumnOrChangingActions()
     {
         var root = FindRepositoryRoot();
         var source = File.ReadAllText(Path.Combine(root, "Components", "Pages", "SupervisorReviewCenter.razor"));
 
-        Assert.Contains("<th>所屬區域</th><th>主資料名稱</th><th>附件名稱</th><th>上傳者</th><th>上傳時間</th><th>類型</th><th>審核狀態</th>", source);
+        Assert.Contains("<th>所屬區域</th><th>主資料名稱</th><th>附件名稱</th><th>上傳者</th><th>上傳時間</th><th>類型</th>", source);
+        Assert.DoesNotContain("<th>審核狀態</th>", source);
         Assert.Contains("@foreach (var file in item.Files)", source);
-        Assert.Contains("AttachmentStatusPresentation.Review(item.Status)", source);
         Assert.Contains("Submissions.ApproveAsync", source);
         Assert.Contains("Submissions.RejectAsync", source);
     }

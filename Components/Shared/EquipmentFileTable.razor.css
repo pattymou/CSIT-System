@@ -1,7 +1,7 @@
 .equipment-file-table { table-layout: fixed; min-width: 1150px; }
 .equipment-file-table .equipment-file-name-column { width: 26%; }
 .equipment-file-table .equipment-file-type-column { width: 16%; }
-.equipment-file-table .equipment-file-review-column { width: 14%; }
+.equipment-file-table .equipment-file-uploader-column { width: 14%; }
 .equipment-file-table .equipment-file-archive-column { width: 16%; }
 .equipment-file-table .equipment-file-km-column { width: 16%; }
 .equipment-file-table .equipment-file-actions-column { width: 12%; }

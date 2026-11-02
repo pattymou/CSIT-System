@@ -48,25 +48,27 @@ public sealed class EquipmentVendorAcceptanceUiTests
     }
 
     [Fact]
-    public void VendorAttachmentTable_UsesUnifiedThreeStatusColumns()
+    public void VendorAttachmentTable_ShowsUploaderAndKeepsArchiveAndKmColumns()
     {
         var table = Read("Components", "Shared", "VendorAttachmentTable.razor");
         var css = Read("Components", "Shared", "VendorAttachmentTable.razor.css");
 
-        Assert.Contains("<th>檔案名稱</th><th>類型</th><th>審核狀態</th><th>正式入庫</th><th>KM 分析</th><th>操作</th>", table);
+        Assert.Contains("<th>檔案名稱</th><th>類型</th><th>上傳者</th><th>正式入庫</th><th>KM 分析</th><th>操作</th>", table);
         Assert.Equal(6, Count(table, "<th>"));
+        Assert.DoesNotContain("<th>審核狀態</th>", table);
         Assert.DoesNotContain("record-status-pill", table);
         Assert.Contains("file.IsImage", table);
         Assert.Contains("PendingTypeText(upload.FileName)", table);
         Assert.Contains("Manual／Datasheet／廠商文件", table);
-        Assert.Contains("AttachmentStatusPresentation.Review(upload.Status)", table);
+        Assert.Contains("Display(upload.UploadedBy)", table);
+        Assert.Contains("Display(file.UploadedBy)", table);
         Assert.Contains("AttachmentStatusPresentation.Archive(file.ArchiveStatus)", table);
         Assert.Contains("AttachmentStatusPresentation.Km(file.HasKmSchedule", table);
         Assert.Contains("原因：@upload.RejectReason", table);
         Assert.Contains("href=\"/my-submissions\"", table);
         Assert.Contains("disabled=\"@(!file.CanDelete)\"", table);
         Assert.Contains("min-width: 980px", css);
-        Assert.Contains("vendor-file-review-column", css);
+        Assert.Contains("vendor-file-uploader-column", css);
         Assert.Contains("overflow-wrap: anywhere", css);
     }
 
@@ -101,11 +103,13 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.Contains("AttachmentStatusPresentation.Archive", files);
         Assert.Contains("AttachmentStatusPill", files);
         Assert.Contains("<th>KM 分析</th><th>操作</th>", files);
+        Assert.Contains("<th>上傳者</th>", files);
+        Assert.DoesNotContain("<th>審核狀態</th>", files);
         Assert.Equal(6, Count(files, "<th>"));
         Assert.DoesNotContain("LocalDeletionText(file)", files);
         Assert.Contains("disabled=\"@(!file.CanDelete)\"", files);
         Assert.DoesNotContain("file.DeletionError ?? file.KmError", files);
-        Assert.Contains("equipment-file-review-column", fileCss);
+        Assert.Contains("equipment-file-uploader-column", fileCss);
     }
 
     [Fact]

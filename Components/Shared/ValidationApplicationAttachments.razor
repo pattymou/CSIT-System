@@ -39,14 +39,14 @@
     {
         <div class="attachment-table-wrap">
             <table class="attachment-table">
-                <thead><tr><th>檔案名稱</th><th>大小</th><th>審核狀態</th><th>正式入庫</th><th>KM 分析</th><th>上傳時間</th><th></th></tr></thead>
+                <thead><tr><th>檔案名稱</th><th>大小</th><th>上傳者</th><th>正式入庫</th><th>KM 分析</th><th>上傳時間</th><th></th></tr></thead>
                 <tbody>
                     @foreach (var file in _files)
                     {
                         <tr>
                             <td>@file.FileName</td>
                             <td>@FormatSize(file.FileSize)</td>
-                            <td><AttachmentStatusPill Status="@(file.SupervisorApprovalBypassed ? AttachmentStatusPresentation.Exempt() : AttachmentStatusPresentation.Review(file.ApplicationStatus))" /></td>
+                            <td>@Display(file.UploadedBy)</td>
                             <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Archive(file.FormalArchiveStatus)" Title="@file.FormalArchiveError" /></td>
                             <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Km(file.KmAnalysisStatus != VerificationAttachmentKmStatuses.NotApplicable, file.KmAnalysisStatus != VerificationAttachmentKmStatuses.Disabled, file.KmAnalysisStatus)" Title="@file.KmAnalysisError" /></td>
                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
@@ -208,5 +208,6 @@
     private static string FormatSize(long bytes) => bytes >= 1_000_000
         ? $"{bytes / 1_000_000d:0.##} MB"
         : bytes >= 1_000 ? $"{bytes / 1_000d:0.##} KB" : $"{bytes} B";
+    private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
 
 }
