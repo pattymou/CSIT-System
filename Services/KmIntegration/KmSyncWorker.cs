@@ -71,7 +71,23 @@ public sealed class KmSyncWorker(
                   NOT EXISTS (SELECT 1 FROM verification_case_deletion_jobs AS deletion
                     WHERE deletion.record_id = km_integration_outbox.project_id
                     AND deletion.status IN ('WaitingForKm', 'KmVerified', 'LocalReady', 'LocalCleanup', 'Completed')))
-                  OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile')
+                  OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile'
+                    AND EXISTS (SELECT 1 FROM document_processing_jobs AS document_job
+                      JOIN document_files AS document_file ON document_file.id = document_job.document_file_id
+                      WHERE document_job.id = km_integration_outbox.event_id
+                        AND document_file.id = km_integration_outbox.document_id
+                        AND document_file.storage_area = 'Library'
+                        AND document_job.archive_status = 'Completed'
+                        AND (EXISTS (SELECT 1 FROM pending_submissions AS submission
+                              WHERE submission.id = document_file.id
+                                AND submission.source_module_code = 'document-library'
+                                AND submission.status = 'Committed'
+                                AND submission.reviewer_account IS NOT NULL
+                                AND submission.reviewed_at IS NOT NULL)
+                          OR EXISTS (SELECT 1 FROM approval_audit_events AS audit
+                              WHERE audit.submission_id = document_file.id
+                                AND audit.source_module_code = 'document-library'
+                                AND audit.action = 'ApprovalBypassed'))))
                   OR (@vendor_enabled AND event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile')
                   OR (@equipment_enabled AND event_type = 'EquipmentDocumentArchived' AND source_entity_type = 'ApparatusFile'
                     AND NOT EXISTS (SELECT 1 FROM equipment_file_deletion_jobs AS equipment_deletion
@@ -125,7 +141,18 @@ public sealed class KmSyncWorker(
                          deletion.Status == "LocalReady" || deletion.Status == "LocalCleanup" ||
                          deletion.Status == "Completed"))) ||
                      (x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
-                      x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile) ||
+                       x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
+                       db.DocumentProcessingJobs.Any(job => job.Id == x.EventId &&
+                           job.DocumentFileId == x.DocumentId &&
+                           job.ArchiveStatus == DocumentArchiveStatuses.Completed &&
+                           job.DocumentFile.StorageArea == DocumentStorageAreas.Library &&
+                           (db.PendingSubmissions.Any(submission => submission.Id == x.DocumentId &&
+                                submission.SourceModuleCode == "document-library" &&
+                                submission.Status == ApprovalStatus.Committed &&
+                                submission.ReviewerAccount != null && submission.ReviewedAt != null) ||
+                            db.ApprovalAuditEvents.Any(audit => audit.SubmissionId == x.DocumentId &&
+                                audit.SourceModuleCode == "document-library" &&
+                                audit.Action == ApprovalAuditActions.ApprovalBypassed)))) ||
                      (options.VendorEnabled &&
                       x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
                        x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile) ||
@@ -168,7 +195,7 @@ public sealed class KmSyncWorker(
                     var request = await BuildDocumentLibraryRequestAsync(db, row, options, deadline.Token);
                     result = request is null
                         ? KmDeliveryResult.Failure(false, "DOCUMENT_UNAVAILABLE",
-                            "Staged document library file or classification is unavailable.")
+                            "Formally archived document library file or classification is unavailable.")
                         : await client.SubmitDocumentLibraryAsync(request, deadline.Token);
                 }
                 else if (row.EventType == KmIntegrationEventTypes.VendorFileArchived &&
@@ -298,12 +325,21 @@ public sealed class KmSyncWorker(
         var file = await db.DocumentLibraryFiles.AsNoTracking()
             .Include(x => x.Folder).ThenInclude(x => x.Parent).ThenInclude(x => x!.Parent)
             .SingleOrDefaultAsync(x => x.Id == row.DocumentId, cancellationToken);
-        if (job is null || file is null || file.StorageArea != DocumentStorageAreas.Staging ||
+        if (job is null || file is null || file.StorageArea != DocumentStorageAreas.Library ||
+            job.ArchiveStatus != DocumentArchiveStatuses.Completed || job.ArchivedAt is null ||
             file.FileSize != row.SizeBytes || file.Sha256.Length != 64 ||
             !file.Sha256.All(Uri.IsHexDigit) || file.Sha256.Any(char.IsUpper) ||
             file.Folder.Level != 3 || file.Folder.Parent?.Level != 2 ||
             file.Folder.Parent.Parent?.Level != 1)
             return null;
+        var hasApprovalEvidence = await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
+                x.Id == file.Id && x.SourceModuleCode == "document-library" &&
+                x.Status == ApprovalStatus.Committed && x.ReviewerAccount != null && x.ReviewedAt != null,
+                cancellationToken)
+            || await db.ApprovalAuditEvents.AsNoTracking().AnyAsync(x =>
+                x.SubmissionId == file.Id && x.SourceModuleCode == "document-library" &&
+                x.Action == ApprovalAuditActions.ApprovalBypassed, cancellationToken);
+        if (!hasApprovalEvidence) return null;
         var l3 = file.Folder;
         var l2 = l3.Parent!;
         var l1 = l2.Parent!;
@@ -410,10 +446,20 @@ public sealed class KmSyncWorker(
                 SELECT gen_random_uuid(), job.id, 'DocumentLibraryFileUploaded', 'CSIT',
                     'DocumentLibraryFile', file.id, file.id, 1, NULL, NULL, NULL,
                     file.original_file_name, COALESCE(NULLIF(file.content_type, ''), 'application/octet-stream'),
-                    file.file_size, job.created_at, 'Pending', 0, {now}, {now}
+                    file.file_size, job.archived_at, 'Pending', 0, {now}, {now}
                 FROM document_processing_jobs AS job
                 JOIN document_files AS file ON file.id = job.document_file_id
-                WHERE job.status = 'Pending' AND file.storage_area = 'Staging'
+                WHERE job.archive_status = 'Completed' AND file.storage_area = 'Library'
+                  AND (EXISTS (SELECT 1 FROM pending_submissions AS submission
+                        WHERE submission.id = file.id
+                          AND submission.source_module_code = 'document-library'
+                          AND submission.status = 'Committed'
+                          AND submission.reviewer_account IS NOT NULL
+                          AND submission.reviewed_at IS NOT NULL)
+                    OR EXISTS (SELECT 1 FROM approval_audit_events AS audit
+                        WHERE audit.submission_id = file.id
+                          AND audit.source_module_code = 'document-library'
+                          AND audit.action = 'ApprovalBypassed'))
                   AND NOT EXISTS (SELECT 1 FROM km_integration_outbox AS existing
                                   WHERE existing.event_id = job.id)
                 ON CONFLICT DO NOTHING
@@ -422,8 +468,15 @@ public sealed class KmSyncWorker(
         }
 
         var pending = await db.DocumentProcessingJobs.Include(x => x.DocumentFile)
-            .Where(x => x.Status == DocumentProcessingStatuses.Pending &&
-                x.DocumentFile.StorageArea == DocumentStorageAreas.Staging &&
+            .Where(x => x.ArchiveStatus == DocumentArchiveStatuses.Completed &&
+                x.DocumentFile.StorageArea == DocumentStorageAreas.Library &&
+                (db.PendingSubmissions.Any(submission => submission.Id == x.DocumentFileId &&
+                     submission.SourceModuleCode == "document-library" &&
+                     submission.Status == ApprovalStatus.Committed &&
+                     submission.ReviewerAccount != null && submission.ReviewedAt != null) ||
+                 db.ApprovalAuditEvents.Any(audit => audit.SubmissionId == x.DocumentFileId &&
+                     audit.SourceModuleCode == "document-library" &&
+                     audit.Action == ApprovalAuditActions.ApprovalBypassed)) &&
                 !db.KmIntegrationOutbox.Any(o => o.EventId == x.Id))
             .ToListAsync(cancellationToken);
         foreach (var job in pending)

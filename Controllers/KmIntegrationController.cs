@@ -99,7 +99,15 @@ public sealed class KmIntegrationController(
         var file = await db.DocumentLibraryFiles.AsNoTracking()
             .Include(x => x.ProcessingJob)
             .SingleOrDefaultAsync(x => x.Id == documentFileId, cancellationToken);
-        if (file?.ProcessingJob is null ||
+        if (file?.ProcessingJob is null || file.StorageArea != DocumentStorageAreas.Library ||
+            file.ProcessingJob.ArchiveStatus != DocumentArchiveStatuses.Completed ||
+            !(await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
+                  x.Id == documentFileId && x.SourceModuleCode == "document-library" &&
+                  x.Status == ApprovalStatus.Committed && x.ReviewerAccount != null && x.ReviewedAt != null,
+                  cancellationToken) ||
+              await db.ApprovalAuditEvents.AsNoTracking().AnyAsync(x =>
+                  x.SubmissionId == documentFileId && x.SourceModuleCode == "document-library" &&
+                  x.Action == ApprovalAuditActions.ApprovalBypassed, cancellationToken)) ||
             !await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
                 x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
@@ -173,6 +181,21 @@ public sealed class KmIntegrationController(
             logger.LogWarning("Rejected KM callback correlation JobId={JobId} DocumentId={DocumentId} Version={Version}",
                 callback.JobId, callback.DocumentId, callback.Version);
             return Conflict(new { error = "callback_mismatch" });
+        }
+        if (row.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile)
+        {
+            var formallyArchived = await db.DocumentProcessingJobs.AsNoTracking().AnyAsync(x =>
+                    x.Id == row.EventId && x.DocumentFileId == row.DocumentId &&
+                    x.ArchiveStatus == DocumentArchiveStatuses.Completed &&
+                    x.DocumentFile.StorageArea == DocumentStorageAreas.Library, cancellationToken)
+                && (await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
+                        x.Id == row.DocumentId && x.SourceModuleCode == "document-library" &&
+                        x.Status == ApprovalStatus.Committed && x.ReviewerAccount != null &&
+                        x.ReviewedAt != null, cancellationToken)
+                    || await db.ApprovalAuditEvents.AsNoTracking().AnyAsync(x =>
+                        x.SubmissionId == row.DocumentId && x.SourceModuleCode == "document-library" &&
+                        x.Action == ApprovalAuditActions.ApprovalBypassed, cancellationToken));
+            if (!formallyArchived) return Conflict(new { error = "document_not_formally_archived" });
         }
         var recordId = row.ProjectId;
         if (recordId is null &&

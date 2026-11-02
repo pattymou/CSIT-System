@@ -15,11 +15,15 @@ public static class ApprovalSourceMenuBinding
 {
     public const string ValidationRequestApplications = "validation_request_applications";
     public const string VerificationModule = "verification";
+    public const string DocumentLibraryMenu = "document_library";
+    public const string DocumentLibraryModule = "document-library";
 
     public static string? EffectiveModuleCode(string menuCode, string? configuredModuleCode) =>
         !string.IsNullOrWhiteSpace(configuredModuleCode) ? configuredModuleCode
         : string.Equals(menuCode, ValidationRequestApplications, StringComparison.OrdinalIgnoreCase)
             ? VerificationModule
+        : string.Equals(menuCode, DocumentLibraryMenu, StringComparison.OrdinalIgnoreCase)
+            ? DocumentLibraryModule
             : null;
 
     public static bool Matches(string menuCode, string? configuredModuleCode, string moduleCode) =>

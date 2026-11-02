@@ -7,6 +7,7 @@ using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 using SIT.DepartmentSystem.Web.Services.KmIntegration;
+using SIT.DepartmentSystem.Web.Services.Approval;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
@@ -15,7 +16,7 @@ public sealed class DocumentLibraryService(
     IOptions<DocumentStorageOptions> options,
     IOptions<DocumentStagingOptions> stagingOptions,
     IBusinessWriteAuthorizationGuard businessWrite,
-    IOptions<KmIntegrationOptions>? kmOptions = null) : IDocumentLibraryService
+    IOptions<KmIntegrationOptions>? kmOptions = null) : IDocumentLibraryService, IDocumentLibraryFormalUploadService
 {
     private readonly KmIntegrationOptions configuredKm = kmOptions?.Value ?? new KmIntegrationOptions();
     public async Task<List<DocumentFolderDto>> GetFoldersAsync(CancellationToken cancellationToken = default)
@@ -364,6 +365,20 @@ public sealed class DocumentLibraryService(
         CancellationToken cancellationToken = default)
     {
         await businessWrite.DemandAsync(cancellationToken);
+        return await StageApprovedAsync(Guid.NewGuid(), folderId, file, uploadedBy,
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<DocumentLibraryFileDto> StageApprovedAsync(
+        Guid documentFileId,
+        Guid folderId,
+        IFormFile file,
+        string uploadedBy,
+        DocumentLibraryBypassAudit? bypassAudit = null,
+        DateTime? receivedAt = null,
+        CancellationToken cancellationToken = default)
+    {
+        if (documentFileId == Guid.Empty) throw new InvalidOperationException("文件識別碼不可空白。");
         ArgumentNullException.ThrowIfNull(file);
         if (file.Length <= 0) throw new InvalidOperationException("不可上傳空白檔案。");
         if (file.Length > options.Value.MaxFileSizeBytes)
@@ -378,9 +393,26 @@ public sealed class DocumentLibraryService(
         if (await IsSystemManagedFolderAsync(db, folderId, cancellationToken) &&
             !await IsProductInformationFolderAsync(db, folderId, cancellationToken))
             throw new InvalidOperationException("系統來源文件為唯讀，請回原來源模組管理附件。");
+        string expectedSha256;
+        await using (var verificationStream = file.OpenReadStream())
+            expectedSha256 = Convert.ToHexString(
+                await SHA256.HashDataAsync(verificationStream, cancellationToken)).ToLowerInvariant();
 
-        var id = Guid.NewGuid();
-        var now = DateTime.UtcNow;
+        var existing = await db.DocumentLibraryFiles.AsNoTracking().Include(x => x.ProcessingJob)
+            .SingleOrDefaultAsync(x => x.Id == documentFileId, cancellationToken);
+        if (existing is not null)
+        {
+            var expectedName = DocumentLibraryRules.NormalizeOriginalFileName(file.FileName);
+            if (existing.FolderId != folderId || existing.FileSize != file.Length ||
+                !string.Equals(existing.OriginalFileName, expectedName, StringComparison.Ordinal) ||
+                !string.Equals(existing.UploadedBy, uploadedBy.Trim(), StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(existing.Sha256, expectedSha256, StringComparison.Ordinal))
+                throw new InvalidOperationException("既有文件識別碼與本次核准內容不一致。");
+            return ToDto(existing, existing.ProcessingJob, null);
+        }
+
+        var id = documentFileId;
+        var now = receivedAt?.ToUniversalTime() ?? DateTime.UtcNow;
         var originalName = DocumentLibraryRules.NormalizeOriginalFileName(file.FileName);
         var standardName = DocumentLibraryRules.CreateStandardFileName(originalName, now, id);
         var relativePath = Path.Combine(now.ToString("yyyy"), now.ToString("MM"), folderId.ToString("N"), standardName);
@@ -388,20 +420,38 @@ public sealed class DocumentLibraryService(
         Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
 
         string sha256;
+        var createdPhysicalFile = false;
         try
         {
-            await using var source = file.OpenReadStream();
-            await using var destination = new FileStream(
-                absolutePath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-            using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-            var buffer = new byte[81920];
-            int read;
-            while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+            if (File.Exists(absolutePath))
             {
-                await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
-                hash.AppendData(buffer, 0, read);
+                var info = new FileInfo(absolutePath);
+                await using var existingStream = new FileStream(absolutePath, FileMode.Open, FileAccess.Read,
+                    FileShare.Read, 81920, useAsync: true);
+                sha256 = Convert.ToHexString(
+                    await SHA256.HashDataAsync(existingStream, cancellationToken)).ToLowerInvariant();
+                if (info.Length != file.Length ||
+                    !string.Equals(sha256, expectedSha256, StringComparison.Ordinal))
+                    throw new InvalidOperationException("既有暫存檔案大小或雜湊與核准內容不一致。");
             }
-            sha256 = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+            else
+            {
+                await using var source = file.OpenReadStream();
+                await using var destination = new FileStream(
+                    absolutePath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true);
+                createdPhysicalFile = true;
+                using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+                var buffer = new byte[81920];
+                int read;
+                while ((read = await source.ReadAsync(buffer, cancellationToken)) > 0)
+                {
+                    await destination.WriteAsync(buffer.AsMemory(0, read), cancellationToken);
+                    hash.AppendData(buffer, 0, read);
+                }
+                sha256 = Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant();
+                if (!string.Equals(sha256, expectedSha256, StringComparison.Ordinal))
+                    throw new InvalidOperationException("寫入後的暫存檔案雜湊與上傳內容不一致。");
+            }
 
             var entity = new DocumentLibraryFile
             {
@@ -422,19 +472,27 @@ public sealed class DocumentLibraryService(
                 Id = Guid.NewGuid(),
                 DocumentFileId = entity.Id,
                 Status = DocumentProcessingStatuses.Pending,
+                ArchiveStatus = DocumentArchiveStatuses.Pending,
                 AttemptCount = 0,
                 CreatedAt = now,
                 UpdatedAt = now
             };
             db.DocumentLibraryFiles.Add(entity);
             db.DocumentProcessingJobs.Add(job);
-            db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForDocumentLibraryFile(entity, job, now));
+            if (bypassAudit is not null)
+            {
+                db.ApprovalAuditEvents.Add(ApprovalAuditEvent.Create(entity.Id,
+                    ApprovalSourceMenuBinding.DocumentLibraryMenu,
+                    ApprovalSourceMenuBinding.DocumentLibraryModule,
+                    ApprovalAuditActions.ApprovalBypassed, bypassAudit.ActorAccount, now, null, null,
+                    details: $"Basis={bypassAudit.Basis}"));
+            }
             await db.SaveChangesAsync(cancellationToken);
             return ToDto(entity, job, null);
         }
         catch
         {
-            if (File.Exists(absolutePath)) File.Delete(absolutePath);
+            if (createdPhysicalFile && File.Exists(absolutePath)) File.Delete(absolutePath);
             throw;
         }
     }
@@ -443,6 +501,16 @@ public sealed class DocumentLibraryService(
         string modelName,
         IFormFile file,
         string uploadedBy,
+        CancellationToken cancellationToken = default)
+    {
+        await businessWrite.DemandAsync(cancellationToken);
+        var folderId = await GetOrCreateProductInformationFolderAsync(modelName, cancellationToken);
+        return await StageApprovedAsync(Guid.NewGuid(), folderId, file, uploadedBy,
+            cancellationToken: cancellationToken);
+    }
+
+    public async Task<Guid> GetOrCreateProductInformationFolderAsync(
+        string modelName,
         CancellationToken cancellationToken = default)
     {
         await businessWrite.DemandAsync(cancellationToken);
@@ -469,7 +537,7 @@ public sealed class DocumentLibraryService(
         var product = await GetOrCreateFolderAsync(db, model.Id, 3, "產品資訊",
             "文件專區直接上傳的產品資訊。", 20, now, cancellationToken);
         await db.SaveChangesAsync(cancellationToken);
-        return await UploadAsync(product.Id, file, uploadedBy, cancellationToken);
+        return product.Id;
     }
 
     public async Task<DocumentDownload?> OpenDownloadAsync(
@@ -712,12 +780,14 @@ public sealed class DocumentLibraryService(
         Sha256 = entity.Sha256,
         ProcessingStatus = job?.Status ?? string.Empty,
         ArchiveStatus = job?.ArchiveStatus ?? string.Empty,
-        ReviewStatusDisplay = AttachmentStatusPresentation.Exempt().Text,
-        ReviewStatusTone = AttachmentStatusPresentation.Exempt().Tone,
+        ReviewStatusDisplay = "—",
+        ReviewStatusTone = "muted",
         ArchiveStatusDisplay = AttachmentStatusPresentation.Archive(job?.ArchiveStatus).Text,
         ArchiveStatusTone = AttachmentStatusPresentation.Archive(job?.ArchiveStatus).Tone,
-        KmStatusDisplay = AttachmentStatusPresentation.Km(job is not null, configuredKm.Enabled, job?.Status).Text,
-        KmStatusTone = AttachmentStatusPresentation.Km(job is not null, configuredKm.Enabled, job?.Status).Tone,
+        KmStatusDisplay = AttachmentStatusPresentation.Km(
+            job?.ArchiveStatus == DocumentArchiveStatuses.Completed, configuredKm.Enabled, job?.Status).Text,
+        KmStatusTone = AttachmentStatusPresentation.Km(
+            job?.ArchiveStatus == DocumentArchiveStatuses.Completed, configuredKm.Enabled, job?.Status).Tone,
         ProcessingError = job?.KmErrorMessage ?? job?.LastError,
         ArchiveError = job?.ArchiveLastError,
         MetadataAvailable = !string.IsNullOrWhiteSpace(job?.MetadataJson),
@@ -733,18 +803,16 @@ public sealed class DocumentLibraryService(
         },
         ProcessingStatusDisplay = job?.Status switch
         {
+            _ when job?.ArchiveStatus == DocumentArchiveStatuses.Pending => "待正式 NAS 入庫",
+            _ when job?.ArchiveStatus == DocumentArchiveStatuses.Archiving => "NAS 入庫中",
+            _ when job?.ArchiveStatus == DocumentArchiveStatuses.Failed => "NAS 寫入失敗",
             DocumentProcessingStatuses.Pending when !string.IsNullOrWhiteSpace(job.LastError) => "KM 派送失敗／待重試",
-            DocumentProcessingStatuses.Pending => "已接收／待 KM 處理",
+            DocumentProcessingStatuses.Pending when job.ArchiveStatus == DocumentArchiveStatuses.Completed =>
+                configuredKm.Enabled ? "正式入庫完成／待 KM 處理" : "正式入庫完成／KM 尚未啟用",
             DocumentProcessingStatuses.Accepted => "KM 已接受／等待處理",
             DocumentProcessingStatuses.Processing => "KM 處理中",
-            DocumentProcessingStatuses.Completed when job.ArchiveStatus == DocumentArchiveStatuses.Pending =>
-                "AI 完成／待 NAS 歸檔",
-            DocumentProcessingStatuses.Completed when job.ArchiveStatus == DocumentArchiveStatuses.Archiving =>
-                "NAS 歸檔中",
-            DocumentProcessingStatuses.Completed when job.ArchiveStatus == DocumentArchiveStatuses.Failed =>
-                "NAS 歸檔失敗",
             DocumentProcessingStatuses.Completed when job.ArchiveStatus == DocumentArchiveStatuses.Completed =>
-                "已完成／NAS 已歸檔",
+                "正式入庫完成／KM 分析完成",
             DocumentProcessingStatuses.Completed => "AI 已完成",
             DocumentProcessingStatuses.Failed => "KM 處理失敗",
             _ => "既有文件"

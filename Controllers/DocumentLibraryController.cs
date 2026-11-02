@@ -1,16 +1,18 @@
-using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.Approval;
 
 namespace SIT.DepartmentSystem.Web.Controllers;
 
 [ApiController]
 [Route("api/document-library")]
 [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
-public sealed class DocumentLibraryController(IDocumentLibraryService service) : ControllerBase
+public sealed class DocumentLibraryController(
+    IDocumentLibraryService service,
+    DocumentLibraryApprovalUploadService approvalUploads) : ControllerBase
 {
     [HttpGet("folders")]
     public async Task<ActionResult<List<DocumentFolderDto>>> GetFolders(CancellationToken cancellationToken) =>
@@ -67,22 +69,20 @@ public sealed class DocumentLibraryController(IDocumentLibraryService service) :
     public async Task<IActionResult> Upload(Guid folderId, CancellationToken cancellationToken)
     {
         if (Request.Form.Files.Count == 0) return BadRequest("請至少選擇一個檔案。");
-        var account = User.FindFirstValue("account")
-            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.Identity?.Name
-            ?? "System";
         var result = new DocumentUploadBatchResultDto();
         foreach (var file in Request.Form.Files)
         {
             try
             {
-                var uploaded = await service.UploadAsync(folderId, file, account, cancellationToken);
+                var outcome = await approvalUploads.UploadAsync(folderId, file, User, cancellationToken);
                 result.Results.Add(new DocumentUploadResultDto
                 {
-                    OriginalFileName = uploaded.OriginalFileName,
+                    OriginalFileName = Path.GetFileName(file.FileName),
                     Success = true,
-                    Message = "已接收／待 KM 處理",
-                    File = uploaded
+                    Message = outcome.Message,
+                    SubmissionId = outcome.SubmissionId,
+                    ApprovalResult = outcome.Kind.ToString(),
+                    File = outcome.File
                 });
             }
             catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or IOException)
@@ -107,23 +107,24 @@ public sealed class DocumentLibraryController(IDocumentLibraryService service) :
         CancellationToken cancellationToken)
     {
         if (Request.Form.Files.Count == 0) return BadRequest("請至少選擇一個檔案。");
-        var account = User.FindFirstValue("account")
-            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
-            ?? User.Identity?.Name
-            ?? "System";
+        Guid folderId;
+        try { folderId = await service.GetOrCreateProductInformationFolderAsync(modelName, cancellationToken); }
+        catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or IOException)
+        { return BadRequest(ex.Message); }
         var result = new DocumentUploadBatchResultDto();
         foreach (var file in Request.Form.Files)
         {
             try
             {
-                var uploaded = await service.UploadProductInformationAsync(
-                    modelName, file, account, cancellationToken);
+                var outcome = await approvalUploads.UploadAsync(folderId, file, User, cancellationToken);
                 result.Results.Add(new DocumentUploadResultDto
                 {
-                    OriginalFileName = uploaded.OriginalFileName,
+                    OriginalFileName = Path.GetFileName(file.FileName),
                     Success = true,
-                    Message = "已接收／待 KM 處理",
-                    File = uploaded
+                    Message = outcome.Message,
+                    SubmissionId = outcome.SubmissionId,
+                    ApprovalResult = outcome.Kind.ToString(),
+                    File = outcome.File
                 });
             }
             catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or IOException)

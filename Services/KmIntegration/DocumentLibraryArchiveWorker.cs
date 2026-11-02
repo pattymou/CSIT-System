@@ -6,6 +6,7 @@ using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Config;
+using SIT.DepartmentSystem.Web.Services.Approval;
 
 namespace SIT.DepartmentSystem.Web.Services.KmIntegration;
 
@@ -19,7 +20,6 @@ public sealed class DocumentLibraryArchiveWorker(
     public async Task<int> ProcessBatchAsync(CancellationToken cancellationToken = default)
     {
         var options = configured.Value;
-        if (!options.Enabled) return 0;
         Validate(options);
         await CleanupCompletedStagingCopiesAsync(cancellationToken);
         var count = 0;
@@ -49,7 +49,7 @@ public sealed class DocumentLibraryArchiveWorker(
                 SET archive_status = 'Failed', archive_lease_token = NULL,
                     archive_lease_expires_at = NULL, archive_next_retry_at = NULL,
                     archive_last_error = 'NAS archive retry limit reached.', updated_at = {now}
-                WHERE status = 'Completed' AND archive_status = 'Archiving'
+                WHERE archive_status = 'Archiving'
                   AND archive_lease_expires_at <= {now}
                   AND archive_attempt_count >= {options.ArchiveMaxRetryCount}
                 """, cancellationToken);
@@ -59,8 +59,20 @@ public sealed class DocumentLibraryArchiveWorker(
                 SELECT job.id
                 FROM document_processing_jobs AS job
                 JOIN document_files AS file ON file.id = job.document_file_id
-                WHERE job.status = 'Completed' AND file.storage_area = 'Staging'
+                WHERE file.storage_area = 'Staging'
                   AND job.archive_attempt_count < @max
+                  AND (EXISTS (
+                        SELECT 1 FROM pending_submissions AS submission
+                        WHERE submission.id = file.id
+                          AND submission.source_module_code = 'document-library'
+                          AND submission.status = 'Committed'
+                          AND submission.reviewer_account IS NOT NULL
+                          AND submission.reviewed_at IS NOT NULL)
+                    OR EXISTS (
+                        SELECT 1 FROM approval_audit_events AS audit
+                        WHERE audit.submission_id = file.id
+                          AND audit.source_module_code = 'document-library'
+                          AND audit.action = 'ApprovalBypassed'))
                   AND (job.archive_status = 'Pending'
                     OR (job.archive_status = 'Failed' AND job.archive_next_retry_at <= @now)
                     OR (job.archive_status = 'Archiving' AND job.archive_lease_expires_at <= @now))
@@ -80,9 +92,15 @@ public sealed class DocumentLibraryArchiveWorker(
         {
             job = await db.DocumentProcessingJobs.Include(x => x.DocumentFile)
                 .OrderBy(x => x.UpdatedAt).ThenBy(x => x.Id)
-                .FirstOrDefaultAsync(x => x.Status == DocumentProcessingStatuses.Completed &&
-                    x.DocumentFile.StorageArea == DocumentStorageAreas.Staging &&
+                .FirstOrDefaultAsync(x => x.DocumentFile.StorageArea == DocumentStorageAreas.Staging &&
                     x.ArchiveAttemptCount < options.ArchiveMaxRetryCount &&
+                    (db.PendingSubmissions.Any(submission => submission.Id == x.DocumentFileId &&
+                         submission.SourceModuleCode == ApprovalSourceMenuBinding.DocumentLibraryModule &&
+                         submission.Status == ApprovalStatus.Committed &&
+                         submission.ReviewerAccount != null && submission.ReviewedAt != null) ||
+                     db.ApprovalAuditEvents.Any(audit => audit.SubmissionId == x.DocumentFileId &&
+                         audit.SourceModuleCode == ApprovalSourceMenuBinding.DocumentLibraryModule &&
+                         audit.Action == ApprovalAuditActions.ApprovalBypassed)) &&
                     (x.ArchiveStatus == DocumentArchiveStatuses.Pending ||
                      (x.ArchiveStatus == DocumentArchiveStatuses.Failed && x.ArchiveNextRetryAt <= now) ||
                      (x.ArchiveStatus == DocumentArchiveStatuses.Archiving && x.ArchiveLeaseExpiresAt <= now)),
@@ -149,6 +167,10 @@ public sealed class DocumentLibraryArchiveWorker(
                     return;
                 current.DocumentFile.StorageArea = DocumentStorageAreas.Library;
                 current.ArchiveCompleted(lease, sha256, DateTime.UtcNow);
+                if (!await db.KmIntegrationOutbox.AnyAsync(x => x.EventId == current.Id,
+                        cancellationToken))
+                    db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForDocumentLibraryFile(
+                        current.DocumentFile, current, DateTime.UtcNow));
                 await db.SaveChangesAsync(cancellationToken);
                 if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             }
@@ -202,7 +224,14 @@ public sealed class DocumentLibraryArchiveWorker(
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var completed = await db.DocumentProcessingJobs.AsNoTracking().Include(x => x.DocumentFile)
             .Where(x => x.ArchiveStatus == DocumentArchiveStatuses.Completed &&
-                x.DocumentFile.StorageArea == DocumentStorageAreas.Library)
+                x.DocumentFile.StorageArea == DocumentStorageAreas.Library &&
+                (db.PendingSubmissions.Any(submission => submission.Id == x.DocumentFileId &&
+                     submission.SourceModuleCode == ApprovalSourceMenuBinding.DocumentLibraryModule &&
+                     submission.Status == ApprovalStatus.Committed &&
+                     submission.ReviewerAccount != null && submission.ReviewedAt != null) ||
+                 db.ApprovalAuditEvents.Any(audit => audit.SubmissionId == x.DocumentFileId &&
+                     audit.SourceModuleCode == ApprovalSourceMenuBinding.DocumentLibraryModule &&
+                     audit.Action == ApprovalAuditActions.ApprovalBypassed)))
             .OrderBy(x => x.ArchivedAt).Take(100).ToListAsync(cancellationToken);
         foreach (var job in completed)
         {
@@ -291,7 +320,6 @@ public sealed class DocumentLibraryArchiveBackgroundService(
             Math.Max(1, configured.Value.ArchivePollSeconds)));
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            if (!configured.Value.Enabled) continue;
             try
             {
                 using var scope = scopes.CreateScope();

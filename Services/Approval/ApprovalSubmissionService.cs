@@ -52,7 +52,8 @@ public sealed class ApprovalSubmissionService(
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var menus = await db.MenuItems.AsNoTracking()
-            .Where(x => x.IsEnabled && x.RequiresSupervisorApproval)
+            .Where(x => x.IsEnabled && (x.RequiresSupervisorApproval ||
+                x.Code == ApprovalSourceMenuBinding.DocumentLibraryMenu))
             .OrderBy(x => x.SortOrder).ThenBy(x => x.Title).ThenBy(x => x.Code)
             .Select(x => new { x.Code, x.Title, x.SortOrder, x.ModuleCode })
             .ToListAsync(cancellationToken);
@@ -188,7 +189,7 @@ public sealed class ApprovalSubmissionService(
     public async Task<PendingSubmission> CreatePendingAsync(
         Guid submissionId, ApprovalUploadDecision decision, ApprovalSourceIdentity source, string submissionKey,
         ClaimsPrincipal submitter, StagedFileMetadata? file, CancellationToken cancellationToken = default,
-        Guid? resubmissionOfId = null)
+        Guid? resubmissionOfId = null, bool forceSupervisorApproval = false)
     {
         if (submissionId == Guid.Empty || decision.Kind != ApprovalUploadDecisionKind.Pending ||
             !string.Equals(decision.ModuleCode, source.ModuleCode, StringComparison.OrdinalIgnoreCase))
@@ -206,7 +207,8 @@ public sealed class ApprovalSubmissionService(
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var menu = await db.MenuItems.AsNoTracking().Where(x => x.Code == decision.MenuCode)
             .Take(2).ToListAsync(cancellationToken);
-        if (menu.Count != 1 || !menu[0].IsEnabled || !menu[0].RequiresSupervisorApproval
+        if (menu.Count != 1 || !menu[0].IsEnabled ||
+            (!menu[0].RequiresSupervisorApproval && !forceSupervisorApproval)
             || !ApprovalSourceMenuBinding.Matches(menu[0].Code, menu[0].ModuleCode, source.ModuleCode))
             throw new InvalidOperationException("Approval source configuration changed; submission was stopped.");
         var reportTarget = source.ContextType is nameof(ThreeLevelUploadKind.TestReport)

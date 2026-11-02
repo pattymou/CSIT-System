@@ -99,7 +99,7 @@ public sealed class DocumentLibraryTests
             var result = await service.UploadAsync(folderId, file, "patty");
 
             Assert.Equal(DocumentProcessingStatuses.Pending, result.ProcessingStatus);
-            Assert.Equal("已接收／待 KM 處理", result.ProcessingStatusDisplay);
+            Assert.Equal("待正式 NAS 入庫", result.ProcessingStatusDisplay);
             await using var verify = await factory.CreateDbContextAsync();
             var stored = await verify.DocumentLibraryFiles.SingleAsync(x => x.Id == result.Id);
             var job = await verify.DocumentProcessingJobs.SingleAsync(x => x.DocumentFileId == result.Id);
@@ -141,7 +141,7 @@ public sealed class DocumentLibraryTests
             Assert.Equal(product.Id, result.FolderId);
             Assert.Single(db.DocumentLibraryFiles);
             Assert.Single(db.DocumentProcessingJobs);
-            Assert.Single(db.KmIntegrationOutbox);
+            Assert.Empty(db.KmIntegrationOutbox);
             var catalog = await service.GetSystemDocumentsAsync();
             var productFolder = Assert.Single(catalog.Folders, x => x.Name == "產品資訊");
             Assert.Equal("patty", Assert.Single(productFolder.Files).UploadedBy);

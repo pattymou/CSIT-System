@@ -126,7 +126,7 @@
                         <div class="upload-panel">
                             <div>
                                 <strong>上傳新文件</strong>
-                                <span>可一次選擇多個檔案；傳輸完成後即進入待處理佇列。</span>
+                                <span>一般員工上傳後送主管審核；合法免審者直接進入正式 NAS 入庫流程。</span>
                             </div>
                             <div class="upload-actions" @ref="_uploadContainer">
                                 <input type="file" multiple />
@@ -345,7 +345,9 @@
             _uploadResults = uploadResults;
             var successCount = _uploadResults.Count(x => x.Success);
             var failedCount = _uploadResults.Count - successCount;
-            _message = $"已接收 {successCount} 份文件／待 KM 處理；失敗 {failedCount} 份。";
+            var pendingCount = _uploadResults.Count(x => x.Success && x.ApprovalResult == "Pending");
+            var bypassCount = _uploadResults.Count(x => x.Success && x.ApprovalResult == "ApprovalBypassed");
+            _message = $"已送主管待審 {pendingCount} 份；合法免審、待 NAS 入庫 {bypassCount} 份；失敗 {failedCount} 份。";
             _isError = successCount == 0;
         }
         catch (Exception ex) { ShowError($"上傳失敗：{ex.Message}"); }

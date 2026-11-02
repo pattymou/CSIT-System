@@ -21,6 +21,42 @@ namespace ApprovalFramework.Tests;
 public sealed class DocumentLibraryKmIntegrationTests
 {
     [Fact]
+    public async Task LegacyOutboxWithoutApprovalEvidence_IsNotDispatchedOrMutated()
+    {
+        var roots = TemporaryRoots.Create();
+        try
+        {
+            var factory = new InMemoryFactory();
+            var folderId = await SeedFoldersAsync(factory);
+            var service = Service(factory, roots);
+            var content = new MemoryStream("legacy-unapproved"u8.ToArray());
+            var uploaded = await service.StageApprovedAsync(Guid.NewGuid(), folderId,
+                new FormFile(content, 0, content.Length, "files", "legacy-unapproved.txt")
+                { Headers = new HeaderDictionary(), ContentType = "text/plain" }, "legacy");
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var file = await db.DocumentLibraryFiles.SingleAsync(x => x.Id == uploaded.Id);
+                var job = await db.DocumentProcessingJobs.SingleAsync(x => x.Id == uploaded.CsitJobId);
+                file.StorageArea = DocumentStorageAreas.Library;
+                job.ArchiveStatus = DocumentArchiveStatuses.Completed;
+                job.ArchivedAt = DateTime.UtcNow;
+                job.ArchiveSha256 = file.Sha256;
+                db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForDocumentLibraryFile(
+                    file, job, DateTime.UtcNow));
+                await db.SaveChangesAsync();
+            }
+
+            await using var mockKm = await MockKmIngestionServer.StartAsync();
+            Assert.Equal(0, await Worker(factory, mockKm, IntegrationOptions()).ProcessBatchAsync());
+            Assert.Equal(0, mockKm.DocumentRequestCount);
+            await using var verify = await factory.CreateDbContextAsync();
+            Assert.Equal(KmIntegrationStatus.Pending,
+                (await verify.KmIntegrationOutbox.SingleAsync(x => x.EventId == uploaded.CsitJobId)).Status);
+        }
+        finally { roots.Dispose(); }
+    }
+
+    [Fact]
     public async Task DocumentLibraryFile_FlowsThrough202DownloadCallbacksMetadataAndNasArchive()
     {
         var roots = TemporaryRoots.Create();
@@ -85,7 +121,7 @@ public sealed class DocumentLibraryKmIntegrationTests
             {
                 var job = await db.DocumentProcessingJobs.SingleAsync(x => x.Id == uploaded.CsitJobId);
                 Assert.Equal(DocumentProcessingStatuses.Completed, job.Status);
-                Assert.Equal(DocumentArchiveStatuses.Pending, job.ArchiveStatus);
+                Assert.Equal(DocumentArchiveStatuses.Completed, job.ArchiveStatus);
                 Assert.Equal(2, await db.DocumentProcessingCallbacks.CountAsync());
                 using var metadata = JsonDocument.Parse(job.MetadataJson!);
                 Assert.Equal("1.0", metadata.RootElement.GetProperty("metadataSchemaVersion").GetString());
@@ -96,18 +132,7 @@ public sealed class DocumentLibraryKmIntegrationTests
                 Assert.True(metadata.RootElement.TryGetProperty("warnings", out _));
             }
 
-            // Simulate a crash after the atomic NAS move but before the database transaction.
-            // The persistent archive job must verify and adopt the existing target on restart.
-            await using (var db = await factory.CreateDbContextAsync())
-            {
-                var file = await db.DocumentLibraryFiles.AsNoTracking().SingleAsync(x => x.Id == uploaded.Id);
-                var source = Path.Combine(roots.Staging, file.RelativePath);
-                var target = Path.Combine(roots.Library, file.RelativePath);
-                Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-                File.Copy(source, target);
-            }
             var archive = ArchiveWorker(factory, roots, options);
-            Assert.Equal(1, await archive.ProcessBatchAsync());
             Assert.Equal(0, await archive.ProcessBatchAsync());
             await using (var db = await factory.CreateDbContextAsync())
             {
@@ -123,7 +148,7 @@ public sealed class DocumentLibraryKmIntegrationTests
             using (var archivedDownload = await csit.DownloadDocumentLibraryAsync(uploaded.Id))
                 Assert.Equal(HttpStatusCode.OK, archivedDownload.StatusCode);
             var displayed = Assert.Single(await Service(factory, roots).GetFilesAsync(folderId));
-            Assert.Equal("已完成／NAS 已歸檔", displayed.ProcessingStatusDisplay);
+            Assert.Equal("正式入庫完成／KM 分析完成", displayed.ProcessingStatusDisplay);
             Assert.True(displayed.MetadataAvailable);
         }
         finally { roots.Dispose(); }
@@ -263,7 +288,7 @@ public sealed class DocumentLibraryKmIntegrationTests
                 Callback(files[2], rows[2].KmJobId!, "Failed", DateTimeOffset.UtcNow)))
                 Assert.Equal(HttpStatusCode.NoContent, failed.StatusCode);
 
-            Assert.Equal(2, await ArchiveWorker(factory, roots, options).ProcessBatchAsync());
+            Assert.Equal(0, await ArchiveWorker(factory, roots, options).ProcessBatchAsync());
             await using (var db = await factory.CreateDbContextAsync())
             {
                 var jobs = await db.DocumentProcessingJobs
@@ -389,7 +414,11 @@ public sealed class DocumentLibraryKmIntegrationTests
         await using var stream = new MemoryStream(bytes);
         var upload = new FormFile(stream, 0, bytes.Length, "files", name)
         { Headers = new HeaderDictionary(), ContentType = ContentType(name) };
-        return await service.UploadAsync(folderId, upload, "km-e2e");
+        var result = await service.StageApprovedAsync(Guid.NewGuid(), folderId, upload, "km-e2e",
+            new SIT.DepartmentSystem.Web.Services.Interfaces.DocumentLibraryBypassAudit(
+                "km-e2e", "TestAdministration"));
+        Assert.Equal(1, await ArchiveWorker(factory, roots, IntegrationOptions()).ProcessBatchAsync());
+        return result;
     }
 
     private static DocumentLibraryService Service(

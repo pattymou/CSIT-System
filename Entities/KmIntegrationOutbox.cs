@@ -100,13 +100,13 @@ public sealed class KmIntegrationOutbox
         DateTime now)
     {
         if (job.Id == Guid.Empty || document.Id == Guid.Empty || job.DocumentFileId != document.Id ||
-            job.Status != DocumentProcessingStatuses.Pending ||
-            document.StorageArea != DocumentStorageAreas.Staging || document.FileSize <= 0 ||
+            job.ArchiveStatus != DocumentArchiveStatuses.Completed || job.ArchivedAt is null ||
+            document.StorageArea != DocumentStorageAreas.Library || document.FileSize <= 0 ||
             string.IsNullOrWhiteSpace(document.OriginalFileName) ||
             string.IsNullOrWhiteSpace(document.StandardFileName) ||
             document.Sha256.Length != 64)
             throw new InvalidOperationException(
-                "Only a staged document library file with a pending job can enter the KM outbox.");
+                "Only a formally archived document library file can enter the KM outbox.");
 
         return new KmIntegrationOutbox
         {
@@ -119,7 +119,7 @@ public sealed class KmIntegrationOutbox
             FileName = document.OriginalFileName,
             ContentType = string.IsNullOrWhiteSpace(document.ContentType)
                 ? "application/octet-stream" : document.ContentType,
-            SizeBytes = document.FileSize, CommittedAt = job.CreatedAt,
+            SizeBytes = document.FileSize, CommittedAt = job.ArchivedAt.Value,
             Status = KmIntegrationStatus.Pending, CreatedAt = now, UpdatedAt = now
         };
     }

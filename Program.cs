@@ -331,6 +331,7 @@ builder.Services.AddScoped<IThreeLevelFormalUploadService>(provider =>
     provider.GetRequiredService<ICaseFileService>());
 builder.Services.AddScoped<ThreeLevelApprovalUploadService>();
 builder.Services.AddScoped<AssetApprovalUploadService>();
+builder.Services.AddScoped<DocumentLibraryApprovalUploadService>();
 builder.Services.AddScoped<IApprovalCommitHandler>(provider =>
     new ThreeLevelUploadApprovalCommitHandler("certification",
         provider.GetRequiredService<ApprovalSourceResolver>(),
@@ -356,6 +357,7 @@ foreach (var assetModuleCode in new[] { "equipment", "goods" })
             provider.GetRequiredService<IDbContextFactory<AppDbContext>>()));
 }
 builder.Services.AddScoped<IApprovalCommitHandler, VendorUploadApprovalCommitHandler>();
+builder.Services.AddScoped<IApprovalCommitHandler, DocumentLibraryUploadApprovalCommitHandler>();
 builder.Services.AddScoped<ApprovalCommitWorker>();
 builder.Services.AddHostedService<ApprovalCommitBackgroundService>();
 builder.Services.AddScoped<IAuthorizationHandler, AdministrationAccessHandler>();
@@ -411,7 +413,11 @@ builder.Services.AddHostedService<VerificationDraftCleanupBackgroundService>();
 builder.Services.AddSingleton<VerificationAttachmentArchiveJournal>();
 builder.Services.AddSingleton<VerificationAttachmentArchiveProcessor>();
 builder.Services.AddHostedService<VerificationAttachmentArchiveBackgroundService>();
-builder.Services.AddScoped<IDocumentLibraryService, DocumentLibraryService>();
+builder.Services.AddScoped<DocumentLibraryService>();
+builder.Services.AddScoped<IDocumentLibraryService>(provider =>
+    provider.GetRequiredService<DocumentLibraryService>());
+builder.Services.AddScoped<IDocumentLibraryFormalUploadService>(provider =>
+    provider.GetRequiredService<DocumentLibraryService>());
 
 builder.Services.AddScoped(sp =>
 {

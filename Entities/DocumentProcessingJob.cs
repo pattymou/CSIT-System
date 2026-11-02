@@ -128,7 +128,7 @@ public sealed class DocumentProcessingJob
 
     public void ClaimArchive(Guid lease, DateTime now, TimeSpan duration)
     {
-        if (lease == Guid.Empty || duration <= TimeSpan.Zero || Status != DocumentProcessingStatuses.Completed ||
+        if (lease == Guid.Empty || duration <= TimeSpan.Zero ||
             !(ArchiveStatus == DocumentArchiveStatuses.Pending ||
               (ArchiveStatus == DocumentArchiveStatuses.Failed && ArchiveNextRetryAt <= now) ||
               (ArchiveStatus == DocumentArchiveStatuses.Archiving && ArchiveLeaseExpiresAt <= now)))

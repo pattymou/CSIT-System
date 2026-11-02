@@ -58,6 +58,8 @@ public sealed class DocumentUploadResultDto
     public string OriginalFileName { get; set; } = string.Empty;
     public bool Success { get; set; }
     public string Message { get; set; } = string.Empty;
+    public Guid? SubmissionId { get; set; }
+    public string ApprovalResult { get; set; } = string.Empty;
     public DocumentLibraryFileDto? File { get; set; }
 }
 
