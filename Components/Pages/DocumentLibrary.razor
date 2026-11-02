@@ -50,11 +50,11 @@
                     @foreach (var l1 in SystemChildrenOf(null))
                     {
                         <details open class="system-tree-branch">
-                            <summary @onclick="() => SelectSystemFolder(l1)"><span>🗂️</span> @l1.Name</summary>
+                            <summary><span>🗂️</span> @l1.Name</summary>
                             @foreach (var l2 in SystemChildrenOf(l1.Key))
                             {
-                                <details class="tree-l2" open>
-                                    <summary @onclick="() => SelectSystemFolder(l2)"><span>📁</span> @l2.Name</summary>
+                                <details class="tree-l2">
+                                    <summary><span>📁</span> @l2.Name</summary>
                                     @foreach (var l3 in SystemChildrenOf(l2.Key))
                                     {
                                         <button type="button"
@@ -70,11 +70,11 @@
                     @foreach (var l1 in ChildrenOf(null))
                     {
                         <details open>
-                            <summary @onclick="() => SelectFolderAsync(l1)"><span>📁</span> @l1.Name</summary>
+                            <summary><span>📁</span> @l1.Name</summary>
                             @foreach (var l2 in ChildrenOf(l1.Id))
                             {
                                 <details class="tree-l2">
-                                    <summary @onclick="() => SelectFolderAsync(l2)"><span>📁</span> @l2.Name</summary>
+                                    <summary><span>📁</span> @l2.Name</summary>
                                     @foreach (var l3 in ChildrenOf(l2.Id))
                                     {
                                         <button type="button"
@@ -103,17 +103,15 @@
             else
             {
                 <div class="folder-heading">
-                    <div>
+                    <div class="folder-heading-copy">
                         <div class="folder-level">L@(SelectedFolderLevel)</div>
-                        <div class="folder-title-row">
-                            <h2>@SelectedFolderName</h2>
-                            @if (SelectedFolderLevel == 3)
-                            {
-                                <span class="file-count">共 @SelectedFileCount 份文件</span>
-                            }
-                        </div>
+                        <h2>@SelectedFolderName</h2>
                         <p>@DisplayDescription(SelectedFolderDescription)</p>
                     </div>
+                    @if (SelectedFolderLevel == 3)
+                    {
+                        <span class="file-count">共 @SelectedFileCount 份文件</span>
+                    }
                 </div>
 
                 @if (SelectedFolderLevel < 3)
@@ -154,11 +152,12 @@
                     {
                     <div class="document-table-wrap">
                         <table class="document-table system-document-table">
-                            <thead><tr><th>檔案</th><th>處理狀態</th><th>來源</th><th>大小</th><th>時間</th><th></th></tr></thead>
+                            <colgroup><col class="system-file-name-column" /><col class="system-file-status-column" /><col class="system-file-source-column" /><col class="system-file-uploader-column" /><col class="system-file-size-column" /><col class="system-file-time-column" /><col class="system-file-action-column" /></colgroup>
+                            <thead><tr><th>檔案</th><th>處理狀態</th><th>來源</th><th>上傳者</th><th>大小</th><th>時間</th><th></th></tr></thead>
                             <tbody>
                                 @if (_selectedSystemFolder.Files.Count == 0)
                                 {
-                                    <tr><td colspan="6" class="document-empty">此分類目前沒有正式文件。</td></tr>
+                                    <tr><td colspan="7" class="document-empty">此分類目前沒有正式文件。</td></tr>
                                 }
                                 else
                                 {
@@ -180,6 +179,7 @@
                                             </td>
                                             <td><span class="processing-status @file.ProcessingStatusCssClass">@file.ProcessingStatusDisplay</span></td>
                                             <td>@file.SourceModule</td>
+                                            <td>@DisplayUploader(file.UploadedBy)</td>
                                             <td>@FormatSize(file.FileSize)</td>
                                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
                                             <td><a class="download-link" href="@file.DownloadUrl">下載</a></td>
@@ -359,6 +359,7 @@
     private void ClosePreview() { _previewUrl = null; _previewName = null; }
     private static string DocumentPreviewUrl(Guid id) => $"/api/document-library/files/{id}/preview";
     private static string DisplayDescription(string? value) => string.IsNullOrWhiteSpace(value) ? "未填寫說明" : value;
+    private static string DisplayUploader(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
     private static string FormatSize(long bytes) => bytes >= 1_000_000
         ? $"{bytes / 1_000_000d:0.##} MB"
         : bytes >= 1_000 ? $"{bytes / 1_000d:0.##} KB" : $"{bytes} B";

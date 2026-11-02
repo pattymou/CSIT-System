@@ -48,6 +48,21 @@ public sealed class DocumentLibraryTests
     }
 
     [Fact]
+    public void EquipmentFolderName_UsesPropertyNumberAndNeverSerialOrEquipmentId()
+    {
+        var method = typeof(DocumentLibraryService).GetMethod("EquipmentFolderName",
+            System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!;
+        var named = new Apparatus
+        {
+            Id = "EQ-ID", Name = "Analyzer", ProductsId = "PROPERTY-9", Number = "SERIAL-7"
+        };
+        var missing = new Apparatus { Id = "EQ-ID", Name = "Analyzer", Number = "SERIAL-7" };
+
+        Assert.Equal("PROPERTY-9 - Analyzer", method.Invoke(null, [named]));
+        Assert.Equal("未設定財產編號 - Analyzer", method.Invoke(null, [missing]));
+    }
+
+    [Fact]
     public async Task Upload_WritesStagingFileAndPersistentPendingJob()
     {
         var stagingRoot = Path.Combine(Path.GetTempPath(), "csit-document-staging-tests", Guid.NewGuid().ToString("N"));
@@ -127,6 +142,9 @@ public sealed class DocumentLibraryTests
             Assert.Single(db.DocumentLibraryFiles);
             Assert.Single(db.DocumentProcessingJobs);
             Assert.Single(db.KmIntegrationOutbox);
+            var catalog = await service.GetSystemDocumentsAsync();
+            var productFolder = Assert.Single(catalog.Folders, x => x.Name == "產品資訊");
+            Assert.Equal("patty", Assert.Single(productFolder.Files).UploadedBy);
         }
         finally
         {
@@ -344,13 +362,17 @@ public sealed class DocumentLibraryTests
     public async Task SystemDocuments_BuildsReadOnlyThreeLevelCatalogFromFormalSourceRecords()
     {
         var factory = new TestFactory();
-        var equipment = new Apparatus { Id = "EQ-1", ModuleCode = "equipment", Name = "Equipment", Number = "ASSET-1" };
+        var equipment = new Apparatus
+        {
+            Id = "EQ-1", ModuleCode = "equipment", Name = "Equipment", ProductsId = "ASSET-1",
+            Number = "SERIAL-MUST-NOT-BE-USED"
+        };
         var goods = new Apparatus { Id = "GO-1", ModuleCode = "goods", Name = "Goods" };
         var equipmentFile = new ApparatusFile
         {
             Id = Guid.NewGuid(), ApparatusId = equipment.Id, Apparatus = equipment,
             FileName = "equipment.jpg", FilePath = "formal", ContentType = "image/jpeg", FileSize = 123,
-            ArchiveStatus = FileArchiveStatuses.Archived, CreatedAt = DateTime.UtcNow
+            ArchiveStatus = FileArchiveStatuses.Archived, UploadEmp = "equipment-uploader", CreatedAt = DateTime.UtcNow
         };
         var goodsFile = new ApparatusFile
         {
@@ -359,6 +381,7 @@ public sealed class DocumentLibraryTests
         };
         var approvedFinal = CaseFile("approved.pdf", TestReportReviewStatuses.Approved, isFinal: true, "Model A");
         approvedFinal.IsRawDataExported = true;
+        approvedFinal.UploadEmp = "report-uploader";
         var pending = CaseFile("pending.pdf", TestReportReviewStatuses.Pending, isFinal: false);
         var oldApprovedVersion = CaseFile("old.pdf", TestReportReviewStatuses.Approved, isFinal: false);
         var vendor = new Vendor { Id = Guid.NewGuid(), Name = "Vendor A", NormalizedName = "VENDOR A" };
@@ -366,7 +389,7 @@ public sealed class DocumentLibraryTests
         {
             Id = Guid.NewGuid(), VendorId = vendor.Id, Vendor = vendor, OriginalFileName = "vendor.png",
             StoredFileName = "vendor.png", FolderPath = "formal", ContentType = "image/png", FileSize = 456,
-            ArchiveStatus = FileArchiveStatuses.Archived, UploadedAt = DateTime.UtcNow
+            ArchiveStatus = FileArchiveStatuses.Archived, UploadedBy = "vendor-uploader", UploadedAt = DateTime.UtcNow
         };
         var rejectedVendorFile = new VendorFile
         {
@@ -415,26 +438,29 @@ public sealed class DocumentLibraryTests
         var reports = Assert.Single(catalog.Folders, x => x.ParentKey == model.Key && x.Name == "測試報告");
         var listedReport = Assert.Single(reports.Files);
         Assert.Equal("approved.pdf", listedReport.FileName);
+        Assert.Equal("report-uploader", listedReport.UploadedBy);
         Assert.Equal($"/api/files/{approvedFinal.Id}/download", listedReport.DownloadUrl);
         var applications = Assert.Single(catalog.Folders, x => x.ParentKey == model.Key && x.Name == "申請單文件");
         var listedApplication = Assert.Single(applications.Files);
         Assert.Equal("application.png", listedApplication.FileName);
         Assert.True(listedApplication.IsImage);
+        Assert.Equal("patty", listedApplication.UploadedBy);
         Assert.Equal($"/api/document-library/files/{applicationDocument.Id}/download", listedApplication.DownloadUrl);
 
         var managed = Assert.Single(catalog.Folders, x => x.Level == 1 && x.Name == "設備儀器管理");
         var equipmentCategory = Assert.Single(catalog.Folders, x => x.ParentKey == managed.Key && x.Name == "設備資訊");
         var equipmentFolder = Assert.Single(catalog.Folders, x => x.ParentKey == equipmentCategory.Key);
-        Assert.Equal("Equipment＋ASSET-1", equipmentFolder.Name);
+        Assert.Equal("ASSET-1 - Equipment", equipmentFolder.Name);
         var listedEquipment = Assert.Single(equipmentFolder.Files);
         Assert.Equal("equipment.jpg", listedEquipment.FileName);
         Assert.True(listedEquipment.IsImage);
+        Assert.Equal("equipment-uploader", listedEquipment.UploadedBy);
         Assert.Equal($"/api/assets/files/{equipmentFile.Id}/content", listedEquipment.DownloadUrl);
 
         var vendorCategory = Assert.Single(catalog.Folders, x => x.ParentKey == managed.Key && x.Name == "廠商資訊");
         var vendorFolder = Assert.Single(catalog.Folders, x => x.ParentKey == vendorCategory.Key);
         Assert.Equal("Vendor A", vendorFolder.Name);
-        Assert.Single(vendorFolder.Files);
+        Assert.Equal("vendor-uploader", Assert.Single(vendorFolder.Files).UploadedBy);
         Assert.DoesNotContain(vendorFolder.Files, x => x.FileName == rejectedVendorFile.OriginalFileName);
 
         await using var after = await factory.CreateDbContextAsync();
@@ -472,8 +498,13 @@ public sealed class DocumentLibraryTests
         Assert.DoesNotContain("<span>📄</span><span>@l3.Name</span>", source);
         Assert.Contains("L@(SelectedFolderLevel)", source);
         Assert.Contains("共 @SelectedFileCount 份文件", source);
-        Assert.Contains(".folder-title-row", File.ReadAllText(Path.Combine(
-            FindRepositoryRoot(), "Components", "Pages", "DocumentLibrary.razor.css")));
+        Assert.Contains("<th>來源</th><th>上傳者</th>", source);
+        Assert.Contains("colspan=\"7\"", source);
+        Assert.DoesNotContain("summary @onclick", source);
+        Assert.DoesNotContain("<details class=\"tree-l2\" open>", source);
+        var css = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "Components", "Pages", "DocumentLibrary.razor.css"));
+        Assert.Contains("details[open]>summary::before", css);
+        Assert.Contains("justify-content:space-between", css);
     }
 
     private static DocumentLibraryService CreateService(TestFactory factory) => new(

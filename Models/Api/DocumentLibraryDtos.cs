@@ -79,6 +79,7 @@ public sealed class SystemDocumentFileDto
     public string SourceKey { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
     public string SourceModule { get; set; } = string.Empty;
+    public string? UploadedBy { get; set; }
     public string? ContentType { get; set; }
     public bool IsImage { get; set; }
     public long FileSize { get; set; }

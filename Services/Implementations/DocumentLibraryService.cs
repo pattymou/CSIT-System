@@ -96,7 +96,7 @@ public sealed class DocumentLibraryService(
                     .Select(x => new SystemDocumentFileDto
                     {
                         SourceKey = $"test-report:{x.Id:N}", FileName = x.FileName,
-                        SourceModule = "測試報告", ContentType = x.ContentType,
+                        SourceModule = "測試報告", UploadedBy = x.UploadEmp, ContentType = x.ContentType,
                         IsImage = IsImage(x.ContentType, x.FileName), FileSize = x.FileSize,
                         UploadedAt = x.CreatedAt, ProcessingStatusDisplay = "正式入庫完成",
                         ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/files/{x.Id}/download",
@@ -117,7 +117,7 @@ public sealed class DocumentLibraryService(
                     .Select(x => new SystemDocumentFileDto
                     {
                         SourceKey = $"application-document:{x.DocumentLibraryFileId!.Value:N}", FileName = x.FileName,
-                        SourceModule = "驗證申請", ContentType = x.ContentType,
+                        SourceModule = "驗證申請", UploadedBy = x.UploadedBy, ContentType = x.ContentType,
                         IsImage = IsImage(x.ContentType, x.FileName), FileSize = x.FileSize,
                         UploadedAt = x.CreatedAt, ProcessingStatusDisplay = "正式入庫完成",
                         ProcessingStatusCssClass = "completed",
@@ -144,7 +144,7 @@ public sealed class DocumentLibraryService(
                 var files = group.Select(x => new SystemDocumentFileDto
                 {
                     SourceKey = $"equipment:{x.Id:N}", FileName = x.OriginalFileName ?? x.FileName,
-                    SourceModule = "設備管理", ContentType = x.ContentType,
+                    SourceModule = "設備管理", UploadedBy = x.UploadEmp, ContentType = x.ContentType,
                     IsImage = IsImage(x.ContentType, x.OriginalFileName ?? x.FileName), FileSize = x.FileSize,
                     UploadedAt = x.CreatedAt, ProcessingStatusDisplay = "正式入庫完成",
                     ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/assets/files/{x.Id}/content",
@@ -159,7 +159,7 @@ public sealed class DocumentLibraryService(
                 var files = group.Select(x => new SystemDocumentFileDto
                 {
                     SourceKey = $"vendor:{x.Id:N}", FileName = x.OriginalFileName,
-                    SourceModule = "廠商管理", ContentType = x.ContentType,
+                    SourceModule = "廠商管理", UploadedBy = x.UploadedBy, ContentType = x.ContentType,
                     IsImage = IsImage(x.ContentType, x.OriginalFileName), FileSize = x.FileSize,
                     UploadedAt = x.UploadedAt, ProcessingStatusDisplay = "正式入庫完成",
                     ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/vendors/files/{x.Id}/content",
@@ -464,8 +464,10 @@ public sealed class DocumentLibraryService(
 
     private static string EquipmentFolderName(Apparatus equipment)
     {
-        var assetNumber = string.IsNullOrWhiteSpace(equipment.Number) ? equipment.Id : equipment.Number.Trim();
-        return $"{equipment.Name}＋{assetNumber}";
+        var assetNumber = string.IsNullOrWhiteSpace(equipment.ProductsId)
+            ? "未設定財產編號"
+            : equipment.ProductsId.Trim();
+        return $"{assetNumber} - {equipment.Name}";
     }
 
     private static bool IsImage(string? contentType, string fileName) =>
@@ -508,6 +510,7 @@ public sealed class DocumentLibraryService(
             SourceKey = $"document-library:{file.Id:N}",
             FileName = file.OriginalFileName,
             SourceModule = "文件專區",
+            UploadedBy = file.UploadedBy,
             ContentType = file.ContentType,
             IsImage = IsImage(file.ContentType, file.OriginalFileName),
             FileSize = file.FileSize,
