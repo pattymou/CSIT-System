@@ -5,6 +5,14 @@ namespace SIT.DepartmentSystem.Web.Services;
 public static partial class DocumentLibraryRules
 {
     public const int MaximumLevel = 3;
+    private static readonly HashSet<string> PreviewImageExtensions = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".heic"
+    };
+    private static readonly HashSet<string> PreviewImageContentTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "image/jpeg", "image/png", "image/gif", "image/bmp", "image/webp", "image/tiff", "image/heic", "image/heif"
+    };
 
     public static int LevelForParent(int? parentLevel)
     {
@@ -40,6 +48,10 @@ public static partial class DocumentLibraryRules
         if (extension.Length > 20 || !SafeExtension().IsMatch(extension)) extension = string.Empty;
         return $"DOC-{utcNow:yyyyMMddHHmmssfff}-{id:N}{extension.ToLowerInvariant()}";
     }
+
+    public static bool IsPreviewableImage(string? contentType, string fileName) =>
+        (!string.IsNullOrWhiteSpace(contentType) && PreviewImageContentTypes.Contains(contentType.Trim())) ||
+        PreviewImageExtensions.Contains(Path.GetExtension(fileName));
 
     [GeneratedRegex(@"^\.[A-Za-z0-9]+$")]
     private static partial Regex SafeExtension();

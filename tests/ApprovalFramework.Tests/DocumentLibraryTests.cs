@@ -39,6 +39,15 @@ public sealed class DocumentLibraryTests
     }
 
     [Fact]
+    public void ImagePreview_UsesContentTypeOrSafeImageExtension()
+    {
+        Assert.True(DocumentLibraryRules.IsPreviewableImage("image/png", "file.bin"));
+        Assert.True(DocumentLibraryRules.IsPreviewableImage(null, "photo.JPEG"));
+        Assert.False(DocumentLibraryRules.IsPreviewableImage("application/pdf", "report.pdf"));
+        Assert.False(DocumentLibraryRules.IsPreviewableImage("image/svg+xml", "unsafe.svg"));
+    }
+
+    [Fact]
     public async Task Upload_WritesStagingFileAndPersistentPendingJob()
     {
         var stagingRoot = Path.Combine(Path.GetTempPath(), "csit-document-staging-tests", Guid.NewGuid().ToString("N"));
@@ -89,6 +98,58 @@ public sealed class DocumentLibraryTests
             if (Directory.Exists(stagingRoot)) Directory.Delete(stagingRoot, recursive: true);
             if (Directory.Exists(libraryRoot)) Directory.Delete(libraryRoot, recursive: true);
         }
+    }
+
+    [Fact]
+    public async Task ProductInformationUpload_ReusesSystemPathAndCreatesSingleLibraryJobAndOutbox()
+    {
+        var stagingRoot = Path.Combine(Path.GetTempPath(), "csit-document-product-tests", Guid.NewGuid().ToString("N"));
+        try
+        {
+            var factory = new TestFactory();
+            var root = Folder(1, "產品驗證資料");
+            var model = Folder(2, "Model A", root.Id);
+            await AddAsync(factory, root, model);
+            var service = new DocumentLibraryService(factory,
+                Options.Create(new DocumentStorageOptions { RootPath = Path.GetTempPath() }),
+                Options.Create(new DocumentStagingOptions { RootPath = stagingRoot }), new AllowWrite());
+            await using var content = new MemoryStream("product image"u8.ToArray());
+            var file = new FormFile(content, 0, content.Length, "files", "photo.png")
+            {
+                Headers = new HeaderDictionary(), ContentType = "image/png"
+            };
+
+            var result = await service.UploadProductInformationAsync("Model A", file, "patty");
+
+            await using var db = await factory.CreateDbContextAsync();
+            var product = await db.DocumentFolders.SingleAsync(x => x.ParentId == model.Id && x.Name == "產品資訊");
+            Assert.Equal(product.Id, result.FolderId);
+            Assert.Single(db.DocumentLibraryFiles);
+            Assert.Single(db.DocumentProcessingJobs);
+            Assert.Single(db.KmIntegrationOutbox);
+        }
+        finally
+        {
+            if (Directory.Exists(stagingRoot)) Directory.Delete(stagingRoot, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task SystemManagedFolders_AreMarkedAndCannotBeRenamedMovedOrDeleted()
+    {
+        var factory = new TestFactory();
+        var root = Folder(1, "產品驗證資料");
+        var model = Folder(2, "Model A", root.Id);
+        var leaf = Folder(3, "申請單文件", model.Id);
+        await AddAsync(factory, root, model, leaf);
+        var service = CreateService(factory);
+
+        Assert.All(await service.GetFoldersAsync(), x => Assert.True(x.IsSystemManaged));
+        var update = await Assert.ThrowsAsync<InvalidOperationException>(() => service.UpdateFolderAsync(leaf.Id,
+            new() { ParentId = model.Id, Name = "Changed" }));
+        Assert.Contains("系統管理", update.Message);
+        var delete = await Assert.ThrowsAsync<InvalidOperationException>(() => service.DeleteFolderAsync(leaf.Id));
+        Assert.Contains("系統管理", delete.Message);
     }
 
     [Fact]
@@ -280,41 +341,105 @@ public sealed class DocumentLibraryTests
     }
 
     [Fact]
-    public async Task SystemDocuments_ReusesOnlyEquipmentAndApprovedFinalTestReportRecords()
+    public async Task SystemDocuments_BuildsReadOnlyThreeLevelCatalogFromFormalSourceRecords()
     {
         var factory = new TestFactory();
-        var equipment = new Apparatus { Id = "EQ-1", ModuleCode = "equipment", Name = "Equipment" };
+        var equipment = new Apparatus { Id = "EQ-1", ModuleCode = "equipment", Name = "Equipment", Number = "ASSET-1" };
         var goods = new Apparatus { Id = "GO-1", ModuleCode = "goods", Name = "Goods" };
         var equipmentFile = new ApparatusFile
         {
             Id = Guid.NewGuid(), ApparatusId = equipment.Id, Apparatus = equipment,
-            FileName = "equipment.pdf", FilePath = "formal", FileSize = 123, CreatedAt = DateTime.UtcNow
+            FileName = "equipment.jpg", FilePath = "formal", ContentType = "image/jpeg", FileSize = 123,
+            ArchiveStatus = FileArchiveStatuses.Archived, CreatedAt = DateTime.UtcNow
         };
         var goodsFile = new ApparatusFile
         {
             Id = Guid.NewGuid(), ApparatusId = goods.Id, Apparatus = goods,
             FileName = "goods.pdf", FilePath = "formal", FileSize = 456, CreatedAt = DateTime.UtcNow
         };
-        var approvedFinal = CaseFile("approved.pdf", TestReportReviewStatuses.Approved, isFinal: true);
+        var approvedFinal = CaseFile("approved.pdf", TestReportReviewStatuses.Approved, isFinal: true, "Model A");
+        approvedFinal.IsRawDataExported = true;
         var pending = CaseFile("pending.pdf", TestReportReviewStatuses.Pending, isFinal: false);
         var oldApprovedVersion = CaseFile("old.pdf", TestReportReviewStatuses.Approved, isFinal: false);
-        await AddAsync(factory, equipment, goods, equipmentFile, goodsFile, approvedFinal, pending, oldApprovedVersion);
+        var vendor = new Vendor { Id = Guid.NewGuid(), Name = "Vendor A", NormalizedName = "VENDOR A" };
+        var vendorFile = new VendorFile
+        {
+            Id = Guid.NewGuid(), VendorId = vendor.Id, Vendor = vendor, OriginalFileName = "vendor.png",
+            StoredFileName = "vendor.png", FolderPath = "formal", ContentType = "image/png", FileSize = 456,
+            ArchiveStatus = FileArchiveStatuses.Archived, UploadedAt = DateTime.UtcNow
+        };
+        var rejectedVendorFile = new VendorFile
+        {
+            Id = Guid.NewGuid(), VendorId = vendor.Id, Vendor = vendor, OriginalFileName = "pending.pdf",
+            StoredFileName = "pending.pdf", FolderPath = "staging", FileSize = 10,
+            ArchiveStatus = FileArchiveStatuses.Pending, UploadedAt = DateTime.UtcNow
+        };
+        var application = VerificationApplication.CreateDraft(Guid.NewGuid(), "VA-1", null, null,
+            "patty", "Patty", "patty@example.test", "CSIT", null,
+            new VerificationApplicationContent { ProjectName = "Project A", ProductModel = "Model A" },
+            DateTime.UtcNow);
+        typeof(VerificationApplication).GetProperty(nameof(VerificationApplication.Status))!
+            .SetValue(application, VerificationApplicationStatus.Accepted);
+        var applicationDocument = new DocumentLibraryFile
+        {
+            Id = Guid.NewGuid(), FolderId = Guid.NewGuid(), OriginalFileName = "application.png",
+            StandardFileName = "application.png", ContentType = "image/png", UploadedBy = "patty",
+            UploadedAt = DateTime.UtcNow, FileSize = 88, Sha256 = new string('c', 64),
+            RelativePath = "formal/application.png", StorageArea = DocumentStorageAreas.Library
+        };
+        var applicationFile = new VerificationApplicationFile
+        {
+            Id = Guid.NewGuid(), VerificationApplicationId = application.Id, VerificationApplication = application,
+            FileName = "application.png", FilePath = "formal", ContentType = "image/png", FileSize = 88,
+            Sha256 = applicationDocument.Sha256, UploadedBy = "patty", CreatedAt = DateTime.UtcNow,
+            DocumentLibraryFileId = applicationDocument.Id, DocumentLibraryFile = applicationDocument
+        };
+        await AddAsync(factory, equipment, goods, equipmentFile, goodsFile, approvedFinal, pending,
+            oldApprovedVersion, vendor, vendorFile, rejectedVendorFile, application, applicationDocument,
+            applicationFile);
+
+        int beforeFolderCount;
+        int beforeDocumentCount;
+        await using (var before = await factory.CreateDbContextAsync())
+        {
+            beforeFolderCount = await before.DocumentFolders.CountAsync();
+            beforeDocumentCount = await before.DocumentLibraryFiles.CountAsync();
+        }
 
         var catalog = await CreateService(factory).GetSystemDocumentsAsync();
 
-        var verification = Assert.Single(catalog.Categories, x => x.Code == "verification-applications");
-        Assert.Empty(verification.Files);
-        Assert.Contains("尚無", verification.EmptyMessage);
-
-        var equipmentCategory = Assert.Single(catalog.Categories, x => x.Code == "equipment");
-        var listedEquipment = Assert.Single(equipmentCategory.Files);
-        Assert.Equal("equipment.pdf", listedEquipment.FileName);
-        Assert.Equal($"/api/assets/files/{equipmentFile.Id}/content", listedEquipment.DownloadUrl);
-
-        var reports = Assert.Single(catalog.Categories, x => x.Code == "test-reports");
+        var verification = Assert.Single(catalog.Folders, x => x.Level == 1 && x.Name == "產品驗證資料");
+        var model = Assert.Single(catalog.Folders, x => x.ParentKey == verification.Key && x.Name == "Model A");
+        Assert.Equal(["測試報告", "產品資訊", "申請單文件"], catalog.Folders
+            .Where(x => x.ParentKey == model.Key).OrderBy(x => x.SortOrder).Select(x => x.Name));
+        var reports = Assert.Single(catalog.Folders, x => x.ParentKey == model.Key && x.Name == "測試報告");
         var listedReport = Assert.Single(reports.Files);
         Assert.Equal("approved.pdf", listedReport.FileName);
         Assert.Equal($"/api/files/{approvedFinal.Id}/download", listedReport.DownloadUrl);
+        var applications = Assert.Single(catalog.Folders, x => x.ParentKey == model.Key && x.Name == "申請單文件");
+        var listedApplication = Assert.Single(applications.Files);
+        Assert.Equal("application.png", listedApplication.FileName);
+        Assert.True(listedApplication.IsImage);
+        Assert.Equal($"/api/document-library/files/{applicationDocument.Id}/download", listedApplication.DownloadUrl);
+
+        var managed = Assert.Single(catalog.Folders, x => x.Level == 1 && x.Name == "設備儀器管理");
+        var equipmentCategory = Assert.Single(catalog.Folders, x => x.ParentKey == managed.Key && x.Name == "設備資訊");
+        var equipmentFolder = Assert.Single(catalog.Folders, x => x.ParentKey == equipmentCategory.Key);
+        Assert.Equal("Equipment＋ASSET-1", equipmentFolder.Name);
+        var listedEquipment = Assert.Single(equipmentFolder.Files);
+        Assert.Equal("equipment.jpg", listedEquipment.FileName);
+        Assert.True(listedEquipment.IsImage);
+        Assert.Equal($"/api/assets/files/{equipmentFile.Id}/content", listedEquipment.DownloadUrl);
+
+        var vendorCategory = Assert.Single(catalog.Folders, x => x.ParentKey == managed.Key && x.Name == "廠商資訊");
+        var vendorFolder = Assert.Single(catalog.Folders, x => x.ParentKey == vendorCategory.Key);
+        Assert.Equal("Vendor A", vendorFolder.Name);
+        Assert.Single(vendorFolder.Files);
+        Assert.DoesNotContain(vendorFolder.Files, x => x.FileName == rejectedVendorFile.OriginalFileName);
+
+        await using var after = await factory.CreateDbContextAsync();
+        Assert.Equal(beforeFolderCount, await after.DocumentFolders.CountAsync());
+        Assert.Equal(beforeDocumentCount, await after.DocumentLibraryFiles.CountAsync());
     }
 
     [Fact]
@@ -340,6 +465,9 @@ public sealed class DocumentLibraryTests
         Assert.Contains("@attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]", source);
         Assert.Contains("DocumentLibraryService.GetSystemDocumentsAsync()", source);
         Assert.DoesNotContain("Api.GetAsync<SystemDocumentCatalogDto>", source);
+        Assert.Contains("SystemChildrenOf", source);
+        Assert.Contains("document-thumbnail", source);
+        Assert.Contains("OpenPreview", source);
     }
 
     private static DocumentLibraryService CreateService(TestFactory factory) => new(
@@ -368,13 +496,20 @@ public sealed class DocumentLibraryTests
         CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
     };
 
-    private static ModuleCaseFile CaseFile(string name, string reviewStatus, bool isFinal) => new()
+    private static ModuleCaseFile CaseFile(string name, string reviewStatus, bool isFinal, string? modelName = null)
     {
-        Id = Guid.NewGuid(), RecordId = Guid.NewGuid(), CaseNo = "CASE-1", FileName = name,
-        FilePath = "formal", FileSize = 100, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
-        DocumentId = Guid.NewGuid(), VersionNo = 1, FileKind = ModuleCaseFileKinds.TestReport,
-        ReviewStatus = reviewStatus, IsFinal = isFinal
-    };
+        var task = modelName is null ? null : new ModuleRecordTask
+        {
+            Id = Guid.NewGuid(), CaseId = Guid.NewGuid(), TaskNo = "TASK-1", Name = "Test", ModelName = modelName
+        };
+        return new ModuleCaseFile
+        {
+            Id = Guid.NewGuid(), RecordId = Guid.NewGuid(), CaseNo = "CASE-1", FileName = name,
+            FilePath = "formal", FileSize = 100, CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow,
+            DocumentId = Guid.NewGuid(), VersionNo = 1, FileKind = ModuleCaseFileKinds.TestReport,
+            ReviewStatus = reviewStatus, IsFinal = isFinal, TaskId = task?.Id, Task = task
+        };
+    }
 
     private static async Task AddAsync(TestFactory factory, params object[] entities)
     {

@@ -19,7 +19,7 @@ public sealed class DocumentLibraryService(
     public async Task<List<DocumentFolderDto>> GetFoldersAsync(CancellationToken cancellationToken = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        return await db.DocumentFolders.AsNoTracking()
+        var folders = await db.DocumentFolders.AsNoTracking()
             .OrderBy(x => x.Level).ThenBy(x => x.SortOrder).ThenBy(x => x.Name)
             .Select(x => new DocumentFolderDto
             {
@@ -32,6 +32,9 @@ public sealed class DocumentLibraryService(
                 DocumentCount = x.Files.Count
             })
             .ToListAsync(cancellationToken);
+        var systemIds = SystemManagedFolderIds(folders);
+        foreach (var folder in folders) folder.IsSystemManaged = systemIds.Contains(folder.Id);
+        return folders;
     }
 
     public async Task<SystemDocumentCatalogDto> GetSystemDocumentsAsync(
@@ -39,60 +42,138 @@ public sealed class DocumentLibraryService(
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
 
-        var equipmentFiles = await db.ApparatusFiles.AsNoTracking()
-            .Where(x => x.Apparatus.ModuleCode.ToLower() == "equipment")
-            .OrderByDescending(x => x.CreatedAt)
-            .Select(x => new SystemDocumentFileDto
-            {
-                FileName = x.FileName,
-                SourceModule = "設備管理",
-                FileSize = x.FileSize,
-                UploadedAt = x.CreatedAt,
-                DownloadUrl = $"/api/assets/files/{x.Id}/content"
-            })
-            .ToListAsync(cancellationToken);
-
-        var testReports = await db.ModuleCaseFiles.AsNoTracking()
+        var testReports = await db.ModuleCaseFiles.AsNoTracking().Include(x => x.Task)
             .Where(x => x.FileKind == ModuleCaseFileKinds.TestReport
                 && x.ReviewStatus == TestReportReviewStatuses.Approved
-                && x.IsFinal)
+                && x.IsFinal && x.IsRawDataExported)
             .OrderByDescending(x => x.CreatedAt)
-            .Select(x => new SystemDocumentFileDto
-            {
-                FileName = x.FileName,
-                SourceModule = "測試報告",
-                FileSize = x.FileSize,
-                UploadedAt = x.CreatedAt,
-                DownloadUrl = $"/api/files/{x.Id}/download"
-            })
             .ToListAsync(cancellationToken);
 
-        return new SystemDocumentCatalogDto
+        var applicationModels = await db.VerificationApplications.AsNoTracking()
+            .Where(x => x.ModuleRecordId.HasValue && !string.IsNullOrWhiteSpace(x.ProductModel))
+            .ToDictionaryAsync(x => x.ModuleRecordId!.Value, x => x.ProductModel!, cancellationToken);
+        var applicationFiles = await db.VerificationApplicationFiles.AsNoTracking()
+            .Include(x => x.VerificationApplication)
+            .Include(x => x.DocumentLibraryFile)
+            .Where(x => x.DocumentLibraryFileId.HasValue && x.DocumentLibraryFile != null &&
+                x.DocumentLibraryFile.StorageArea == DocumentStorageAreas.Library &&
+                x.VerificationApplication.Status == VerificationApplicationStatus.Accepted &&
+                !string.IsNullOrWhiteSpace(x.VerificationApplication.ProductModel))
+            .OrderByDescending(x => x.CreatedAt)
+            .ToListAsync(cancellationToken);
+        var productInformationFiles = await db.DocumentLibraryFiles.AsNoTracking()
+            .Include(x => x.Folder).ThenInclude(x => x.Parent).ThenInclude(x => x!.Parent)
+            .Include(x => x.ProcessingJob)
+            .Where(x => x.Folder.Name == "產品資訊" && x.Folder.Parent != null &&
+                x.Folder.Parent.Parent != null && x.Folder.Parent.Parent.Name == "產品驗證資料")
+            .OrderByDescending(x => x.UploadedAt)
+            .ToListAsync(cancellationToken);
+        var equipmentFiles = await db.ApparatusFiles.AsNoTracking().Include(x => x.Apparatus)
+            .Where(x => x.Apparatus.ModuleCode.ToLower() == "equipment" &&
+                x.ArchiveStatus == FileArchiveStatuses.Archived)
+            .OrderByDescending(x => x.CreatedAt).ToListAsync(cancellationToken);
+        var vendorFiles = await db.VendorFiles.AsNoTracking().Include(x => x.Vendor)
+            .Where(x => x.ArchiveStatus == FileArchiveStatuses.Archived)
+            .OrderByDescending(x => x.UploadedAt).ToListAsync(cancellationToken);
+
+        var folders = new List<SystemDocumentFolderDto>();
+        var modelNames = testReports.Select(x => ModelNameFor(x, applicationModels))
+            .Concat(applicationFiles.Select(x => x.VerificationApplication.ProductModel))
+            .Concat(productInformationFiles.Select(x => x.Folder.Parent!.Name))
+            .Where(x => !string.IsNullOrWhiteSpace(x)).Select(x => x!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(x => x).ToList();
+        if (modelNames.Count > 0)
         {
-            Categories =
-            [
-                new()
+            const string rootKey = "verification";
+            folders.Add(SystemFolder(rootKey, null, 1, "產品驗證資料", "驗證申請與正式成果文件。", 10));
+            foreach (var modelName in modelNames)
+            {
+                var modelKey = SystemKey("verification-model", modelName);
+                folders.Add(SystemFolder(modelKey, rootKey, 2, modelName, $"Model Name：{modelName}", 10));
+
+                var reportFiles = testReports.Where(x => string.Equals(
+                        ModelNameFor(x, applicationModels), modelName, StringComparison.OrdinalIgnoreCase))
+                    .Select(x => new SystemDocumentFileDto
+                    {
+                        SourceKey = $"test-report:{x.Id:N}", FileName = x.FileName,
+                        SourceModule = "測試報告", ContentType = x.ContentType,
+                        IsImage = IsImage(x.ContentType, x.FileName), FileSize = x.FileSize,
+                        UploadedAt = x.CreatedAt, ProcessingStatusDisplay = "正式入庫完成",
+                        ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/files/{x.Id}/download",
+                        PreviewUrl = $"/api/files/{x.Id}/download"
+                    }).ToList();
+                folders.Add(SystemFolder($"{modelKey}:reports", modelKey, 3, "測試報告",
+                    "已核准、已正式完成的測試報告。", 10, reportFiles));
+
+                var productFiles = productInformationFiles.Where(x => string.Equals(
+                        x.Folder.Parent!.Name, modelName, StringComparison.OrdinalIgnoreCase))
+                    .Select(ToSystemFile).ToList();
+                folders.Add(SystemFolder($"{modelKey}:product", modelKey, 3, "產品資訊",
+                    "文件專區直接上傳的產品資訊。", 20, productFiles, canUpload: true,
+                    uploadModelName: modelName));
+
+                var linkedFiles = applicationFiles.Where(x => string.Equals(
+                        x.VerificationApplication.ProductModel, modelName, StringComparison.OrdinalIgnoreCase))
+                    .Select(x => new SystemDocumentFileDto
+                    {
+                        SourceKey = $"application-document:{x.DocumentLibraryFileId!.Value:N}", FileName = x.FileName,
+                        SourceModule = "驗證申請", ContentType = x.ContentType,
+                        IsImage = IsImage(x.ContentType, x.FileName), FileSize = x.FileSize,
+                        UploadedAt = x.CreatedAt, ProcessingStatusDisplay = "正式入庫完成",
+                        ProcessingStatusCssClass = "completed",
+                        DownloadUrl = $"/api/document-library/files/{x.DocumentLibraryFileId}/download",
+                        PreviewUrl = $"/api/document-library/files/{x.DocumentLibraryFileId}/preview"
+                    }).ToList();
+                folders.Add(SystemFolder($"{modelKey}:applications", modelKey, 3, "申請單文件",
+                    "主管核准且正式歸檔完成的申請單附件。", 30, linkedFiles));
+            }
+        }
+
+        if (equipmentFiles.Count > 0 || vendorFiles.Count > 0)
+        {
+            const string rootKey = "managed-assets";
+            const string equipmentKey = "managed-assets:equipment";
+            const string vendorKey = "managed-assets:vendors";
+            folders.Add(SystemFolder(rootKey, null, 1, "設備儀器管理", "設備與廠商正式附件。", 20));
+            folders.Add(SystemFolder(equipmentKey, rootKey, 2, "設備資訊", "設備正式附件與照片。", 10));
+            folders.Add(SystemFolder(vendorKey, rootKey, 2, "廠商資訊", "廠商正式附件。", 20));
+            foreach (var group in equipmentFiles.GroupBy(x => x.ApparatusId).OrderBy(x => x.First().Apparatus.Name))
+            {
+                var equipment = group.First().Apparatus;
+                var name = EquipmentFolderName(equipment);
+                var files = group.Select(x => new SystemDocumentFileDto
                 {
-                    Code = "verification-applications",
-                    Name = "驗證申請文件",
-                    EmptyMessage = "目前正式系統尚無已保存且可沿用既有下載功能的驗證申請文件。"
-                },
-                new()
+                    SourceKey = $"equipment:{x.Id:N}", FileName = x.OriginalFileName ?? x.FileName,
+                    SourceModule = "設備管理", ContentType = x.ContentType,
+                    IsImage = IsImage(x.ContentType, x.OriginalFileName ?? x.FileName), FileSize = x.FileSize,
+                    UploadedAt = x.CreatedAt, ProcessingStatusDisplay = "正式入庫完成",
+                    ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/assets/files/{x.Id}/content",
+                    PreviewUrl = $"/api/assets/files/{x.Id}/image"
+                }).ToList();
+                folders.Add(SystemFolder(SystemKey("equipment", group.Key), equipmentKey, 3, name,
+                    $"設備 ID：{group.Key}", 10, files));
+            }
+            foreach (var group in vendorFiles.GroupBy(x => x.VendorId).OrderBy(x => x.First().Vendor.Name))
+            {
+                var vendor = group.First().Vendor;
+                var files = group.Select(x => new SystemDocumentFileDto
                 {
-                    Code = "equipment",
-                    Name = "設備管理文件",
-                    EmptyMessage = "目前沒有可供查閱的設備管理文件。",
-                    Files = equipmentFiles
-                },
-                new()
-                {
-                    Code = "test-reports",
-                    Name = "測試報告",
-                    EmptyMessage = "目前沒有已核准的正式測試報告。",
-                    Files = testReports
-                }
-            ]
-        };
+                    SourceKey = $"vendor:{x.Id:N}", FileName = x.OriginalFileName,
+                    SourceModule = "廠商管理", ContentType = x.ContentType,
+                    IsImage = IsImage(x.ContentType, x.OriginalFileName), FileSize = x.FileSize,
+                    UploadedAt = x.UploadedAt, ProcessingStatusDisplay = "正式入庫完成",
+                    ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/vendors/files/{x.Id}/content",
+                    PreviewUrl = $"/api/vendors/files/{x.Id}/content"
+                }).ToList();
+                folders.Add(SystemFolder(SystemKey("vendor", group.Key.ToString("N")), vendorKey, 3,
+                    vendor.Name, $"Vendor ID：{group.Key}", 10, files));
+            }
+        }
+
+        foreach (var folder in folders.OrderByDescending(x => x.Level))
+            folder.DocumentCount = folder.Level == 3 ? folder.Files.Select(x => x.SourceKey).Distinct().Count() :
+                folders.Where(x => x.ParentKey == folder.Key).Sum(x => x.DocumentCount);
+        return new SystemDocumentCatalogDto { Folders = folders };
     }
 
     public async Task<Guid> CreateFolderAsync(
@@ -106,6 +187,10 @@ public sealed class DocumentLibraryService(
             ? null
             : await db.DocumentFolders.SingleOrDefaultAsync(x => x.Id == request.ParentId, cancellationToken)
               ?? throw new InvalidOperationException("找不到上層資料夾。");
+        if (request.ParentId is null && IsReservedSystemRoot(request.Name))
+            throw new InvalidOperationException("此名稱保留給系統文件分類，請使用其他自訂資料夾名稱。");
+        if (parent is not null && await IsSystemManagedFolderAsync(db, parent.Id, cancellationToken))
+            throw new InvalidOperationException("系統分類的固定層級不可由資料夾管理功能新增或調整。");
         var name = DocumentLibraryRules.NormalizeName(request.Name);
         var level = DocumentLibraryRules.LevelForParent(parent?.Level);
         if (await db.DocumentFolders.AnyAsync(
@@ -139,6 +224,8 @@ public sealed class DocumentLibraryService(
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var entity = await db.DocumentFolders.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (entity is null) return false;
+        if (await IsSystemManagedFolderAsync(db, id, cancellationToken))
+            throw new InvalidOperationException("系統管理的分類資料夾不可更名、移動或修改。");
 
         if (entity.Level == 1)
         {
@@ -186,6 +273,8 @@ public sealed class DocumentLibraryService(
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var entity = await db.DocumentFolders.SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (entity is null) return false;
+        if (await IsSystemManagedFolderAsync(db, id, cancellationToken))
+            throw new InvalidOperationException("系統管理的分類資料夾不可刪除。");
 
         if (await db.DocumentFolders.AnyAsync(x => x.ParentId == id, cancellationToken))
             throw new InvalidOperationException("此資料夾仍有子資料夾，請先刪除所有下層資料夾。");
@@ -248,6 +337,9 @@ public sealed class DocumentLibraryService(
             ?? throw new KeyNotFoundException("找不到資料夾。");
         if (folder.Level != DocumentLibraryRules.MaximumLevel)
             throw new InvalidOperationException("文件只能上傳至第三層資料夾。");
+        if (await IsSystemManagedFolderAsync(db, folderId, cancellationToken) &&
+            !await IsProductInformationFolderAsync(db, folderId, cancellationToken))
+            throw new InvalidOperationException("系統來源文件為唯讀，請回原來源模組管理附件。");
 
         var id = Guid.NewGuid();
         var now = DateTime.UtcNow;
@@ -309,6 +401,39 @@ public sealed class DocumentLibraryService(
         }
     }
 
+    public async Task<DocumentLibraryFileDto> UploadProductInformationAsync(
+        string modelName,
+        IFormFile file,
+        string uploadedBy,
+        CancellationToken cancellationToken = default)
+    {
+        await businessWrite.DemandAsync(cancellationToken);
+        var normalizedModel = DocumentLibraryRules.NormalizeName(modelName);
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var lowered = normalizedModel.ToLower();
+        var hasSource = await db.VerificationApplications.AsNoTracking().AnyAsync(x =>
+                x.ModuleRecordId.HasValue && x.ProductModel != null && x.ProductModel.ToLower() == lowered,
+                cancellationToken)
+            || await db.ModuleCaseFiles.AsNoTracking().AnyAsync(x =>
+                x.FileKind == ModuleCaseFileKinds.TestReport && x.ReviewStatus == TestReportReviewStatuses.Approved &&
+                x.IsFinal && x.IsRawDataExported && x.Task != null && x.Task.ModelName != null &&
+                x.Task.ModelName.ToLower() == lowered, cancellationToken)
+            || await db.DocumentFolders.AsNoTracking().AnyAsync(x => x.Level == 2 &&
+                x.Name.ToLower() == lowered && x.Parent != null && x.Parent.Name == "產品驗證資料",
+                cancellationToken);
+        if (!hasSource) throw new InvalidOperationException("找不到可安全對應的 Model Name，未建立文件分類。");
+
+        var now = DateTime.UtcNow;
+        var root = await GetOrCreateFolderAsync(db, null, 1, "產品驗證資料",
+            "驗證申請與驗證成果文件。", 10, now, cancellationToken);
+        var model = await GetOrCreateFolderAsync(db, root.Id, 2, normalizedModel,
+            $"Model Name：{normalizedModel}", 10, now, cancellationToken);
+        var product = await GetOrCreateFolderAsync(db, model.Id, 3, "產品資訊",
+            "文件專區直接上傳的產品資訊。", 20, now, cancellationToken);
+        await db.SaveChangesAsync(cancellationToken);
+        return await UploadAsync(product.Id, file, uploadedBy, cancellationToken);
+    }
+
     public async Task<DocumentDownload?> OpenDownloadAsync(
         Guid fileId,
         CancellationToken cancellationToken = default)
@@ -327,6 +452,142 @@ public sealed class DocumentLibraryService(
         if (!File.Exists(path)) throw new FileNotFoundException("文件實體檔案不存在。", path);
         var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, useAsync: true);
         return new DocumentDownload(stream, entity.OriginalFileName, entity.ContentType);
+    }
+
+    private static string? ModelNameFor(ModuleCaseFile file, IReadOnlyDictionary<Guid, string> applicationModels)
+    {
+        if (!string.IsNullOrWhiteSpace(file.Task?.ModelName)) return file.Task.ModelName.Trim();
+        return applicationModels.TryGetValue(file.RecordId, out var model) && !string.IsNullOrWhiteSpace(model)
+            ? model.Trim()
+            : null;
+    }
+
+    private static string EquipmentFolderName(Apparatus equipment)
+    {
+        var assetNumber = string.IsNullOrWhiteSpace(equipment.Number) ? equipment.Id : equipment.Number.Trim();
+        return $"{equipment.Name}＋{assetNumber}";
+    }
+
+    private static bool IsImage(string? contentType, string fileName) =>
+        DocumentLibraryRules.IsPreviewableImage(contentType, fileName);
+
+    private static string SystemKey(string prefix, string value)
+    {
+        var hash = SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(value.Trim().ToUpperInvariant()));
+        return $"{prefix}:{Convert.ToHexString(hash.AsSpan(0, 10)).ToLowerInvariant()}";
+    }
+
+    private static SystemDocumentFolderDto SystemFolder(
+        string key,
+        string? parentKey,
+        int level,
+        string name,
+        string description,
+        int sortOrder,
+        List<SystemDocumentFileDto>? files = null,
+        bool canUpload = false,
+        string? uploadModelName = null) => new()
+    {
+        Key = key,
+        ParentKey = parentKey,
+        Level = level,
+        Name = name,
+        Description = description,
+        SortOrder = sortOrder,
+        CanUpload = canUpload,
+        UploadModelName = uploadModelName,
+        Files = files?.DistinctBy(x => x.SourceKey).ToList() ?? []
+    };
+
+    private static SystemDocumentFileDto ToSystemFile(DocumentLibraryFile file)
+    {
+        var dto = ToDto(file, file.ProcessingJob, null);
+        var download = $"/api/document-library/files/{file.Id}/download";
+        return new SystemDocumentFileDto
+        {
+            SourceKey = $"document-library:{file.Id:N}",
+            FileName = file.OriginalFileName,
+            SourceModule = "文件專區",
+            ContentType = file.ContentType,
+            IsImage = IsImage(file.ContentType, file.OriginalFileName),
+            FileSize = file.FileSize,
+            UploadedAt = file.UploadedAt,
+            ProcessingStatusDisplay = dto.ProcessingStatusDisplay,
+            ProcessingStatusCssClass = dto.ProcessingStatusCssClass,
+            DownloadUrl = download,
+            PreviewUrl = $"/api/document-library/files/{file.Id}/preview"
+        };
+    }
+
+    private static bool IsReservedSystemRoot(string? name) =>
+        string.Equals(name?.Trim(), "產品驗證資料", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(name?.Trim(), "設備儀器管理", StringComparison.OrdinalIgnoreCase);
+
+    private static HashSet<Guid> SystemManagedFolderIds(IReadOnlyCollection<DocumentFolderDto> folders)
+    {
+        var result = folders.Where(x => x.ParentId is null && IsReservedSystemRoot(x.Name))
+            .Select(x => x.Id).ToHashSet();
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var folder in folders.Where(x => x.ParentId.HasValue && result.Contains(x.ParentId.Value)))
+                changed |= result.Add(folder.Id);
+        }
+        return result;
+    }
+
+    private static async Task<bool> IsSystemManagedFolderAsync(
+        AppDbContext db,
+        Guid folderId,
+        CancellationToken cancellationToken)
+    {
+        var folders = await db.DocumentFolders.AsNoTracking().Select(x => new DocumentFolderDto
+        {
+            Id = x.Id, ParentId = x.ParentId, Level = x.Level, Name = x.Name
+        }).ToListAsync(cancellationToken);
+        return SystemManagedFolderIds(folders).Contains(folderId);
+    }
+
+    private static Task<bool> IsProductInformationFolderAsync(
+        AppDbContext db,
+        Guid folderId,
+        CancellationToken cancellationToken) => db.DocumentFolders.AsNoTracking().AnyAsync(x =>
+            x.Id == folderId && x.Level == 3 && x.Name == "產品資訊" && x.Parent != null &&
+            x.Parent.Level == 2 && x.Parent.Parent != null && x.Parent.Parent.Level == 1 &&
+            x.Parent.Parent.Name == "產品驗證資料", cancellationToken);
+
+    private static async Task<DocumentFolder> GetOrCreateFolderAsync(
+        AppDbContext db,
+        Guid? parentId,
+        int level,
+        string name,
+        string description,
+        int sortOrder,
+        DateTime now,
+        CancellationToken cancellationToken)
+    {
+        var normalized = DocumentLibraryRules.NormalizeName(name);
+        var tracked = db.ChangeTracker.Entries<DocumentFolder>().Select(x => x.Entity)
+            .SingleOrDefault(x => x.ParentId == parentId &&
+                string.Equals(x.Name, normalized, StringComparison.OrdinalIgnoreCase));
+        if (tracked is not null) return tracked;
+        var lowered = normalized.ToLower();
+        var existing = await db.DocumentFolders.SingleOrDefaultAsync(x =>
+            x.ParentId == parentId && x.Name.ToLower() == lowered, cancellationToken);
+        if (existing is not null)
+        {
+            if (existing.Level != level)
+                throw new InvalidOperationException($"系統文件資料夾「{normalized}」的層級不正確。");
+            return existing;
+        }
+        var folder = new DocumentFolder
+        {
+            Id = Guid.NewGuid(), ParentId = parentId, Level = level, Name = normalized,
+            Description = description, SortOrder = sortOrder, CreatedAt = now, UpdatedAt = now
+        };
+        db.DocumentFolders.Add(folder);
+        return folder;
     }
 
     private string ResolvePath(string storageArea, string relativePath)

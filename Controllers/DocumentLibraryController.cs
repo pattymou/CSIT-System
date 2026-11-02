@@ -98,6 +98,47 @@ public sealed class DocumentLibraryController(IDocumentLibraryService service) :
         return Ok(result);
     }
 
+    [HttpPost("system-folders/product-information/files")]
+    [BusinessWrite]
+    [RequestSizeLimit(200_000_000)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 200_000_000)]
+    public async Task<IActionResult> UploadProductInformation(
+        [FromQuery] string modelName,
+        CancellationToken cancellationToken)
+    {
+        if (Request.Form.Files.Count == 0) return BadRequest("請至少選擇一個檔案。");
+        var account = User.FindFirstValue("account")
+            ?? User.FindFirstValue(ClaimTypes.NameIdentifier)
+            ?? User.Identity?.Name
+            ?? "System";
+        var result = new DocumentUploadBatchResultDto();
+        foreach (var file in Request.Form.Files)
+        {
+            try
+            {
+                var uploaded = await service.UploadProductInformationAsync(
+                    modelName, file, account, cancellationToken);
+                result.Results.Add(new DocumentUploadResultDto
+                {
+                    OriginalFileName = uploaded.OriginalFileName,
+                    Success = true,
+                    Message = "已接收／待 KM 處理",
+                    File = uploaded
+                });
+            }
+            catch (Exception ex) when (ex is KeyNotFoundException or InvalidOperationException or IOException)
+            {
+                result.Results.Add(new DocumentUploadResultDto
+                {
+                    OriginalFileName = Path.GetFileName(file.FileName),
+                    Success = false,
+                    Message = ex.Message
+                });
+            }
+        }
+        return Ok(result);
+    }
+
     [HttpGet("files/{id:guid}/download")]
     public async Task<IActionResult> Download(Guid id, CancellationToken cancellationToken)
     {
@@ -107,6 +148,23 @@ public sealed class DocumentLibraryController(IDocumentLibraryService service) :
             return download is null
                 ? NotFound()
                 : File(download.Stream, download.ContentType ?? "application/octet-stream", download.OriginalFileName);
+        }
+        catch (FileNotFoundException ex) { return NotFound(ex.Message); }
+    }
+
+    [HttpGet("files/{id:guid}/preview")]
+    public async Task<IActionResult> Preview(Guid id, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var preview = await service.OpenDownloadAsync(id, cancellationToken);
+            if (preview is null) return NotFound();
+            if (!DocumentLibraryRules.IsPreviewableImage(preview.ContentType, preview.OriginalFileName))
+            {
+                await preview.Stream.DisposeAsync();
+                return StatusCode(StatusCodes.Status415UnsupportedMediaType);
+            }
+            return File(preview.Stream, preview.ContentType ?? "application/octet-stream", enableRangeProcessing: true);
         }
         catch (FileNotFoundException ex) { return NotFound(ex.Message); }
     }

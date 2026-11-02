@@ -33,8 +33,8 @@
             @if (_folders.Count == 0) { <div class="admin-empty">尚未建立資料夾。</div> }
             @foreach (var folder in OrderedFolders())
             {
-                <button type="button" class="folder-row @(_editingId == folder.Id ? "active" : "")" style="--level:@folder.Level" @onclick="() => Edit(folder)">
-                    <span><strong>@folder.Name</strong><small>@Display(folder.Description)</small></span><span class="sort-badge">排序 @folder.SortOrder</span>
+                <button type="button" class="folder-row @(_editingId == folder.Id ? "active" : "")" style="--level:@folder.Level" disabled="@folder.IsSystemManaged" @onclick="() => Edit(folder)">
+                    <span><strong>@folder.Name</strong><small>@Display(folder.Description)</small></span><span class="sort-badge">@(folder.IsSystemManaged ? "系統分類" : $"排序 {folder.SortOrder}")</span>
                 </button>
             }
         </section>
@@ -76,11 +76,11 @@
     private async Task LoadAsync(){try{_folders=await Api.GetAsync<List<DocumentFolderDto>>("/api/document-library/folders");}catch(Exception ex){ShowError($"載入失敗：{ex.Message}");}}
     private IEnumerable<DocumentFolderDto> OrderedFolders(){var result=new List<DocumentFolderDto>();void Add(Guid? parent){foreach(var item in _folders.Where(x=>x.ParentId==parent).OrderBy(x=>x.SortOrder).ThenBy(x=>x.Name)){result.Add(item);Add(item.Id);}}Add(null);return result;}
     private DocumentFolderDto? EditingFolder=>_editingId is null?null:_folders.SingleOrDefault(x=>x.Id==_editingId.Value);
-    private IEnumerable<DocumentFolderDto> ParentOptions()=>_editingId is null?_folders.Where(x=>x.Level<3).OrderBy(x=>x.Level).ThenBy(x=>x.SortOrder):EditingFolder is {Level:>1} folder?_folders.Where(x=>x.Level==folder.Level-1).OrderBy(x=>x.SortOrder).ThenBy(x=>x.Name):[];
+    private IEnumerable<DocumentFolderDto> ParentOptions()=>_editingId is null?_folders.Where(x=>x.Level<3&&!x.IsSystemManaged).OrderBy(x=>x.Level).ThenBy(x=>x.SortOrder):EditingFolder is {Level:>1} folder?_folders.Where(x=>x.Level==folder.Level-1&&!x.IsSystemManaged).OrderBy(x=>x.SortOrder).ThenBy(x=>x.Name):[];
     private void StartCreate(){ResetForm();_message=null;}
     private void ResetForm(){_editingId=null;_form=new();_deleteTarget=null;_showDeleteConfirm=false;_showMoveConfirm=false;}
     private void ClearForm(){var parent=_editingId.HasValue?_form.ParentId:null;_form=new(){ParentId=parent};}
-    private void Edit(DocumentFolderDto folder){_editingId=folder.Id;_form=new(){ParentId=folder.ParentId,Name=folder.Name,Description=folder.Description,SortOrder=folder.SortOrder};_message=null;}
+    private void Edit(DocumentFolderDto folder){if(folder.IsSystemManaged)return;_editingId=folder.Id;_form=new(){ParentId=folder.ParentId,Name=folder.Name,Description=folder.Description,SortOrder=folder.SortOrder};_message=null;}
     private Task SaveAsync(){_message=null;if(EditingFolder is { } folder&&folder.ParentId!=_form.ParentId){_showMoveConfirm=true;return Task.CompletedTask;}return PersistAsync();}
     private async Task PersistAsync(){_saving=true;try{var wasEditing=_editingId.HasValue;var wasMoving=EditingFolder is { } folder&&folder.ParentId!=_form.ParentId;var response=wasEditing?await Api.PutJsonAsync($"/api/document-library/folders/{_editingId}",_form):await Api.PostJsonAsync("/api/document-library/folders",_form);response.EnsureSuccess();ResetForm();await LoadAsync();_message=wasMoving?"資料夾已移動，樹狀結構已更新。":wasEditing?"資料夾已更新。":"資料夾已建立。";_isError=false;}catch(Exception ex){ShowError($"儲存失敗：{ex.Message}");}finally{_saving=false;}}
     private string MoveConfirmationMessage=>EditingFolder is not { } folder?string.Empty:$"確定移動資料夾？原位置：{BuildPath(folder.ParentId,folder.Name)}；新位置：{BuildPath(_form.ParentId,string.IsNullOrWhiteSpace(_form.Name)?folder.Name:_form.Name.Trim())}。底下資料夾與文件會一起保留在原 ID 下。";

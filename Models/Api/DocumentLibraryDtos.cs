@@ -9,6 +9,7 @@ public sealed class DocumentFolderDto
     public string? Description { get; set; }
     public int SortOrder { get; set; }
     public int DocumentCount { get; set; }
+    public bool IsSystemManaged { get; set; }
 }
 
 public sealed class DocumentFolderUpsertRequest
@@ -56,22 +57,34 @@ public sealed class DocumentUploadResultDto
 
 public sealed class SystemDocumentCatalogDto
 {
-    public List<SystemDocumentCategoryDto> Categories { get; set; } = [];
+    public List<SystemDocumentFolderDto> Folders { get; set; } = [];
 }
 
-public sealed class SystemDocumentCategoryDto
+public sealed class SystemDocumentFolderDto
 {
-    public string Code { get; set; } = string.Empty;
+    public string Key { get; set; } = string.Empty;
+    public string? ParentKey { get; set; }
+    public int Level { get; set; }
     public string Name { get; set; } = string.Empty;
-    public string? EmptyMessage { get; set; }
+    public string? Description { get; set; }
+    public int SortOrder { get; set; }
+    public int DocumentCount { get; set; }
+    public bool CanUpload { get; set; }
+    public string? UploadModelName { get; set; }
     public List<SystemDocumentFileDto> Files { get; set; } = [];
 }
 
 public sealed class SystemDocumentFileDto
 {
+    public string SourceKey { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
     public string SourceModule { get; set; } = string.Empty;
+    public string? ContentType { get; set; }
+    public bool IsImage { get; set; }
     public long FileSize { get; set; }
     public DateTime UploadedAt { get; set; }
+    public string ProcessingStatusDisplay { get; set; } = string.Empty;
+    public string ProcessingStatusCssClass { get; set; } = string.Empty;
     public string DownloadUrl { get; set; } = string.Empty;
+    public string PreviewUrl { get; set; } = string.Empty;
 }

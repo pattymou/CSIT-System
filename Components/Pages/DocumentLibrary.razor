@@ -8,6 +8,16 @@
 
 <PageTitle>文件專區</PageTitle>
 
+@if (!string.IsNullOrWhiteSpace(_previewUrl))
+{
+    <div class="image-preview-backdrop" role="dialog" aria-modal="true" aria-label="圖片預覽" @onclick="ClosePreview">
+        <div class="image-preview-dialog" @onclick:stopPropagation="true">
+            <div class="image-preview-heading"><strong>@_previewName</strong><button type="button" @onclick="ClosePreview" aria-label="關閉預覽">×</button></div>
+            <img src="@_previewUrl" alt="@_previewName" />
+        </div>
+    </div>
+}
+
 <div class="document-page">
     <header class="document-hero">
         <div>
@@ -23,76 +33,40 @@
         <div class="document-message @(_isError ? "error" : "success")">@_message</div>
     }
 
-    <section class="system-documents-card">
-        <div class="system-documents-heading">
-            <div>
-                <div class="document-kicker">READ ONLY</div>
-                <h2>系統文件</h2>
-                <p>沿用正式系統的文件紀錄與下載權限；此處不提供刪除或搬移。</p>
-            </div>
-        </div>
-        @if (_systemDocumentsLoading)
-        {
-            <div class="document-empty">載入系統文件中...</div>
-        }
-        else
-        {
-            <div class="system-category-list">
-                @foreach (var category in _systemDocumentCatalog.Categories)
-                {
-                    <button type="button"
-                            class="system-category @(_selectedSystemCategory?.Code == category.Code ? "active" : "")"
-                            @onclick="() => _selectedSystemCategory = category">
-                        <span>@category.Name</span>
-                        <strong>@category.Files.Count</strong>
-                    </button>
-                }
-            </div>
-
-            @if (_selectedSystemCategory is not null)
-            {
-                <div class="document-table-wrap system-document-table">
-                    <table class="document-table">
-                        <thead><tr><th>名稱</th><th>來源模組</th><th>檔案大小</th><th>上傳日期</th><th></th></tr></thead>
-                        <tbody>
-                            @if (_selectedSystemCategory.Files.Count == 0)
-                            {
-                                <tr><td colspan="5" class="document-empty">@_selectedSystemCategory.EmptyMessage</td></tr>
-                            }
-                            else
-                            {
-                                @foreach (var file in _selectedSystemCategory.Files)
-                                {
-                                    <tr>
-                                        <td><strong>@file.FileName</strong></td>
-                                        <td>@file.SourceModule</td>
-                                        <td>@FormatSize(file.FileSize)</td>
-                                        <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
-                                        <td><a class="download-link" href="@file.DownloadUrl">下載</a></td>
-                                    </tr>
-                                }
-                            }
-                        </tbody>
-                    </table>
-                </div>
-            }
-        }
-    </section>
-
     <div class="document-workspace">
         <aside class="document-tree-card">
             <h2>資料夾</h2>
-            @if (_loading)
+            @if (_loading || _systemDocumentsLoading)
             {
                 <div class="document-empty">載入中...</div>
             }
-            else if (!_folders.Any())
+            else if (!_folders.Any(x => !x.IsSystemManaged) && _systemDocumentCatalog.Folders.Count == 0)
             {
                 <div class="document-empty">尚未建立文件資料夾。</div>
             }
             else
             {
                 <div class="document-tree">
+                    @foreach (var l1 in SystemChildrenOf(null))
+                    {
+                        <details open class="system-tree-branch">
+                            <summary @onclick="() => SelectSystemFolder(l1)"><span>🗂️</span> @l1.Name</summary>
+                            @foreach (var l2 in SystemChildrenOf(l1.Key))
+                            {
+                                <details class="tree-l2" open>
+                                    <summary @onclick="() => SelectSystemFolder(l2)"><span>📁</span> @l2.Name</summary>
+                                    @foreach (var l3 in SystemChildrenOf(l2.Key))
+                                    {
+                                        <button type="button"
+                                                class="tree-leaf @(_selectedSystemFolder?.Key == l3.Key ? "active" : "")"
+                                                @onclick="() => SelectSystemFolder(l3)">
+                                            <span>📄</span><span>@l3.Name</span><small>@l3.DocumentCount</small>
+                                        </button>
+                                    }
+                                </details>
+                            }
+                        </details>
+                    }
                     @foreach (var l1 in ChildrenOf(null))
                     {
                         <details open>
@@ -118,7 +92,7 @@
         </aside>
 
         <main class="document-content-card">
-            @if (_selectedFolder is null)
+            @if (_selectedFolder is null && _selectedSystemFolder is null)
             {
                 <div class="document-welcome">
                     <div class="document-welcome-icon">📚</div>
@@ -130,23 +104,23 @@
             {
                 <div class="folder-heading">
                     <div>
-                        <div class="folder-level">L@_selectedFolder.Level</div>
-                        <h2>@_selectedFolder.Name</h2>
-                        <p>@DisplayDescription(_selectedFolder.Description)</p>
+                        <div class="folder-level">L@SelectedFolderLevel</div>
+                        <h2>@SelectedFolderName</h2>
+                        <p>@DisplayDescription(SelectedFolderDescription)</p>
                     </div>
-                    @if (_selectedFolder.Level == 3)
+                    @if (SelectedFolderLevel == 3)
                     {
-                        <span class="file-count">@_files.Count 份文件</span>
+                        <span class="file-count">@SelectedFileCount 份文件</span>
                     }
                 </div>
 
-                @if (_selectedFolder.Level < 3)
+                @if (SelectedFolderLevel < 3)
                 {
                     <div class="document-empty large">請展開並選擇下一層資料夾。</div>
                 }
                 else
                 {
-                    @if (_canWrite)
+                    @if (_canWrite && (_selectedFolder is not null || _selectedSystemFolder?.CanUpload == true))
                     {
                         <div class="upload-panel">
                             <div>
@@ -174,6 +148,48 @@
                         }
                     }
 
+                    @if (_selectedSystemFolder is not null)
+                    {
+                    <div class="document-table-wrap">
+                        <table class="document-table system-document-table">
+                            <thead><tr><th>檔案</th><th>處理狀態</th><th>來源</th><th>大小</th><th>時間</th><th></th></tr></thead>
+                            <tbody>
+                                @if (_selectedSystemFolder.Files.Count == 0)
+                                {
+                                    <tr><td colspan="6" class="document-empty">此分類目前沒有正式文件。</td></tr>
+                                }
+                                else
+                                {
+                                    @foreach (var file in _selectedSystemFolder.Files)
+                                    {
+                                        <tr @key="file.SourceKey">
+                                            <td class="document-file-cell">
+                                                @if (file.IsImage)
+                                                {
+                                                    <button type="button" class="document-thumbnail-button" title="開啟大圖預覽" @onclick="() => OpenPreview(file.PreviewUrl, file.FileName)">
+                                                        <img class="document-thumbnail" src="@file.PreviewUrl" alt="@file.FileName" loading="lazy" />
+                                                    </button>
+                                                }
+                                                else
+                                                {
+                                                    <span class="document-type-icon" aria-hidden="true">📄</span>
+                                                }
+                                                <span><strong>@file.FileName</strong><small>@FormatSize(file.FileSize)</small></span>
+                                            </td>
+                                            <td><span class="processing-status @file.ProcessingStatusCssClass">@file.ProcessingStatusDisplay</span></td>
+                                            <td>@file.SourceModule</td>
+                                            <td>@FormatSize(file.FileSize)</td>
+                                            <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                                            <td><a class="download-link" href="@file.DownloadUrl">下載</a></td>
+                                        </tr>
+                                    }
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                    }
+                    else
+                    {
                     <div class="document-table-wrap">
                         <table class="document-table">
                             <thead><tr><th>原始檔名</th><th>狀態</th><th>大小</th><th>上傳者</th><th>上傳時間</th><th>SHA256</th><th></th></tr></thead>
@@ -187,7 +203,19 @@
                                     @foreach (var file in _files)
                                     {
                                         <tr>
-                                            <td><strong>@file.OriginalFileName</strong><small>@file.StandardFileName</small></td>
+                                            <td class="document-file-cell">
+                                                @if (IsImage(file.ContentType, file.OriginalFileName))
+                                                {
+                                                    <button type="button" class="document-thumbnail-button" title="開啟大圖預覽" @onclick="() => OpenPreview(DocumentPreviewUrl(file.Id), file.OriginalFileName)">
+                                                        <img class="document-thumbnail" src="@DocumentPreviewUrl(file.Id)" alt="@file.OriginalFileName" loading="lazy" />
+                                                    </button>
+                                                }
+                                                else
+                                                {
+                                                    <span class="document-type-icon" aria-hidden="true">📄</span>
+                                                }
+                                                <span><strong>@file.OriginalFileName</strong><small>@file.StandardFileName</small></span>
+                                            </td>
                                             <td><span class="processing-status @file.ProcessingStatusCssClass" title="@StatusDetails(file)">@file.ProcessingStatusDisplay</span></td>
                                             <td>@FormatSize(file.FileSize)</td>
                                             <td>@file.UploadedBy</td>
@@ -200,6 +228,7 @@
                             </tbody>
                         </table>
                     </div>
+                    }
                 }
             }
         </main>
@@ -218,8 +247,10 @@
     private bool _isError;
     private List<DocumentUploadResultDto> _uploadResults = [];
     private SystemDocumentCatalogDto _systemDocumentCatalog = new();
-    private SystemDocumentCategoryDto? _selectedSystemCategory;
+    private SystemDocumentFolderDto? _selectedSystemFolder;
     private bool _systemDocumentsLoading = true;
+    private string? _previewUrl;
+    private string? _previewName;
 
     protected override async Task OnInitializedAsync()
     {
@@ -234,16 +265,21 @@
         try
         {
             _systemDocumentCatalog = await DocumentLibraryService.GetSystemDocumentsAsync();
-            _selectedSystemCategory = _systemDocumentCatalog.Categories.FirstOrDefault(x => x.Files.Count > 0)
-                ?? _systemDocumentCatalog.Categories.FirstOrDefault();
+            if (_selectedSystemFolder is not null)
+                _selectedSystemFolder = _systemDocumentCatalog.Folders
+                    .FirstOrDefault(x => x.Key == _selectedSystemFolder.Key);
         }
         catch (Exception ex) { ShowError($"載入系統文件失敗：{ex.Message}"); }
         finally { _systemDocumentsLoading = false; }
     }
 
     private IEnumerable<DocumentFolderDto> ChildrenOf(Guid? parentId) => _folders
-        .Where(x => x.ParentId == parentId)
+        .Where(x => !x.IsSystemManaged && x.ParentId == parentId)
         .OrderBy(x => x.SortOrder).ThenBy(x => x.Name);
+
+    private IEnumerable<SystemDocumentFolderDto> SystemChildrenOf(string? parentKey) =>
+        _systemDocumentCatalog.Folders.Where(x => x.ParentKey == parentKey)
+            .OrderBy(x => x.SortOrder).ThenBy(x => x.Name);
 
     private async Task LoadFoldersAsync()
     {
@@ -254,6 +290,7 @@
 
     private async Task SelectFolderAsync(DocumentFolderDto folder)
     {
+        _selectedSystemFolder = null;
         _selectedFolder = folder;
         _files = [];
         _message = null;
@@ -263,23 +300,42 @@
         catch (Exception ex) { ShowError($"載入文件失敗：{ex.Message}"); }
     }
 
+    private void SelectSystemFolder(SystemDocumentFolderDto folder)
+    {
+        _selectedFolder = null;
+        _selectedSystemFolder = folder;
+        _files = [];
+        _message = null;
+        _uploadResults = [];
+    }
+
     private async Task UploadAsync()
     {
-        if (_selectedFolder?.Level != 3) return;
+        if (SelectedFolderLevel != 3 || (_selectedFolder is null && _selectedSystemFolder?.CanUpload != true)) return;
         _uploading = true;
         _message = null;
         _uploadResults = [];
         try
         {
-            var response = await Api.UploadFilesAsync(
-                $"/api/document-library/folders/{_selectedFolder.Id}/files", _uploadContainer);
+            var uploadUrl = _selectedFolder is not null
+                ? $"/api/document-library/folders/{_selectedFolder.Id}/files"
+                : $"/api/document-library/system-folders/product-information/files?modelName={Uri.EscapeDataString(_selectedSystemFolder!.UploadModelName!)}";
+            var response = await Api.UploadFilesAsync(uploadUrl, _uploadContainer);
             if (!response.IsSuccessStatusCode) throw new BrowserApiException(response.StatusCode, response.Body);
             var batch = global::System.Text.Json.JsonSerializer.Deserialize<DocumentUploadBatchResultDto>(
                 response.Body, new global::System.Text.Json.JsonSerializerOptions(global::System.Text.Json.JsonSerializerDefaults.Web))
                 ?? throw new InvalidOperationException("無法讀取上傳結果。");
             var uploadResults = batch.Results;
-            await SelectFolderAsync(_selectedFolder);
-            await LoadFoldersAsync();
+            if (_selectedFolder is not null)
+            {
+                await SelectFolderAsync(_selectedFolder);
+                await LoadFoldersAsync();
+            }
+            else
+            {
+                await LoadSystemDocumentsAsync();
+                await LoadFoldersAsync();
+            }
             _uploadResults = uploadResults;
             var successCount = _uploadResults.Count(x => x.Success);
             var failedCount = _uploadResults.Count - successCount;
@@ -291,6 +347,15 @@
     }
 
     private void ShowError(string message) { _message = message; _isError = true; }
+    private int SelectedFolderLevel => _selectedFolder?.Level ?? _selectedSystemFolder?.Level ?? 0;
+    private string SelectedFolderName => _selectedFolder?.Name ?? _selectedSystemFolder?.Name ?? string.Empty;
+    private string? SelectedFolderDescription => _selectedFolder?.Description ?? _selectedSystemFolder?.Description;
+    private int SelectedFileCount => _selectedFolder is not null ? _files.Count : _selectedSystemFolder?.Files.Count ?? 0;
+    private static bool IsImage(string? contentType, string fileName) =>
+        DocumentLibraryRules.IsPreviewableImage(contentType, fileName);
+    private void OpenPreview(string url, string name) { _previewUrl = url; _previewName = name; }
+    private void ClosePreview() { _previewUrl = null; _previewName = null; }
+    private static string DocumentPreviewUrl(Guid id) => $"/api/document-library/files/{id}/preview";
     private static string DisplayDescription(string? value) => string.IsNullOrWhiteSpace(value) ? "未填寫說明" : value;
     private static string FormatSize(long bytes) => bytes >= 1_000_000
         ? $"{bytes / 1_000_000d:0.##} MB"

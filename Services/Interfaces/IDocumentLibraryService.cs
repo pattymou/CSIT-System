@@ -11,6 +11,7 @@ public interface IDocumentLibraryService
     Task<bool> DeleteFolderAsync(Guid id, CancellationToken cancellationToken = default);
     Task<List<DocumentLibraryFileDto>> GetFilesAsync(Guid folderId, CancellationToken cancellationToken = default);
     Task<DocumentLibraryFileDto> UploadAsync(Guid folderId, IFormFile file, string uploadedBy, CancellationToken cancellationToken = default);
+    Task<DocumentLibraryFileDto> UploadProductInformationAsync(string modelName, IFormFile file, string uploadedBy, CancellationToken cancellationToken = default);
     Task<DocumentDownload?> OpenDownloadAsync(Guid fileId, CancellationToken cancellationToken = default);
     Task<SystemDocumentCatalogDto> GetSystemDocumentsAsync(CancellationToken cancellationToken = default);
 }
