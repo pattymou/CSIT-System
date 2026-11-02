@@ -1,0 +1,16 @@
+.attachment-status-pill {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+    font-size: .82rem;
+    font-weight: 600;
+    line-height: 1.35;
+    background: rgba(148, 163, 184, .14);
+    color: #cbd5e1;
+}
+
+.attachment-status-pill.success { background: rgba(16, 185, 129, .16); color: #99f6e4; }
+.attachment-status-pill.pending { background: rgba(217, 119, 6, .18); color: #fde68a; }
+.attachment-status-pill.danger { background: rgba(220, 38, 38, .16); color: #fecaca; }
+.attachment-status-pill.neutral { background: rgba(148, 163, 184, .14); color: #cbd5e1; }

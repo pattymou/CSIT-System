@@ -55,7 +55,11 @@ public sealed class VendorService(
             .Where(x => x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
                 fileIds.Contains(x.SourceEntityId))
             .ToDictionaryAsync(x => x.SourceEntityId, cancellationToken);
-        return ToDetail(vendor, outboxes,
+        var approvedFileIds = (await db.PendingSubmissions.AsNoTracking()
+            .Where(x => fileIds.Contains(x.Id) && x.Status == ApprovalStatus.Committed &&
+                        x.ReviewerAccount != null && x.ReviewedAt != null)
+            .Select(x => x.Id).ToListAsync(cancellationToken)).ToHashSet();
+        return ToDetail(vendor, outboxes, approvedFileIds,
             kmOptions?.Value is { Enabled: true, VendorEnabled: true });
     }
 
@@ -256,7 +260,9 @@ public sealed class VendorService(
     }
 
     private static VendorDetailDto ToDetail(Vendor x,
-        IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes, bool vendorKmEnabled) => new()
+        IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes,
+        IReadOnlySet<Guid> approvedFileIds,
+        bool vendorKmEnabled) => new()
     {
         Id = x.Id, Name = x.Name, Aliases = x.Aliases, Types = x.Types, Website = x.Website,
         ContactPerson = x.ContactPerson, Phone = x.Phone, Email = x.Email, Address = x.Address,
@@ -275,6 +281,7 @@ public sealed class VendorService(
                 IsImage = ManagedAssetFileStorage.IsImage(f.ContentType, f.OriginalFileName),
                 UploadedBy = f.UploadedBy, UploadedAt = f.UploadedAt,
                 ApprovedBy = f.ApprovedBy, ApprovedAt = f.ApprovedAt,
+                WasSupervisorApproved = approvedFileIds.Contains(f.Id),
                 HasKmSchedule = outbox is not null,
                 KmEnabled = vendorKmEnabled,
                 KmStatus = outbox?.Status.ToString(),

@@ -75,12 +75,14 @@
     table-layout: fixed;
 }
 
-.approval-col-actions { width: 16%; }
-.approval-col-context { width: 28%; }
-.approval-col-file { width: 20%; }
-.approval-col-submitter { width: 12%; }
-.approval-col-time { width: 12%; }
-.approval-col-status { width: 12%; }
+.approval-col-source { width: 10%; }
+.approval-col-context { width: 18%; }
+.approval-col-file { width: 18%; }
+.approval-col-submitter { width: 11%; }
+.approval-col-time { width: 13%; }
+.approval-col-type { width: 10%; }
+.approval-col-status { width: 10%; }
+.approval-col-actions { width: 10%; }
 
 .approval-review-table :is(th, td) {
     padding: 12px 8px;
@@ -142,5 +144,5 @@
 }
 
 @media (max-width: 900px) {
-    .approval-review-table { min-width: 760px; }
+    .approval-review-table { min-width: 1050px; }
 }

@@ -65,6 +65,7 @@ public sealed class VendorFileDto
     public DateTime UploadedAt { get; set; }
     public string? ApprovedBy { get; set; }
     public DateTime? ApprovedAt { get; set; }
+    public bool WasSupervisorApproved { get; set; }
     public bool HasKmSchedule { get; set; }
     public bool KmEnabled { get; set; }
     public string? KmStatus { get; set; }

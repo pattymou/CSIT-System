@@ -160,6 +160,7 @@ public class ApparatusFileDto
     public string? DeletionError { get; set; }
     public bool CanDelete { get; set; }
     public bool IsFormalArchiveVerified { get; set; }
+    public bool WasSupervisorApproved { get; set; }
     public DateTime CreatedAt { get; set; }
 }
 

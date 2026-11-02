@@ -61,9 +61,9 @@ public sealed class EquipmentAttachmentSelectionUiTests
         Assert.DoesNotContain("\u672c\u5730\u522a\u9664\u72c0\u614b", table);
         Assert.Contains("disabled=\"@(!file.CanDelete)\"", table);
         Assert.Contains("OnDelete.InvokeAsync(file.Id)", table);
-        Assert.Contains("width: 27%", css);
+        Assert.Contains("width: 26%", css);
         Assert.Contains("overflow-wrap: anywhere", css);
-        Assert.Contains("min-width: 1100px", css);
+        Assert.Contains("min-width: 1150px", css);
     }
 
     private static string Read(params string[] parts) =>

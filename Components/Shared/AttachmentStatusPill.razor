@@ -1,0 +1,9 @@
+@using SIT.DepartmentSystem.Web.Services
+
+<span class="attachment-status-pill @Status.Tone" title="@Title">@Status.Text</span>
+
+@code {
+    [Parameter, EditorRequired] public AttachmentStatusValue Status { get; set; } =
+        AttachmentStatusPresentation.UnknownReview();
+    [Parameter] public string? Title { get; set; }
+}

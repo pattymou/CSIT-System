@@ -13,7 +13,7 @@ public sealed record ApprovalSourceDto(string Code, string Title, int SortOrder)
 
 public sealed record ApprovalSubmissionDto(
     Guid Id, string SourceMenuCode, string SourceTitle, string ContextType, string ContextId,
-    string? ContextDisplay, string? OriginalFileName, string SubmittedByAccount, DateTime SubmittedAt,
+    string? ContextDisplay, string? OriginalFileName, string? ContentType, string SubmittedByAccount, DateTime SubmittedAt,
     string SubmittedTeamCode, ApprovalStatus Status, string? ReviewerAccount, DateTime? ReviewedAt,
     string? RejectReason, bool HasStagingFile, int CommitAttemptCount, string? LastCommitError)
 {
@@ -799,7 +799,7 @@ public sealed class ApprovalSubmissionService(
 
     private static ApprovalSubmissionDto Map(PendingSubmission item, string title) => new(
         item.Id, item.SourceMenuCode, title, item.ContextType, item.ContextId, item.ContextDisplay,
-        item.OriginalFileName, item.SubmittedByAccount, item.SubmittedAt, item.SubmittedTeamCode,
+        item.OriginalFileName, item.ContentType, item.SubmittedByAccount, item.SubmittedAt, item.SubmittedTeamCode,
         item.Status, item.ReviewerAccount, item.ReviewedAt, item.RejectReason,
         !string.IsNullOrWhiteSpace(item.StagingStorageKey), item.CommitAttemptCount, item.LastCommitError)
         { SourceModuleCode = item.SourceModuleCode };

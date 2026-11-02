@@ -439,12 +439,17 @@ public sealed class DocumentLibraryTests
         var listedReport = Assert.Single(reports.Files);
         Assert.Equal("approved.pdf", listedReport.FileName);
         Assert.Equal("report-uploader", listedReport.UploadedBy);
+        Assert.Equal("已核准", listedReport.ReviewStatusDisplay);
+        Assert.Equal("正式入庫完成", listedReport.ArchiveStatusDisplay);
+        Assert.Equal("KM 尚未啟用", listedReport.KmStatusDisplay);
         Assert.Equal($"/api/files/{approvedFinal.Id}/download", listedReport.DownloadUrl);
         var applications = Assert.Single(catalog.Folders, x => x.ParentKey == model.Key && x.Name == "申請單文件");
         var listedApplication = Assert.Single(applications.Files);
         Assert.Equal("application.png", listedApplication.FileName);
         Assert.True(listedApplication.IsImage);
         Assert.Equal("patty", listedApplication.UploadedBy);
+        Assert.Equal("已核准", listedApplication.ReviewStatusDisplay);
+        Assert.Equal("正式入庫完成", listedApplication.ArchiveStatusDisplay);
         Assert.Equal($"/api/document-library/files/{applicationDocument.Id}/download", listedApplication.DownloadUrl);
 
         var managed = Assert.Single(catalog.Folders, x => x.Level == 1 && x.Name == "設備儀器管理");
@@ -455,12 +460,17 @@ public sealed class DocumentLibraryTests
         Assert.Equal("equipment.jpg", listedEquipment.FileName);
         Assert.True(listedEquipment.IsImage);
         Assert.Equal("equipment-uploader", listedEquipment.UploadedBy);
+        Assert.Equal("主管免審", listedEquipment.ReviewStatusDisplay);
+        Assert.Equal("正式入庫完成", listedEquipment.ArchiveStatusDisplay);
         Assert.Equal($"/api/assets/files/{equipmentFile.Id}/content", listedEquipment.DownloadUrl);
 
         var vendorCategory = Assert.Single(catalog.Folders, x => x.ParentKey == managed.Key && x.Name == "廠商資訊");
         var vendorFolder = Assert.Single(catalog.Folders, x => x.ParentKey == vendorCategory.Key);
         Assert.Equal("Vendor A", vendorFolder.Name);
-        Assert.Equal("vendor-uploader", Assert.Single(vendorFolder.Files).UploadedBy);
+        var listedVendor = Assert.Single(vendorFolder.Files);
+        Assert.Equal("vendor-uploader", listedVendor.UploadedBy);
+        Assert.Equal("主管免審", listedVendor.ReviewStatusDisplay);
+        Assert.Equal("正式入庫完成", listedVendor.ArchiveStatusDisplay);
         Assert.DoesNotContain(vendorFolder.Files, x => x.FileName == rejectedVendorFile.OriginalFileName);
 
         await using var after = await factory.CreateDbContextAsync();
@@ -498,8 +508,8 @@ public sealed class DocumentLibraryTests
         Assert.DoesNotContain("<span>📄</span><span>@l3.Name</span>", source);
         Assert.Contains("L@(SelectedFolderLevel)", source);
         Assert.Contains("共 @SelectedFileCount 份文件", source);
-        Assert.Contains("<th>來源</th><th>上傳者</th>", source);
-        Assert.Contains("colspan=\"7\"", source);
+        Assert.Contains("<th>審核狀態</th><th>正式入庫</th><th>KM 分析</th><th>來源</th><th>上傳者</th>", source);
+        Assert.Contains("colspan=\"9\"", source);
         Assert.DoesNotContain("summary @onclick", source);
         Assert.DoesNotContain("<details class=\"tree-l2\" open>", source);
         var css = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "Components", "Pages", "DocumentLibrary.razor.css"));

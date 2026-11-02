@@ -223,6 +223,7 @@ public class ApparatusService : IApparatusService
         var outboxes = await LoadEquipmentOutboxesAsync(entity.Files);
         var deletions = await LoadEquipmentDeletionsAsync(entity.Files);
         var verifiedFiles = await VerifyFormalFilesAsync(entity.Files);
+        var approvedFiles = await LoadSupervisorApprovedFileIdsAsync(entity.Files);
         var lifecycleRecords = moduleCode == "equipment"
             ? await _db.ReservationItems.AsNoTracking()
                 .Where(x => x.ApparatusId == entity.Id)
@@ -242,7 +243,7 @@ public class ApparatusService : IApparatusService
         return ToDetailDto(
             entity,
             ApparatusCustodianResolver.GetDisplayName(custodianNames, entity.CustodianAccount),
-            outboxes, deletions, verifiedFiles, lifecycleRecords);
+            outboxes, deletions, verifiedFiles, approvedFiles, lifecycleRecords);
     }
 
     public async Task<string> CreateAsync(string moduleCode, ApparatusUpsertRequest request)
@@ -484,8 +485,9 @@ public class ApparatusService : IApparatusService
         var outboxes = await LoadEquipmentOutboxesAsync(files);
         var deletions = await LoadEquipmentDeletionsAsync(files);
         var verifiedFiles = await VerifyFormalFilesAsync(files);
+        var approvedFiles = await LoadSupervisorApprovedFileIdsAsync(files);
         return files.Select(x => ToFileDto(x, outboxes, deletions,
-            verifiedFiles.Contains(x.Id))).ToList();
+            verifiedFiles.Contains(x.Id), approvedFiles.Contains(x.Id))).ToList();
     }
 
     public async Task UploadFilesAsync(string moduleCode, string apparatusId, IReadOnlyList<IFormFile> files,
@@ -943,6 +945,7 @@ public class ApparatusService : IApparatusService
         IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes,
         IReadOnlyDictionary<Guid, EquipmentFileDeletionJob> deletions,
         IReadOnlySet<Guid> verifiedFiles,
+        IReadOnlySet<Guid> approvedFiles,
         List<EquipmentLifecycleRecordDto> lifecycleRecords)
     {
         var environmentAssignment = x.EnvironmentGroupDevices
@@ -1000,7 +1003,7 @@ public class ApparatusService : IApparatusService
             Files = x.Files
                 .OrderByDescending(f => f.CreatedAt)
                 .Select(file => ToFileDto(file, outboxes, deletions,
-                    verifiedFiles.Contains(file.Id)))
+                    verifiedFiles.Contains(file.Id), approvedFiles.Contains(file.Id)))
                 .ToList()
         };
     }
@@ -1008,7 +1011,8 @@ public class ApparatusService : IApparatusService
     private ApparatusFileDto ToFileDto(ApparatusFile x,
         IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes,
         IReadOnlyDictionary<Guid, EquipmentFileDeletionJob> deletions,
-        bool isFormalArchiveVerified = false)
+        bool isFormalArchiveVerified = false,
+        bool wasSupervisorApproved = false)
     {
         outboxes.TryGetValue(x.Id, out var outbox);
         deletions.TryGetValue(x.Id, out var deletion);
@@ -1045,8 +1049,19 @@ public class ApparatusService : IApparatusService
             DeletionError = deletion?.LastErrorMessage ?? deletion?.LastErrorCode,
             CanDelete = deletion is null ||
                 deletion.Status == EquipmentFileDeletionStatuses.CleanupFailed,
-            IsFormalArchiveVerified = isFormalArchiveVerified
+            IsFormalArchiveVerified = isFormalArchiveVerified,
+            WasSupervisorApproved = wasSupervisorApproved
         };
+    }
+
+    private async Task<HashSet<Guid>> LoadSupervisorApprovedFileIdsAsync(IEnumerable<ApparatusFile> files)
+    {
+        var ids = files.Select(x => x.Id).ToArray();
+        if (ids.Length == 0) return [];
+        return (await _db.PendingSubmissions.AsNoTracking()
+            .Where(x => ids.Contains(x.Id) && x.Status == ApprovalStatus.Committed &&
+                        x.ReviewerAccount != null && x.ReviewedAt != null)
+            .Select(x => x.Id).ToListAsync()).ToHashSet();
     }
 
     private static async Task<HashSet<Guid>> VerifyFormalFilesAsync(IEnumerable<ApparatusFile> files)

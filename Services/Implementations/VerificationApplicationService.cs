@@ -635,7 +635,8 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         var account = VerificationApplicationSecurity.GetAccount(user);
         var isAdmin = user.IsInRole("Admin");
         return ListAsync(x => x.Status == VerificationApplicationStatus.Submitted && x.ApplicantAccount != account &&
-            (isAdmin || x.AssignedLeaderAccount == account), page, pageSize, cancellationToken);
+            (isAdmin || x.AssignedLeaderAccount == account), page, pageSize, cancellationToken,
+            includeFiles: true);
     }
 
     public async Task<VerificationApplicationDto?> GetForCsitAsync(Guid id, ClaimsPrincipal user, CancellationToken cancellationToken = default)
@@ -658,14 +659,16 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
         System.Linq.Expressions.Expression<Func<VerificationApplication, bool>> predicate,
         int page,
         int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool includeFiles = false)
     {
         page = Math.Max(1, page);
         pageSize = Math.Clamp(pageSize, 1, 200);
         var query = _db.VerificationApplications.AsNoTracking().Where(predicate);
 
         var totalCount = await query.CountAsync(cancellationToken);
-        var entities = await query
+        var orderedQuery = includeFiles ? query.Include(x => x.Files) : query;
+        var entities = await orderedQuery
             .OrderByDescending(x => x.SubmittedAt)
             .ThenByDescending(x => x.ApplicationNo)
             .Skip((page - 1) * pageSize)
@@ -1379,6 +1382,7 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
             FileSize = x.FileSize,
             UploadedBy = x.UploadedBy,
             UploadedAt = x.CreatedAt,
+            ApplicationStatus = entity.Status,
             ModelName = entity.ProductModel,
             DocumentFolderId = x.DocumentLibraryFile?.FolderId,
             DocumentLibraryFileId = x.DocumentLibraryFileId

@@ -33,6 +33,10 @@ public sealed class VerificationApplicationFileService(
             .Where(x => x.VerificationApplicationId == applicationId)
             .OrderBy(x => x.CreatedAt)
             .ToListAsync(cancellationToken);
+        var approvalBypassed = application.Status == VerificationApplicationStatus.Accepted &&
+            await db.ApprovalAuditEvents.AsNoTracking().AnyAsync(x =>
+                x.SubmissionId == applicationId && x.Action == ApprovalAuditActions.ApprovalBypassed,
+                cancellationToken);
         var pending = attachmentArchive is null
             ? new Dictionary<Guid, PendingVerificationAttachmentArchive>()
             : (await attachmentArchive.ReadPendingAsync(cancellationToken))
@@ -47,6 +51,8 @@ public sealed class VerificationApplicationFileService(
         var result = files.Select(x => ToDto(
             x,
             application.ProductModel,
+            application.Status,
+            approvalBypassed,
             FormalStatus(application.Status, x, pending.GetValueOrDefault(x.Id)),
             pending.GetValueOrDefault(x.Id)?.LastError)).ToList();
         foreach (var file in result)
@@ -146,7 +152,7 @@ public sealed class VerificationApplicationFileService(
                     throw DuplicateFileName(originalName);
                 throw;
             }
-            return ToDto(entity, application.ProductModel);
+            return ToDto(entity, application.ProductModel, application.Status, false);
         }
         catch
         {
@@ -258,6 +264,8 @@ public sealed class VerificationApplicationFileService(
     private static VerificationApplicationFileDto ToDto(
         VerificationApplicationFile file,
         string? modelName,
+        VerificationApplicationStatus applicationStatus,
+        bool supervisorApprovalBypassed,
         string formalArchiveStatus = VerificationAttachmentArchiveStatuses.NotApplicable,
         string? formalArchiveError = null) => new()
     {
@@ -267,6 +275,8 @@ public sealed class VerificationApplicationFileService(
         FileSize = file.FileSize,
         UploadedBy = file.UploadedBy,
         UploadedAt = file.CreatedAt,
+        ApplicationStatus = applicationStatus,
+        SupervisorApprovalBypassed = supervisorApprovalBypassed,
         ModelName = modelName,
         DocumentFolderId = file.DocumentLibraryFile?.FolderId,
         DocumentLibraryFileId = file.DocumentLibraryFileId,

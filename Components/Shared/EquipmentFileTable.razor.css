@@ -1,9 +1,10 @@
-.equipment-file-table { table-layout: fixed; min-width: 1100px; }
-.equipment-file-table .equipment-file-name-column { width: 27%; }
-.equipment-file-table .equipment-file-type-column { width: 18%; }
-.equipment-file-table .equipment-file-archive-column { width: 20%; }
-.equipment-file-table .equipment-file-km-column { width: 20%; }
-.equipment-file-table .equipment-file-actions-column { width: 15%; }
+.equipment-file-table { table-layout: fixed; min-width: 1150px; }
+.equipment-file-table .equipment-file-name-column { width: 26%; }
+.equipment-file-table .equipment-file-type-column { width: 16%; }
+.equipment-file-table .equipment-file-review-column { width: 14%; }
+.equipment-file-table .equipment-file-archive-column { width: 16%; }
+.equipment-file-table .equipment-file-km-column { width: 16%; }
+.equipment-file-table .equipment-file-actions-column { width: 12%; }
 .equipment-file-table td { vertical-align: top; }
 .equipment-file-table td:first-child { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .equipment-file-name { display: block; max-width: 100%; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
@@ -12,8 +13,3 @@
 .metadata-suggestion { margin-top: .75rem; max-width: 720px; }
 .metadata-suggestion textarea { width: 100%; margin-top: .5rem; font-family: ui-monospace, monospace; }
 .metadata-suggestion pre { max-height: 280px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
-.attachment-status { display:inline-block; white-space:nowrap; padding:3px 7px; border-radius:999px; background:rgba(148,163,184,.14); color:#cbd5e1; font-size:.82rem; }
-.attachment-status.completed { background:rgba(16,185,129,.16); color:#99f6e4; }
-.attachment-status.failed { background:rgba(220,38,38,.16); color:#fecaca; }
-.attachment-status.processing { background:rgba(59,130,246,.16); color:#bfdbfe; }
-.attachment-status.warning { background:rgba(217,119,6,.16); color:#fde68a; }

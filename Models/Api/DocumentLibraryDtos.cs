@@ -37,6 +37,12 @@ public sealed class DocumentLibraryFileDto
     public string ProcessingStatusDisplay { get; set; } = string.Empty;
     public string ProcessingStatusCssClass { get; set; } = string.Empty;
     public string ArchiveStatus { get; set; } = string.Empty;
+    public string ReviewStatusDisplay { get; set; } = string.Empty;
+    public string ReviewStatusTone { get; set; } = string.Empty;
+    public string ArchiveStatusDisplay { get; set; } = string.Empty;
+    public string ArchiveStatusTone { get; set; } = string.Empty;
+    public string KmStatusDisplay { get; set; } = string.Empty;
+    public string KmStatusTone { get; set; } = string.Empty;
     public string? ProcessingError { get; set; }
     public string? ArchiveError { get; set; }
     public bool MetadataAvailable { get; set; }
@@ -86,6 +92,12 @@ public sealed class SystemDocumentFileDto
     public DateTime UploadedAt { get; set; }
     public string ProcessingStatusDisplay { get; set; } = string.Empty;
     public string ProcessingStatusCssClass { get; set; } = string.Empty;
+    public string ReviewStatusDisplay { get; set; } = string.Empty;
+    public string ReviewStatusTone { get; set; } = string.Empty;
+    public string ArchiveStatusDisplay { get; set; } = string.Empty;
+    public string ArchiveStatusTone { get; set; } = string.Empty;
+    public string KmStatusDisplay { get; set; } = string.Empty;
+    public string KmStatusTone { get; set; } = string.Empty;
     public string DownloadUrl { get; set; } = string.Empty;
     public string PreviewUrl { get; set; } = string.Empty;
 }

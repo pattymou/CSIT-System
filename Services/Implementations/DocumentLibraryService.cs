@@ -14,8 +14,10 @@ public sealed class DocumentLibraryService(
     IDbContextFactory<AppDbContext> dbFactory,
     IOptions<DocumentStorageOptions> options,
     IOptions<DocumentStagingOptions> stagingOptions,
-    IBusinessWriteAuthorizationGuard businessWrite) : IDocumentLibraryService
+    IBusinessWriteAuthorizationGuard businessWrite,
+    IOptions<KmIntegrationOptions>? kmOptions = null) : IDocumentLibraryService
 {
+    private readonly KmIntegrationOptions configuredKm = kmOptions?.Value ?? new KmIntegrationOptions();
     public async Task<List<DocumentFolderDto>> GetFoldersAsync(CancellationToken cancellationToken = default)
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
@@ -75,6 +77,32 @@ public sealed class DocumentLibraryService(
         var vendorFiles = await db.VendorFiles.AsNoTracking().Include(x => x.Vendor)
             .Where(x => x.ArchiveStatus == FileArchiveStatuses.Archived)
             .OrderByDescending(x => x.UploadedAt).ToListAsync(cancellationToken);
+        var sourceIds = testReports.Select(x => x.Id)
+            .Concat(applicationFiles.Select(x => x.Id))
+            .Concat(equipmentFiles.Select(x => x.Id))
+            .Concat(vendorFiles.Select(x => x.Id)).Distinct().ToArray();
+        var sourceKm = sourceIds.Length == 0
+            ? new Dictionary<(string Type, Guid Id), KmIntegrationOutbox>()
+            : (await db.KmIntegrationOutbox.AsNoTracking()
+                .Where(x => sourceIds.Contains(x.SourceEntityId))
+                .ToListAsync(cancellationToken))
+                .GroupBy(x => (x.SourceEntityType, x.SourceEntityId))
+                .ToDictionary(x => x.Key, x => x.OrderByDescending(row => row.Version).First());
+        var bypassCandidateIds = testReports.Select(x => x.Id)
+            .Concat(applicationFiles.Select(x => x.VerificationApplicationId)).Distinct().ToArray();
+        var bypassedIds = bypassCandidateIds.Length == 0
+            ? []
+            : (await db.ApprovalAuditEvents.AsNoTracking()
+                .Where(x => bypassCandidateIds.Contains(x.SubmissionId) &&
+                            x.Action == ApprovalAuditActions.ApprovalBypassed)
+                .Select(x => x.SubmissionId).ToListAsync(cancellationToken)).ToHashSet();
+        var approvalCandidateIds = equipmentFiles.Select(x => x.Id).Concat(vendorFiles.Select(x => x.Id)).ToArray();
+        var supervisorApprovedIds = approvalCandidateIds.Length == 0
+            ? []
+            : (await db.PendingSubmissions.AsNoTracking()
+                .Where(x => approvalCandidateIds.Contains(x.Id) && x.Status == ApprovalStatus.Committed &&
+                            x.ReviewerAccount != null && x.ReviewedAt != null)
+                .Select(x => x.Id).ToListAsync(cancellationToken)).ToHashSet();
 
         var folders = new List<SystemDocumentFolderDto>();
         var modelNames = testReports.Select(x => ModelNameFor(x, applicationModels))
@@ -93,7 +121,7 @@ public sealed class DocumentLibraryService(
 
                 var reportFiles = testReports.Where(x => string.Equals(
                         ModelNameFor(x, applicationModels), modelName, StringComparison.OrdinalIgnoreCase))
-                    .Select(x => new SystemDocumentFileDto
+                    .Select(x => ApplyStatuses(new SystemDocumentFileDto
                     {
                         SourceKey = $"test-report:{x.Id:N}", FileName = x.FileName,
                         SourceModule = "測試報告", UploadedBy = x.UploadEmp, ContentType = x.ContentType,
@@ -101,7 +129,9 @@ public sealed class DocumentLibraryService(
                         UploadedAt = x.CreatedAt, ProcessingStatusDisplay = "正式入庫完成",
                         ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/files/{x.Id}/download",
                         PreviewUrl = $"/api/files/{x.Id}/download"
-                    }).ToList();
+                    }, bypassedIds.Contains(x.Id) ? AttachmentStatusPresentation.Exempt() : AttachmentStatusPresentation.Approved(),
+                        AttachmentStatusPresentation.Archive("Completed"),
+                        SourceKm(sourceKm, KmIntegrationSourceEntityTypes.TestReport, x.Id))).ToList();
                 folders.Add(SystemFolder($"{modelKey}:reports", modelKey, 3, "測試報告",
                     "已核准、已正式完成的測試報告。", 10, reportFiles));
 
@@ -114,7 +144,7 @@ public sealed class DocumentLibraryService(
 
                 var linkedFiles = applicationFiles.Where(x => string.Equals(
                         x.VerificationApplication.ProductModel, modelName, StringComparison.OrdinalIgnoreCase))
-                    .Select(x => new SystemDocumentFileDto
+                    .Select(x => ApplyStatuses(new SystemDocumentFileDto
                     {
                         SourceKey = $"application-document:{x.DocumentLibraryFileId!.Value:N}", FileName = x.FileName,
                         SourceModule = "驗證申請", UploadedBy = x.UploadedBy, ContentType = x.ContentType,
@@ -123,7 +153,9 @@ public sealed class DocumentLibraryService(
                         ProcessingStatusCssClass = "completed",
                         DownloadUrl = $"/api/document-library/files/{x.DocumentLibraryFileId}/download",
                         PreviewUrl = $"/api/document-library/files/{x.DocumentLibraryFileId}/preview"
-                    }).ToList();
+                    }, bypassedIds.Contains(x.VerificationApplicationId) ? AttachmentStatusPresentation.Exempt() : AttachmentStatusPresentation.Approved(),
+                        AttachmentStatusPresentation.Archive("Completed"),
+                        SourceKm(sourceKm, KmIntegrationSourceEntityTypes.VerificationApplicationFile, x.Id))).ToList();
                 folders.Add(SystemFolder($"{modelKey}:applications", modelKey, 3, "申請單文件",
                     "主管核准且正式歸檔完成的申請單附件。", 30, linkedFiles));
             }
@@ -141,7 +173,7 @@ public sealed class DocumentLibraryService(
             {
                 var equipment = group.First().Apparatus;
                 var name = EquipmentFolderName(equipment);
-                var files = group.Select(x => new SystemDocumentFileDto
+                var files = group.Select(x => ApplyStatuses(new SystemDocumentFileDto
                 {
                     SourceKey = $"equipment:{x.Id:N}", FileName = x.OriginalFileName ?? x.FileName,
                     SourceModule = "設備管理", UploadedBy = x.UploadEmp, ContentType = x.ContentType,
@@ -149,14 +181,17 @@ public sealed class DocumentLibraryService(
                     UploadedAt = x.CreatedAt, ProcessingStatusDisplay = "正式入庫完成",
                     ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/assets/files/{x.Id}/content",
                     PreviewUrl = $"/api/assets/files/{x.Id}/image"
-                }).ToList();
+                }, supervisorApprovedIds.Contains(x.Id) ? AttachmentStatusPresentation.Approved() : AttachmentStatusPresentation.Exempt(),
+                    AttachmentStatusPresentation.Archive(x.ArchiveStatus),
+                    SourceKm(sourceKm, KmIntegrationSourceEntityTypes.ApparatusFile, x.Id,
+                        IsImage(x.ContentType, x.OriginalFileName ?? x.FileName), configuredKm.EquipmentEnabled))).ToList();
                 folders.Add(SystemFolder(SystemKey("equipment", group.Key), equipmentKey, 3, name,
                     $"設備 ID：{group.Key}", 10, files));
             }
             foreach (var group in vendorFiles.GroupBy(x => x.VendorId).OrderBy(x => x.First().Vendor.Name))
             {
                 var vendor = group.First().Vendor;
-                var files = group.Select(x => new SystemDocumentFileDto
+                var files = group.Select(x => ApplyStatuses(new SystemDocumentFileDto
                 {
                     SourceKey = $"vendor:{x.Id:N}", FileName = x.OriginalFileName,
                     SourceModule = "廠商管理", UploadedBy = x.UploadedBy, ContentType = x.ContentType,
@@ -164,7 +199,10 @@ public sealed class DocumentLibraryService(
                     UploadedAt = x.UploadedAt, ProcessingStatusDisplay = "正式入庫完成",
                     ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/vendors/files/{x.Id}/content",
                     PreviewUrl = $"/api/vendors/files/{x.Id}/content"
-                }).ToList();
+                }, supervisorApprovedIds.Contains(x.Id) ? AttachmentStatusPresentation.Approved() : AttachmentStatusPresentation.Exempt(),
+                    AttachmentStatusPresentation.Archive(x.ArchiveStatus),
+                    SourceKm(sourceKm, KmIntegrationSourceEntityTypes.VendorFile, x.Id,
+                        moduleEnabled: configuredKm.VendorEnabled))).ToList();
                 folders.Add(SystemFolder(SystemKey("vendor", group.Key.ToString("N")), vendorKey, 3,
                     vendor.Name, $"Vendor ID：{group.Key}", 10, files));
             }
@@ -501,7 +539,7 @@ public sealed class DocumentLibraryService(
         Files = files?.DistinctBy(x => x.SourceKey).ToList() ?? []
     };
 
-    private static SystemDocumentFileDto ToSystemFile(DocumentLibraryFile file)
+    private SystemDocumentFileDto ToSystemFile(DocumentLibraryFile file)
     {
         var dto = ToDto(file, file.ProcessingJob, null);
         var download = $"/api/document-library/files/{file.Id}/download";
@@ -517,9 +555,42 @@ public sealed class DocumentLibraryService(
             UploadedAt = file.UploadedAt,
             ProcessingStatusDisplay = dto.ProcessingStatusDisplay,
             ProcessingStatusCssClass = dto.ProcessingStatusCssClass,
+            ReviewStatusDisplay = dto.ReviewStatusDisplay,
+            ReviewStatusTone = dto.ReviewStatusTone,
+            ArchiveStatusDisplay = dto.ArchiveStatusDisplay,
+            ArchiveStatusTone = dto.ArchiveStatusTone,
+            KmStatusDisplay = dto.KmStatusDisplay,
+            KmStatusTone = dto.KmStatusTone,
             DownloadUrl = download,
             PreviewUrl = $"/api/document-library/files/{file.Id}/preview"
         };
+    }
+
+    private AttachmentStatusValue SourceKm(
+        IReadOnlyDictionary<(string Type, Guid Id), KmIntegrationOutbox> rows,
+        string sourceType,
+        Guid sourceId,
+        bool excludedByPolicy = false,
+        bool moduleEnabled = true)
+    {
+        rows.TryGetValue((sourceType, sourceId), out var row);
+        return AttachmentStatusPresentation.Km(row is not null, configuredKm.Enabled && moduleEnabled,
+            row?.Status.ToString(), excludedByPolicy);
+    }
+
+    private static SystemDocumentFileDto ApplyStatuses(
+        SystemDocumentFileDto file,
+        AttachmentStatusValue review,
+        AttachmentStatusValue archive,
+        AttachmentStatusValue km)
+    {
+        file.ReviewStatusDisplay = review.Text;
+        file.ReviewStatusTone = review.Tone;
+        file.ArchiveStatusDisplay = archive.Text;
+        file.ArchiveStatusTone = archive.Tone;
+        file.KmStatusDisplay = km.Text;
+        file.KmStatusTone = km.Tone;
+        return file;
     }
 
     private static bool IsReservedSystemRoot(string? name) =>
@@ -623,7 +694,7 @@ public sealed class DocumentLibraryService(
         return description;
     }
 
-    private static DocumentLibraryFileDto ToDto(
+    private DocumentLibraryFileDto ToDto(
         DocumentLibraryFile entity,
         DocumentProcessingJob? job,
         string? kmJobId) => new()
@@ -641,6 +712,12 @@ public sealed class DocumentLibraryService(
         Sha256 = entity.Sha256,
         ProcessingStatus = job?.Status ?? string.Empty,
         ArchiveStatus = job?.ArchiveStatus ?? string.Empty,
+        ReviewStatusDisplay = AttachmentStatusPresentation.Exempt().Text,
+        ReviewStatusTone = AttachmentStatusPresentation.Exempt().Tone,
+        ArchiveStatusDisplay = AttachmentStatusPresentation.Archive(job?.ArchiveStatus).Text,
+        ArchiveStatusTone = AttachmentStatusPresentation.Archive(job?.ArchiveStatus).Tone,
+        KmStatusDisplay = AttachmentStatusPresentation.Km(job is not null, configuredKm.Enabled, job?.Status).Text,
+        KmStatusTone = AttachmentStatusPresentation.Km(job is not null, configuredKm.Enabled, job?.Status).Tone,
         ProcessingError = job?.KmErrorMessage ?? job?.LastError,
         ArchiveError = job?.ArchiveLastError,
         MetadataAvailable = !string.IsNullOrWhiteSpace(job?.MetadataJson),

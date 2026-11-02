@@ -3,6 +3,7 @@
 @rendermode InteractiveServer
 @using SIT.DepartmentSystem.Web.Services.Approval
 @using SIT.DepartmentSystem.Web.Entities
+@using SIT.DepartmentSystem.Web.Services
 @inject ApprovalSubmissionService Submissions
 @inject IVerificationApplicationService VerificationApplications
 @inject AuthenticationStateProvider AuthProvider
@@ -51,23 +52,35 @@ else
                 }
                 else
                 {
-                    <div class="project-table-wrap approval-review-table-wrap"><table class="project-table approval-review-table">
-                        <thead><tr><th>申請編號</th><th>Model Name</th><th>Product Type</th><th>Team</th><th>申請人</th><th>送出日期</th><th>狀態</th></tr></thead>
+                    <div class="project-table-wrap approval-review-table-wrap"><table class="project-table approval-review-table verification-attachment-review-table">
+                        <thead><tr><th>所屬區域</th><th>主資料名稱</th><th>附件名稱</th><th>上傳者</th><th>上傳時間</th><th>類型</th><th>審核狀態</th></tr></thead>
                         <tbody>
                         @foreach (var item in _verificationItems)
                         {
-                            <tr class="clickable-row verification-review-row" tabindex="0" role="link"
-                                aria-label="@($"開啟驗證申請 {item.ApplicationNo}")"
-                                @onclick="() => OpenVerification(item.Id)"
-                                @onkeydown="e => OpenVerificationByKeyboard(e, item.Id)">
-                                <td><strong>@item.ApplicationNo</strong></td>
-                                <td>@Display(item.ProductModel ?? item.ProjectName)</td>
-                                <td>@Display(item.ValidationRequest?.FormSnapshot?.ProductTypeLabel ?? item.ValidationRequest?.ProductTypeCode)</td>
-                                <td>@Display(item.TeamName ?? item.TeamCode)</td>
-                                <td title="@item.ApplicantAccount">@Display(item.ApplicantName)</td>
-                                <td>@item.SubmittedAt?.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
-                                <td>待審核</td>
-                            </tr>
+                            @if (item.Files.Count == 0)
+                            {
+                                <tr class="clickable-row verification-review-row" tabindex="0" role="link"
+                                    @onclick="() => OpenVerification(item.Id)" @onkeydown="e => OpenVerificationByKeyboard(e, item.Id)">
+                                    <td>驗證申請</td><td><strong>@item.ApplicationNo</strong><small>@Display(item.ProductModel ?? item.ProjectName) · @Display(item.ValidationRequest?.FormSnapshot?.ProductTypeLabel ?? item.ValidationRequest?.ProductTypeCode)</small></td><td>—</td>
+                                    <td title="@item.ApplicantAccount">@Display(item.ApplicantName)</td>
+                                    <td>@item.SubmittedAt?.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td><td>—</td>
+                                    <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Review(item.Status)" /></td>
+                                </tr>
+                            }
+                            else
+                            {
+                                @foreach (var file in item.Files)
+                                {
+                                    <tr class="clickable-row verification-review-row" tabindex="0" role="link"
+                                        @onclick="() => OpenVerification(item.Id)" @onkeydown="e => OpenVerificationByKeyboard(e, item.Id)">
+                                        <td>驗證申請</td><td><strong>@item.ApplicationNo</strong><small>@Display(item.ProductModel ?? item.ProjectName) · @Display(item.ValidationRequest?.FormSnapshot?.ProductTypeLabel ?? item.ValidationRequest?.ProductTypeCode)</small></td><td title="@file.FileName">@file.FileName</td>
+                                        <td title="@file.UploadedBy">@Display(file.UploadedBy)</td>
+                                        <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                                        <td>@FileType(file.ContentType, file.FileName)</td>
+                                        <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Review(item.Status)" /></td>
+                                    </tr>
+                                }
+                            }
                         }
                         </tbody>
                     </table></div>
@@ -83,29 +96,15 @@ else
             else
             {
                 <div class="project-table-wrap approval-review-table-wrap"><table class="project-table approval-review-table">
-                    <colgroup><col class="approval-col-actions" /><col class="approval-col-context" />
-                        <col class="approval-col-file" /><col class="approval-col-submitter" />
-                        <col class="approval-col-time" /><col class="approval-col-status" /></colgroup>
-                    <thead><tr><th>操作</th><th>項目</th><th>檔案</th><th>提交者</th><th>提交時間</th><th>狀態</th></tr></thead>
+                    <colgroup><col class="approval-col-source" /><col class="approval-col-context" />
+                        <col class="approval-col-file" /><col class="approval-col-submitter" /><col class="approval-col-time" />
+                        <col class="approval-col-type" /><col class="approval-col-status" /><col class="approval-col-actions" /></colgroup>
+                    <thead><tr><th>所屬區域</th><th>主資料名稱</th><th>附件名稱</th><th>上傳者</th><th>上傳時間</th><th>類型</th><th>審核狀態</th><th>操作</th></tr></thead>
                     <tbody>
                     @foreach (var item in _items)
                     {
                         <tr>
-                            <td class="approval-actions-cell"><div class="approval-actions">
-                                @if (_canWrite && item.Status == ApprovalStatus.Pending)
-                                {
-                                    <button class="table-chip-btn" @onclick="() => ApproveAsync(item.Id)">核准</button>
-                                    <button class="table-chip-btn danger" @onclick="() => BeginReject(item.Id)">退回</button>
-                                }
-                                else if (_canWrite && item.Status == ApprovalStatus.CommitFailed)
-                                {
-                                    <button class="table-chip-btn" @onclick="() => RetryAsync(item.Id)">重試提交</button>
-                                }
-                                else if (item.Status == ApprovalStatus.ApprovedPendingCommit)
-                                {
-                                    <span class="hint-text">正式寫入中</span>
-                                }
-                            </div></td>
+                            <td>@item.SourceTitle</td>
                             <td title="@Display(item.ContextDisplay ?? item.ContextId)">
                                 @if (item.ContextRoute is not null)
                                 {
@@ -128,11 +127,27 @@ else
                             </td>
                             <td title="@item.SubmittedByAccount">@item.SubmittedByAccount</td>
                             <td>@item.SubmittedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
-                            <td title="@StatusLabel(item.Status)">@StatusLabel(item.Status)</td>
+                            <td>@FileType(item.ContentType, item.OriginalFileName)</td>
+                            <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Review(item.Status)" /></td>
+                            <td class="approval-actions-cell"><div class="approval-actions">
+                                @if (_canWrite && item.Status == ApprovalStatus.Pending)
+                                {
+                                    <button class="table-chip-btn" @onclick="() => ApproveAsync(item.Id)">核准</button>
+                                    <button class="table-chip-btn danger" @onclick="() => BeginReject(item.Id)">退回</button>
+                                }
+                                else if (_canWrite && item.Status == ApprovalStatus.CommitFailed)
+                                {
+                                    <button class="table-chip-btn" @onclick="() => RetryAsync(item.Id)">重試提交</button>
+                                }
+                                else if (item.Status == ApprovalStatus.ApprovedPendingCommit)
+                                {
+                                    <span class="hint-text">正式寫入中</span>
+                                }
+                            </div></td>
                         </tr>
                         @if (_rejectingId == item.Id)
                         {
-                            <tr><td class="approval-reject-editor" colspan="6">
+                            <tr><td class="approval-reject-editor" colspan="8">
                                 <label for="reject-reason">退回原因（必填）</label>
                                 <textarea id="reject-reason" @bind="_rejectReason" @bind:event="oninput" maxlength="2000" required></textarea>
                                 <button class="table-chip-btn danger" disabled="@(string.IsNullOrWhiteSpace(_rejectReason))"
@@ -239,6 +254,13 @@ else
         catch { _message = "操作未完成，請重新整理後再試。"; }
     }
     private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
+    private static string FileType(string? contentType, string? fileName)
+    {
+        if (!string.IsNullOrWhiteSpace(contentType) && contentType.StartsWith("image/", StringComparison.OrdinalIgnoreCase))
+            return "圖片";
+        var extension = Path.GetExtension(fileName);
+        return string.IsNullOrWhiteSpace(extension) ? "一般文件" : $"{extension.TrimStart('.').ToUpperInvariant()} 文件";
+    }
     private async Task RefreshAsync()
     {
         if (_selectedCode is null) return;
@@ -249,15 +271,6 @@ else
             _successMessage = StatusMessage(await Submissions.GetStatusForReviewAsync(_lastApprovedId.Value, user));
         }
     }
-    private static string StatusLabel(ApprovalStatus status) => status switch
-    {
-        ApprovalStatus.Pending => "待主管審核",
-        ApprovalStatus.ApprovedPendingCommit => "已核准，正式寫入中",
-        ApprovalStatus.CommitFailed => "已核准，正式寫入失敗，待處理",
-        ApprovalStatus.Committed => "已正式寫入",
-        ApprovalStatus.Rejected => "已退回",
-        _ => status.ToString()
-    };
     private static string StatusMessage(ApprovalStatus status) => status switch
     {
         ApprovalStatus.Committed => "核准完成，資料已正式寫入。",

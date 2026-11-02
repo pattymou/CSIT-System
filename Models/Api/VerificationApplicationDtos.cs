@@ -88,6 +88,8 @@ public class VerificationApplicationFileDto
     public long FileSize { get; set; }
     public string UploadedBy { get; set; } = string.Empty;
     public DateTime UploadedAt { get; set; }
+    public VerificationApplicationStatus ApplicationStatus { get; set; }
+    public bool SupervisorApprovalBypassed { get; set; }
     public string? ModelName { get; set; }
     public Guid? DocumentFolderId { get; set; }
     public Guid? DocumentLibraryFileId { get; set; }
