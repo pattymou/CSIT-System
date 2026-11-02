@@ -7,6 +7,7 @@ using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models;
+using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Approval;
@@ -154,6 +155,10 @@ public sealed class DocumentLibraryApprovalLifecycleTests
             File("same.txt", "second"), admin)).File!;
         var third = (await env.Upload.UploadAsync(env.CustomFolderId,
             File("third.txt", "third"), admin)).File!;
+        var remaining = new List<DocumentLibraryFileDto>();
+        for (var index = 4; index <= 10; index++)
+            remaining.Add((await env.Upload.UploadAsync(env.CustomFolderId,
+                File($"batch-{index}.txt", $"content-{index}"), admin)).File!);
 
         var pending = Assert.Single(await env.Formal.GetArchiveStatusesAsync([first.Id]));
         Assert.Equal(DocumentArchiveStatuses.Pending, pending.ArchiveStatus);
@@ -172,10 +177,14 @@ public sealed class DocumentLibraryApprovalLifecycleTests
             await db.SaveChangesAsync();
         }
 
+        var tenFileIds = new[] { first.Id, second.Id, third.Id }
+            .Concat(remaining.Select(x => x.Id)).ToArray();
         var rows = await env.Formal.GetArchiveStatusesAsync(
-            [first.Id, second.Id, third.Id, second.Id, Guid.NewGuid()]);
+            [.. tenFileIds, second.Id, Guid.NewGuid()]);
 
-        Assert.Equal(3, rows.Count);
+        Assert.Equal(10, rows.Count);
+        Assert.Equal(10, rows.Select(x => x.FileId).Distinct().Count());
+        Assert.Equal(7, rows.Count(x => x.ArchiveStatus == DocumentArchiveStatuses.Pending));
         var completed = Assert.Single(rows, x => x.FileId == first.Id);
         Assert.Equal("正式入庫完成", completed.ArchiveStatusDisplay);
         Assert.Equal("success", completed.ArchiveStatusTone);
