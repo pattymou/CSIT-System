@@ -18,6 +18,7 @@ public sealed class DocumentLibraryService(
     IBusinessWriteAuthorizationGuard businessWrite,
     IOptions<KmIntegrationOptions>? kmOptions = null) : IDocumentLibraryService, IDocumentLibraryFormalUploadService
 {
+    internal const int MaximumArchiveStatusBatchSize = 100;
     private readonly KmIntegrationOptions configuredKm = kmOptions?.Value ?? new KmIntegrationOptions();
     public async Task<List<DocumentFolderDto>> GetFoldersAsync(CancellationToken cancellationToken = default)
     {
@@ -251,6 +252,47 @@ public sealed class DocumentLibraryService(
         db.DocumentFolders.Add(entity);
         await db.SaveChangesAsync(cancellationToken);
         return entity.Id;
+    }
+
+    public async Task<List<DocumentArchiveStatusDto>> GetArchiveStatusesAsync(
+        IReadOnlyCollection<Guid> fileIds,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(fileIds);
+        var ids = fileIds.Where(x => x != Guid.Empty).Distinct().ToArray();
+        if (ids.Length > MaximumArchiveStatusBatchSize)
+            throw new ArgumentException($"一次最多查詢 {MaximumArchiveStatusBatchSize} 份文件狀態。", nameof(fileIds));
+        if (ids.Length == 0) return [];
+
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var rows = await db.DocumentLibraryFiles.AsNoTracking()
+            .Where(x => ids.Contains(x.Id))
+            .Select(x => new
+            {
+                x.Id,
+                ArchiveStatus = x.ProcessingJob == null
+                    ? DocumentArchiveStatuses.NotStarted
+                    : x.ProcessingJob.ArchiveStatus,
+                ArchiveError = x.ProcessingJob == null ? null : x.ProcessingJob.ArchiveLastError,
+                ArchiveNextRetryAt = x.ProcessingJob == null ? null : x.ProcessingJob.ArchiveNextRetryAt
+            })
+            .ToListAsync(cancellationToken);
+
+        return rows.Select(x =>
+        {
+            var presentation = DocumentArchivePresentation(x.ArchiveStatus);
+            return new DocumentArchiveStatusDto
+            {
+                FileId = x.Id,
+                ArchiveStatus = x.ArchiveStatus,
+                ArchiveStatusDisplay = presentation.Text,
+                ArchiveStatusTone = presentation.Tone,
+                ArchiveError = x.ArchiveError,
+                ContinueTracking = x.ArchiveStatus is DocumentArchiveStatuses.Pending or
+                    DocumentArchiveStatuses.Archiving ||
+                    x.ArchiveStatus == DocumentArchiveStatuses.Failed && x.ArchiveNextRetryAt.HasValue
+            };
+        }).ToList();
     }
 
     public async Task<bool> UpdateFolderAsync(
@@ -613,6 +655,7 @@ public sealed class DocumentLibraryService(
         var download = $"/api/document-library/files/{file.Id}/download";
         return new SystemDocumentFileDto
         {
+            FileId = file.Id,
             SourceKey = $"document-library:{file.Id:N}",
             FileName = file.OriginalFileName,
             SourceModule = "文件專區",
@@ -627,6 +670,8 @@ public sealed class DocumentLibraryService(
             ReviewStatusTone = dto.ReviewStatusTone,
             ArchiveStatusDisplay = dto.ArchiveStatusDisplay,
             ArchiveStatusTone = dto.ArchiveStatusTone,
+            ArchiveStatus = dto.ArchiveStatus,
+            ArchiveError = dto.ArchiveError,
             KmStatusDisplay = dto.KmStatusDisplay,
             KmStatusTone = dto.KmStatusTone,
             DownloadUrl = download,
@@ -660,6 +705,15 @@ public sealed class DocumentLibraryService(
         file.KmStatusTone = km.Tone;
         return file;
     }
+
+    private static AttachmentStatusValue DocumentArchivePresentation(string? status) => status switch
+    {
+        DocumentArchiveStatuses.Pending => new("待正式入庫", "pending"),
+        DocumentArchiveStatuses.Archiving => new("正式入庫中", "pending"),
+        DocumentArchiveStatuses.Completed => new("正式入庫完成", "success"),
+        DocumentArchiveStatuses.Failed => new("寫入失敗", "danger"),
+        _ => new("尚未入庫", "neutral")
+    };
 
     private static bool IsReservedSystemRoot(string? name) =>
         string.Equals(name?.Trim(), "產品驗證資料", StringComparison.OrdinalIgnoreCase) ||
@@ -779,11 +833,11 @@ public sealed class DocumentLibraryService(
         FileSize = entity.FileSize,
         Sha256 = entity.Sha256,
         ProcessingStatus = job?.Status ?? string.Empty,
-        ArchiveStatus = job?.ArchiveStatus ?? string.Empty,
+        ArchiveStatus = job?.ArchiveStatus ?? DocumentArchiveStatuses.NotStarted,
         ReviewStatusDisplay = "—",
         ReviewStatusTone = "muted",
-        ArchiveStatusDisplay = AttachmentStatusPresentation.Archive(job?.ArchiveStatus).Text,
-        ArchiveStatusTone = AttachmentStatusPresentation.Archive(job?.ArchiveStatus).Tone,
+        ArchiveStatusDisplay = DocumentArchivePresentation(job?.ArchiveStatus).Text,
+        ArchiveStatusTone = DocumentArchivePresentation(job?.ArchiveStatus).Tone,
         KmStatusDisplay = AttachmentStatusPresentation.Km(
             job?.ArchiveStatus == DocumentArchiveStatuses.Completed, configuredKm.Enabled, job?.Status).Text,
         KmStatusTone = AttachmentStatusPresentation.Km(

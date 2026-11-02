@@ -62,6 +62,15 @@ public sealed class DocumentLibraryController(
         catch (InvalidOperationException ex) { return BadRequest(ex.Message); }
     }
 
+    [HttpPost("file-statuses")]
+    public async Task<IActionResult> GetFileStatuses(
+        [FromBody] DocumentArchiveStatusBatchRequest request,
+        CancellationToken cancellationToken)
+    {
+        try { return Ok(await service.GetArchiveStatusesAsync(request.FileIds, cancellationToken)); }
+        catch (ArgumentException ex) { return BadRequest(ex.Message); }
+    }
+
     [HttpPost("folders/{folderId:guid}/files")]
     [BusinessWrite]
     [RequestSizeLimit(200_000_000)]

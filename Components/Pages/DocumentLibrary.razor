@@ -1,7 +1,9 @@
 @page "/documents"
 @using SIT.DepartmentSystem.Web.Services
+@using SIT.DepartmentSystem.Web.Entities
 @rendermode InteractiveServer
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
+@implements IAsyncDisposable
 @inject BrowserApiClient Api
 @inject IDocumentLibraryService DocumentLibraryService
 @inject AuthenticationStateProvider AuthProvider
@@ -60,7 +62,7 @@
                                     {
                                         <button type="button"
                                                 class="tree-leaf @(_selectedSystemFolder?.Key == l3.Key ? "active" : "")"
-                                                @onclick="() => SelectSystemFolder(l3)">
+                                                @onclick="() => SelectSystemFolderAsync(l3)">
                                             <span>📁</span><span>@l3.Name</span><small>@l3.DocumentCount</small>
                                         </button>
                                     }
@@ -147,6 +149,23 @@
                                 }
                             </div>
                         }
+                        @if (_uploadTrackedIds.Count > 0 || _trackingTimedOut)
+                        {
+                            <div class="upload-results" aria-live="polite">
+                                <div class="upload-result success">
+                                    <strong>正式入庫進度</strong>
+                                    @if (_uploadTrackedIds.Count > 0)
+                                    {
+                                        <span>已完成 @UploadCompletedCount 份／處理中 @UploadProcessingCount 份／失敗 @UploadFailedCount 份</span>
+                                    }
+                                    @if (_trackingTimedOut)
+                                    {
+                                        <span>自動追蹤已暫停。</span>
+                                        <button type="button" class="download-link" @onclick="RefreshTrackedStatusesAsync">重新整理狀態</button>
+                                    }
+                                </div>
+                            </div>
+                        }
                     }
 
                     @if (_selectedSystemFolder is not null)
@@ -178,7 +197,7 @@
                                                 }
                                                 <span><strong>@file.FileName</strong><small>@FormatSize(file.FileSize)</small></span>
                                             </td>
-                                            <td><AttachmentStatusPill Status="@Status(file.ArchiveStatusDisplay, file.ArchiveStatusTone)" /></td>
+                                            <td><AttachmentStatusPill Status="@Status(file.ArchiveStatusDisplay, file.ArchiveStatusTone)" Title="@file.ArchiveError" /></td>
                                             <td><AttachmentStatusPill Status="@Status(file.KmStatusDisplay, file.KmStatusTone)" /></td>
                                             <td>@file.SourceModule</td>
                                             <td>@DisplayUploader(file.UploadedBy)</td>
@@ -257,6 +276,16 @@
     private bool _systemDocumentsLoading = true;
     private string? _previewUrl;
     private string? _previewName;
+    private readonly HashSet<Guid> _trackedFileIds = [];
+    private readonly HashSet<Guid> _uploadTrackedIds = [];
+    private readonly Dictionary<Guid, DateTime> _trackingStartedAt = [];
+    private readonly Dictionary<Guid, string> _latestArchiveStatuses = [];
+    private CancellationTokenSource? _statusPollingCts;
+    private Task? _statusPollingTask;
+    private int _selectionVersion;
+    private bool _trackingTimedOut;
+    private static readonly TimeSpan StatusPollingInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan StatusTrackingLimit = TimeSpan.FromMinutes(10);
 
     protected override async Task OnInitializedAsync()
     {
@@ -296,29 +325,45 @@
 
     private async Task SelectFolderAsync(DocumentFolderDto folder)
     {
+        await CancelStatusTrackingAsync();
+        var selectionVersion = _selectionVersion;
         _selectedSystemFolder = null;
         _selectedFolder = folder;
         _files = [];
         _message = null;
         _uploadResults = [];
         if (folder.Level != 3) return;
-        try { _files = await Api.GetAsync<List<DocumentLibraryFileDto>>($"/api/document-library/folders/{folder.Id}/files"); }
-        catch (Exception ex) { ShowError($"載入文件失敗：{ex.Message}"); }
+        try
+        {
+            var files = await Api.GetAsync<List<DocumentLibraryFileDto>>($"/api/document-library/folders/{folder.Id}/files");
+            if (selectionVersion != _selectionVersion || _selectedFolder?.Id != folder.Id) return;
+            _files = files;
+            TrackVisibleFiles();
+        }
+        catch (Exception ex)
+        {
+            if (selectionVersion == _selectionVersion) ShowError($"載入文件失敗：{ex.Message}");
+        }
     }
 
-    private void SelectSystemFolder(SystemDocumentFolderDto folder)
+    private async Task SelectSystemFolderAsync(SystemDocumentFolderDto folder)
     {
+        await CancelStatusTrackingAsync();
         _selectedFolder = null;
         _selectedSystemFolder = folder;
         _files = [];
         _message = null;
         _uploadResults = [];
+        TrackVisibleFiles();
     }
 
     private async Task UploadAsync()
     {
         if (SelectedFolderLevel != 3 || (_selectedFolder is null && _selectedSystemFolder?.CanUpload != true)) return;
         _uploading = true;
+        var selectionVersion = _selectionVersion;
+        var selectedFolderId = _selectedFolder?.Id;
+        var selectedSystemFolderKey = _selectedSystemFolder?.Key;
         _message = null;
         _uploadResults = [];
         try
@@ -332,16 +377,16 @@
                 response.Body, new global::System.Text.Json.JsonSerializerOptions(global::System.Text.Json.JsonSerializerDefaults.Web))
                 ?? throw new InvalidOperationException("無法讀取上傳結果。");
             var uploadResults = batch.Results;
-            if (_selectedFolder is not null)
+            if (selectionVersion != _selectionVersion || selectedFolderId != _selectedFolder?.Id ||
+                selectedSystemFolderKey != _selectedSystemFolder?.Key) return;
+            foreach (var file in uploadResults.Where(x => x.Success && x.File is not null).Select(x => x.File!))
             {
-                await SelectFolderAsync(_selectedFolder);
-                await LoadFoldersAsync();
+                AddUploadedFileToCurrentList(file);
+                if (file.ArchiveStatus is DocumentArchiveStatuses.Pending or DocumentArchiveStatuses.Archiving or
+                    DocumentArchiveStatuses.Failed)
+                    AddTrackedFile(file.Id, file.ArchiveStatus, uploaded: true);
             }
-            else
-            {
-                await LoadSystemDocumentsAsync();
-                await LoadFoldersAsync();
-            }
+            EnsureStatusPolling();
             _uploadResults = uploadResults;
             var successCount = _uploadResults.Count(x => x.Success);
             var failedCount = _uploadResults.Count - successCount;
@@ -350,9 +395,205 @@
             _message = $"已送主管待審 {pendingCount} 份；合法免審、待 NAS 入庫 {bypassCount} 份；失敗 {failedCount} 份。";
             _isError = successCount == 0;
         }
-        catch (Exception ex) { ShowError($"上傳失敗：{ex.Message}"); }
+        catch (Exception ex)
+        {
+            if (selectionVersion == _selectionVersion) ShowError($"上傳失敗：{ex.Message}");
+        }
         finally { _uploading = false; }
     }
+
+    private void AddUploadedFileToCurrentList(DocumentLibraryFileDto file)
+    {
+        if (_selectedFolder is not null)
+        {
+            var index = _files.FindIndex(x => x.Id == file.Id);
+            if (index >= 0) _files[index] = file;
+            else
+            {
+                _files.Insert(0, file);
+                _selectedFolder.DocumentCount++;
+            }
+            return;
+        }
+        if (_selectedSystemFolder is null || _selectedSystemFolder.Files.Any(x => x.FileId == file.Id)) return;
+        _selectedSystemFolder.Files.Insert(0, new SystemDocumentFileDto
+        {
+            FileId = file.Id,
+            SourceKey = $"document-library:{file.Id:N}",
+            FileName = file.OriginalFileName,
+            SourceModule = "文件專區",
+            UploadedBy = file.UploadedBy,
+            ContentType = file.ContentType,
+            IsImage = IsImage(file.ContentType, file.OriginalFileName),
+            FileSize = file.FileSize,
+            UploadedAt = file.UploadedAt,
+            ArchiveStatus = file.ArchiveStatus,
+            ArchiveStatusDisplay = file.ArchiveStatusDisplay,
+            ArchiveStatusTone = file.ArchiveStatusTone,
+            ArchiveError = file.ArchiveError,
+            KmStatusDisplay = file.KmStatusDisplay,
+            KmStatusTone = file.KmStatusTone,
+            DownloadUrl = $"/api/document-library/files/{file.Id}/download",
+            PreviewUrl = $"/api/document-library/files/{file.Id}/preview"
+        });
+        _selectedSystemFolder.DocumentCount++;
+    }
+
+    private void TrackVisibleFiles()
+    {
+        if (_selectedFolder is not null)
+        {
+            foreach (var file in _files.Where(x => x.ArchiveStatus is DocumentArchiveStatuses.Pending or
+                         DocumentArchiveStatuses.Archiving or DocumentArchiveStatuses.Failed))
+                AddTrackedFile(file.Id, file.ArchiveStatus, uploaded: false);
+        }
+        else if (_selectedSystemFolder is not null)
+        {
+            foreach (var file in _selectedSystemFolder.Files.Where(x => x.FileId.HasValue &&
+                         x.ArchiveStatus is DocumentArchiveStatuses.Pending or DocumentArchiveStatuses.Archiving or
+                             DocumentArchiveStatuses.Failed))
+                AddTrackedFile(file.FileId!.Value, file.ArchiveStatus, uploaded: false);
+        }
+        EnsureStatusPolling();
+    }
+
+    private void AddTrackedFile(Guid fileId, string status, bool uploaded)
+    {
+        if (fileId == Guid.Empty) return;
+        _latestArchiveStatuses[fileId] = status;
+        if (uploaded) _uploadTrackedIds.Add(fileId);
+        if (_trackedFileIds.Add(fileId)) _trackingStartedAt[fileId] = DateTime.UtcNow;
+    }
+
+    private void EnsureStatusPolling()
+    {
+        if (_trackedFileIds.Count == 0 || _statusPollingTask is { IsCompleted: false }) return;
+        _statusPollingCts?.Dispose();
+        _statusPollingCts = new CancellationTokenSource();
+        _statusPollingTask = PollArchiveStatusesAsync(_selectionVersion, _statusPollingCts.Token);
+    }
+
+    private async Task PollArchiveStatusesAsync(int selectionVersion, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(StatusPollingInterval);
+            while (_trackedFileIds.Count > 0 && await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                try { await QueryArchiveStatusesAsync(selectionVersion, cancellationToken); }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
+                catch (JSDisconnectedException) { break; }
+                catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested) { break; }
+                catch { /* Keep the bounded tracker alive for a transient read failure. */ }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        finally
+        {
+            if (!cancellationToken.IsCancellationRequested) await InvokeAsync(() =>
+            {
+                _statusPollingTask = null;
+                if (_trackedFileIds.Count > 0 && selectionVersion == _selectionVersion) EnsureStatusPolling();
+            });
+        }
+    }
+
+    private async Task QueryArchiveStatusesAsync(int selectionVersion, CancellationToken cancellationToken)
+    {
+        var now = DateTime.UtcNow;
+        var expired = _trackedFileIds.Where(id => now - _trackingStartedAt[id] >= StatusTrackingLimit).ToArray();
+        foreach (var id in expired)
+        {
+            _trackedFileIds.Remove(id);
+            _trackingStartedAt.Remove(id);
+            _trackingTimedOut = true;
+        }
+        var ids = _trackedFileIds.Take(100).ToArray();
+        if (ids.Length == 0)
+        {
+            if (expired.Length > 0) await InvokeAsync(StateHasChanged);
+            return;
+        }
+
+        var response = await Api.PostJsonAsync("/api/document-library/file-statuses",
+            new DocumentArchiveStatusBatchRequest { FileIds = ids.ToList() });
+        response.EnsureSuccess();
+        var statuses = global::System.Text.Json.JsonSerializer.Deserialize<List<DocumentArchiveStatusDto>>(
+            response.Body, new global::System.Text.Json.JsonSerializerOptions(global::System.Text.Json.JsonSerializerDefaults.Web)) ?? [];
+        if (cancellationToken.IsCancellationRequested || selectionVersion != _selectionVersion) return;
+
+        await InvokeAsync(() =>
+        {
+            var returnedIds = statuses.Select(x => x.FileId).ToHashSet();
+            foreach (var status in statuses)
+            {
+                ApplyArchiveStatus(status);
+                _latestArchiveStatuses[status.FileId] = status.ArchiveStatus;
+                if (!status.ContinueTracking)
+                {
+                    _trackedFileIds.Remove(status.FileId);
+                    _trackingStartedAt.Remove(status.FileId);
+                }
+            }
+            foreach (var missingId in ids.Where(x => !returnedIds.Contains(x)))
+            {
+                _trackedFileIds.Remove(missingId);
+                _trackingStartedAt.Remove(missingId);
+            }
+            StateHasChanged();
+        });
+    }
+
+    private void ApplyArchiveStatus(DocumentArchiveStatusDto status)
+    {
+        var custom = _files.FirstOrDefault(x => x.Id == status.FileId);
+        if (custom is not null)
+        {
+            custom.ArchiveStatus = status.ArchiveStatus;
+            custom.ArchiveStatusDisplay = status.ArchiveStatusDisplay;
+            custom.ArchiveStatusTone = status.ArchiveStatusTone;
+            custom.ArchiveError = status.ArchiveError;
+        }
+        var system = _selectedSystemFolder?.Files.FirstOrDefault(x => x.FileId == status.FileId);
+        if (system is null) return;
+        system.ArchiveStatus = status.ArchiveStatus;
+        system.ArchiveStatusDisplay = status.ArchiveStatusDisplay;
+        system.ArchiveStatusTone = status.ArchiveStatusTone;
+        system.ArchiveError = status.ArchiveError;
+    }
+
+    private async Task RefreshTrackedStatusesAsync()
+    {
+        _trackingTimedOut = false;
+        TrackVisibleFiles();
+        await QueryArchiveStatusesAsync(_selectionVersion,
+            _statusPollingCts?.Token ?? CancellationToken.None);
+    }
+
+    private async Task CancelStatusTrackingAsync()
+    {
+        _selectionVersion++;
+        if (_statusPollingCts is not null)
+        {
+            await _statusPollingCts.CancelAsync();
+            _statusPollingCts.Dispose();
+            _statusPollingCts = null;
+        }
+        _statusPollingTask = null;
+        _trackedFileIds.Clear();
+        _uploadTrackedIds.Clear();
+        _trackingStartedAt.Clear();
+        _latestArchiveStatuses.Clear();
+        _trackingTimedOut = false;
+    }
+
+    private int UploadCompletedCount => _uploadTrackedIds.Count(id =>
+        _latestArchiveStatuses.GetValueOrDefault(id) == DocumentArchiveStatuses.Completed);
+    private int UploadFailedCount => _uploadTrackedIds.Count(id =>
+        _latestArchiveStatuses.GetValueOrDefault(id) == DocumentArchiveStatuses.Failed);
+    private int UploadProcessingCount => _uploadTrackedIds.Count - UploadCompletedCount - UploadFailedCount;
+
+    public async ValueTask DisposeAsync() => await CancelStatusTrackingAsync();
 
     private void ShowError(string message) { _message = message; _isError = true; }
     private int SelectedFolderLevel => _selectedFolder?.Level ?? _selectedSystemFolder?.Level ?? 0;

@@ -45,6 +45,21 @@ public sealed class AttachmentTableUiConsistencyTests
         Assert.Contains(".approval-review-table { min-width: 920px; }", supervisorCss);
     }
 
+    [Fact]
+    public void DocumentLibraryArchiveRefresh_UsesOneBoundedBatchAndPreservesExistingRows()
+    {
+        var source = Read("Components", "Pages", "DocumentLibrary.razor");
+
+        Assert.Contains("TimeSpan.FromSeconds(10)", source);
+        Assert.Contains("PeriodicTimer(StatusPollingInterval)", source);
+        Assert.Contains("/api/document-library/file-statuses", source);
+        Assert.Contains("new DocumentArchiveStatusBatchRequest { FileIds = ids.ToList() }", source);
+        Assert.Contains("_trackedFileIds.Take(100).ToArray()", source);
+        Assert.Contains("ApplyArchiveStatus(status)", source);
+        Assert.Contains("await CancelStatusTrackingAsync();", source);
+        Assert.Contains("@implements IAsyncDisposable", source);
+    }
+
     private static string Read(params string[] path) =>
         File.ReadAllText(Path.Combine([RepositoryRoot(), .. path]));
 

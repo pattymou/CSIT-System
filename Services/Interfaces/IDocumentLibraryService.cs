@@ -10,6 +10,8 @@ public interface IDocumentLibraryService
     Task<bool> UpdateFolderAsync(Guid id, DocumentFolderUpsertRequest request, CancellationToken cancellationToken = default);
     Task<bool> DeleteFolderAsync(Guid id, CancellationToken cancellationToken = default);
     Task<List<DocumentLibraryFileDto>> GetFilesAsync(Guid folderId, CancellationToken cancellationToken = default);
+    Task<List<DocumentArchiveStatusDto>> GetArchiveStatusesAsync(IReadOnlyCollection<Guid> fileIds,
+        CancellationToken cancellationToken = default);
     Task<DocumentLibraryFileDto> UploadAsync(Guid folderId, IFormFile file, string uploadedBy, CancellationToken cancellationToken = default);
     Task<DocumentLibraryFileDto> UploadProductInformationAsync(string modelName, IFormFile file, string uploadedBy, CancellationToken cancellationToken = default);
     Task<Guid> GetOrCreateProductInformationFolderAsync(string modelName, CancellationToken cancellationToken = default);

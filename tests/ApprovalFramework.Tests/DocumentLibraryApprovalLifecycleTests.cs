@@ -143,6 +143,64 @@ public sealed class DocumentLibraryApprovalLifecycleTests
         Assert.Empty(db.PendingSubmissions);
     }
 
+    [Fact]
+    public async Task ArchiveStatusBatch_UsesFileIds_MapsTrueState_AndDistinguishesRetryableFailure()
+    {
+        await using var env = await Environment.CreateAsync();
+        var admin = Principal("admin", "Admin", "Administration");
+        var first = (await env.Upload.UploadAsync(env.CustomFolderId,
+            File("same.txt", "first"), admin)).File!;
+        var second = (await env.Upload.UploadAsync(env.CustomFolderId,
+            File("same.txt", "second"), admin)).File!;
+        var third = (await env.Upload.UploadAsync(env.CustomFolderId,
+            File("third.txt", "third"), admin)).File!;
+
+        var pending = Assert.Single(await env.Formal.GetArchiveStatusesAsync([first.Id]));
+        Assert.Equal(DocumentArchiveStatuses.Pending, pending.ArchiveStatus);
+        Assert.Equal("待正式入庫", pending.ArchiveStatusDisplay);
+        Assert.True(pending.ContinueTracking);
+
+        await using (var db = await env.Factory.CreateDbContextAsync())
+        {
+            var jobs = await db.DocumentProcessingJobs.ToDictionaryAsync(x => x.DocumentFileId);
+            jobs[first.Id].ArchiveStatus = DocumentArchiveStatuses.Completed;
+            jobs[first.Id].ArchiveLastError = null;
+            jobs[second.Id].ArchiveStatus = DocumentArchiveStatuses.Failed;
+            jobs[second.Id].ArchiveLastError = "NAS unavailable";
+            jobs[second.Id].ArchiveNextRetryAt = DateTime.UtcNow.AddMinutes(1);
+            jobs[third.Id].ArchiveStatus = DocumentArchiveStatuses.Archiving;
+            await db.SaveChangesAsync();
+        }
+
+        var rows = await env.Formal.GetArchiveStatusesAsync(
+            [first.Id, second.Id, third.Id, second.Id, Guid.NewGuid()]);
+
+        Assert.Equal(3, rows.Count);
+        var completed = Assert.Single(rows, x => x.FileId == first.Id);
+        Assert.Equal("正式入庫完成", completed.ArchiveStatusDisplay);
+        Assert.Equal("success", completed.ArchiveStatusTone);
+        Assert.False(completed.ContinueTracking);
+        var failed = Assert.Single(rows, x => x.FileId == second.Id);
+        Assert.Equal("寫入失敗", failed.ArchiveStatusDisplay);
+        Assert.Equal("danger", failed.ArchiveStatusTone);
+        Assert.Equal("NAS unavailable", failed.ArchiveError);
+        Assert.True(failed.ContinueTracking);
+        var archiving = Assert.Single(rows, x => x.FileId == third.Id);
+        Assert.Equal("正式入庫中", archiving.ArchiveStatusDisplay);
+        Assert.True(archiving.ContinueTracking);
+
+        await using (var db = await env.Factory.CreateDbContextAsync())
+        {
+            var job = await db.DocumentProcessingJobs.SingleAsync(x => x.DocumentFileId == second.Id);
+            job.ArchiveNextRetryAt = null;
+            await db.SaveChangesAsync();
+        }
+        failed = Assert.Single(await env.Formal.GetArchiveStatusesAsync([second.Id]));
+        Assert.False(failed.ContinueTracking);
+        await Assert.ThrowsAsync<ArgumentException>(() =>
+            env.Formal.GetArchiveStatusesAsync(Enumerable.Range(0, 101).Select(_ => Guid.NewGuid()).ToArray()));
+    }
+
     private static FormFile File(string name, string content)
     {
         var bytes = System.Text.Encoding.UTF8.GetBytes(content);

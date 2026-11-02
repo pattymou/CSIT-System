@@ -48,6 +48,21 @@ public sealed class DocumentLibraryFileDto
     public bool MetadataAvailable { get; set; }
 }
 
+public sealed class DocumentArchiveStatusBatchRequest
+{
+    public List<Guid> FileIds { get; set; } = [];
+}
+
+public sealed class DocumentArchiveStatusDto
+{
+    public Guid FileId { get; set; }
+    public string ArchiveStatus { get; set; } = string.Empty;
+    public string ArchiveStatusDisplay { get; set; } = string.Empty;
+    public string ArchiveStatusTone { get; set; } = string.Empty;
+    public string? ArchiveError { get; set; }
+    public bool ContinueTracking { get; set; }
+}
+
 public sealed class DocumentUploadBatchResultDto
 {
     public List<DocumentUploadResultDto> Results { get; set; } = [];
@@ -84,6 +99,7 @@ public sealed class SystemDocumentFolderDto
 
 public sealed class SystemDocumentFileDto
 {
+    public Guid? FileId { get; set; }
     public string SourceKey { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
     public string SourceModule { get; set; } = string.Empty;
@@ -98,6 +114,8 @@ public sealed class SystemDocumentFileDto
     public string ReviewStatusTone { get; set; } = string.Empty;
     public string ArchiveStatusDisplay { get; set; } = string.Empty;
     public string ArchiveStatusTone { get; set; } = string.Empty;
+    public string ArchiveStatus { get; set; } = string.Empty;
+    public string? ArchiveError { get; set; }
     public string KmStatusDisplay { get; set; } = string.Empty;
     public string KmStatusTone { get; set; } = string.Empty;
     public string DownloadUrl { get; set; } = string.Empty;
