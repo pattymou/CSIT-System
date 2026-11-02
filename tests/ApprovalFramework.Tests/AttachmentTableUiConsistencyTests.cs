@@ -60,6 +60,29 @@ public sealed class AttachmentTableUiConsistencyTests
         Assert.Contains("@implements IAsyncDisposable", source);
     }
 
+    [Fact]
+    public void DocumentLibraryUploadNotices_HaveIndependentCancelableLifetimes()
+    {
+        var source = Read("Components", "Pages", "DocumentLibrary.razor");
+
+        Assert.Contains("SuccessMessageLifetime = TimeSpan.FromSeconds(6)", source);
+        Assert.Contains("SuccessResultLifetime = TimeSpan.FromSeconds(8)", source);
+        Assert.Contains("FailureNoticeLifetime = TimeSpan.FromSeconds(15)", source);
+        Assert.Contains("FinalProgressLifetime = TimeSpan.FromSeconds(8)", source);
+        Assert.Contains("version != _messageVersion", source);
+        Assert.Contains("version != _uploadResultsVersion", source);
+        Assert.Contains("version != _progressVersion", source);
+        Assert.Contains("Task.Delay(delay, cancellationToken)", source);
+        Assert.Contains("CancelAndDispose(ref _messageCts)", source);
+        Assert.Contains("CancelAndDispose(ref _uploadResultsCts)", source);
+        Assert.Contains("CancelAndDispose(ref _progressHideCts)", source);
+        Assert.Contains("DismissUploadResult(notice.Id)", source);
+        Assert.Contains("UploadTerminalFailedCount > 0", source);
+        Assert.Contains("_uploadTrackedIds.Any(_trackedFileIds.Contains)", source);
+        Assert.Contains("自動追蹤已暫停。", source);
+        Assert.Contains("RefreshTrackedStatusesAsync", source);
+    }
+
     private static string Read(params string[] path) =>
         File.ReadAllText(Path.Combine([RepositoryRoot(), .. path]));
 

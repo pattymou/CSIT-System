@@ -33,7 +33,13 @@
 
     @if (!string.IsNullOrWhiteSpace(_message))
     {
-        <div class="document-message @(_isError ? "error" : "success")">@_message</div>
+        <div class="document-message @(_isError ? "error" : "success")">
+            <span>@_message</span>
+            @if (_isError)
+            {
+                <button type="button" class="notice-close" aria-label="關閉訊息" @onclick="ClearMessage">×</button>
+            }
+        </div>
     }
 
     <div class="document-workspace">
@@ -140,28 +146,40 @@
                         @if (_uploadResults.Count > 0)
                         {
                             <div class="upload-results" aria-live="polite">
-                                @foreach (var result in _uploadResults)
+                                @foreach (var notice in _uploadResults)
                                 {
-                                    <div class="upload-result @(result.Success ? "success" : "error")">
+                                    var result = notice.Result;
+                                    <div @key="notice.Id" class="upload-result @(result.Success ? "success" : "error")">
                                         <strong>@result.OriginalFileName</strong>
                                         <span>@result.Message</span>
+                                        @if (!result.Success)
+                                        {
+                                            <button type="button" class="notice-close" aria-label="關閉檔案上傳訊息"
+                                                    @onclick="() => DismissUploadResult(notice.Id)">×</button>
+                                        }
                                     </div>
                                 }
                             </div>
                         }
-                        @if (_uploadTrackedIds.Count > 0 || _trackingTimedOut)
+                        @if (_trackingTimedOut)
+                        {
+                            <div class="upload-results compact-progress" aria-live="polite">
+                                <div class="upload-result error">
+                                    <span>自動追蹤已暫停。</span>
+                                    <button type="button" class="download-link" @onclick="RefreshTrackedStatusesAsync">重新整理狀態</button>
+                                </div>
+                            </div>
+                        }
+                        else if (_showUploadProgress && _uploadTrackedIds.Count > 0)
                         {
                             <div class="upload-results" aria-live="polite">
-                                <div class="upload-result success">
+                                <div class="upload-result @(UploadTerminalFailedCount > 0 ? "error" : "success")">
                                     <strong>正式入庫進度</strong>
-                                    @if (_uploadTrackedIds.Count > 0)
+                                    <span>已完成 @UploadCompletedCount 份／處理中 @UploadProcessingCount 份／失敗 @UploadFailedCount 份</span>
+                                    @if (UploadTerminalFailedCount > 0)
                                     {
-                                        <span>已完成 @UploadCompletedCount 份／處理中 @UploadProcessingCount 份／失敗 @UploadFailedCount 份</span>
-                                    }
-                                    @if (_trackingTimedOut)
-                                    {
-                                        <span>自動追蹤已暫停。</span>
-                                        <button type="button" class="download-link" @onclick="RefreshTrackedStatusesAsync">重新整理狀態</button>
+                                        <button type="button" class="notice-close" aria-label="關閉正式入庫失敗提示"
+                                                @onclick="DismissUploadProgress">×</button>
                                     }
                                 </div>
                             </div>
@@ -270,7 +288,7 @@
     private bool _canWrite;
     private string? _message;
     private bool _isError;
-    private List<DocumentUploadResultDto> _uploadResults = [];
+    private List<UploadResultNotice> _uploadResults = [];
     private SystemDocumentCatalogDto _systemDocumentCatalog = new();
     private SystemDocumentFolderDto? _selectedSystemFolder;
     private bool _systemDocumentsLoading = true;
@@ -284,8 +302,19 @@
     private Task? _statusPollingTask;
     private int _selectionVersion;
     private bool _trackingTimedOut;
+    private bool _showUploadProgress;
+    private CancellationTokenSource? _messageCts;
+    private CancellationTokenSource? _uploadResultsCts;
+    private CancellationTokenSource? _progressHideCts;
+    private long _messageVersion;
+    private long _uploadResultsVersion;
+    private long _progressVersion;
     private static readonly TimeSpan StatusPollingInterval = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan StatusTrackingLimit = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan SuccessMessageLifetime = TimeSpan.FromSeconds(6);
+    private static readonly TimeSpan SuccessResultLifetime = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan FailureNoticeLifetime = TimeSpan.FromSeconds(15);
+    private static readonly TimeSpan FinalProgressLifetime = TimeSpan.FromSeconds(8);
 
     protected override async Task OnInitializedAsync()
     {
@@ -330,8 +359,9 @@
         _selectedSystemFolder = null;
         _selectedFolder = folder;
         _files = [];
-        _message = null;
-        _uploadResults = [];
+        ClearMessage();
+        ClearUploadResults();
+        DismissUploadProgress();
         if (folder.Level != 3) return;
         try
         {
@@ -352,8 +382,9 @@
         _selectedFolder = null;
         _selectedSystemFolder = folder;
         _files = [];
-        _message = null;
-        _uploadResults = [];
+        ClearMessage();
+        ClearUploadResults();
+        DismissUploadProgress();
         TrackVisibleFiles();
     }
 
@@ -364,8 +395,8 @@
         var selectionVersion = _selectionVersion;
         var selectedFolderId = _selectedFolder?.Id;
         var selectedSystemFolderKey = _selectedSystemFolder?.Key;
-        _message = null;
-        _uploadResults = [];
+        ClearMessage();
+        ClearUploadResults();
         try
         {
             var uploadUrl = _selectedFolder is not null
@@ -387,13 +418,12 @@
                     AddTrackedFile(file.Id, file.ArchiveStatus, uploaded: true);
             }
             EnsureStatusPolling();
-            _uploadResults = uploadResults;
-            var successCount = _uploadResults.Count(x => x.Success);
-            var failedCount = _uploadResults.Count - successCount;
-            var pendingCount = _uploadResults.Count(x => x.Success && x.ApprovalResult == "Pending");
-            var bypassCount = _uploadResults.Count(x => x.Success && x.ApprovalResult == "ApprovalBypassed");
-            _message = $"已送主管待審 {pendingCount} 份；合法免審、待 NAS 入庫 {bypassCount} 份；失敗 {failedCount} 份。";
-            _isError = successCount == 0;
+            ShowUploadResults(uploadResults);
+            var failedCount = uploadResults.Count(x => !x.Success);
+            var pendingCount = uploadResults.Count(x => x.Success && x.ApprovalResult == "Pending");
+            var bypassCount = uploadResults.Count(x => x.Success && x.ApprovalResult == "ApprovalBypassed");
+            ShowMessage($"已送主管待審 {pendingCount} 份；合法免審、待 NAS 入庫 {bypassCount} 份；失敗 {failedCount} 份。",
+                failedCount > 0);
         }
         catch (Exception ex)
         {
@@ -461,7 +491,11 @@
     {
         if (fileId == Guid.Empty) return;
         _latestArchiveStatuses[fileId] = status;
-        if (uploaded) _uploadTrackedIds.Add(fileId);
+        if (uploaded)
+        {
+            _uploadTrackedIds.Add(fileId);
+            ShowUploadProgress();
+        }
         if (_trackedFileIds.Add(fileId)) _trackingStartedAt[fileId] = DateTime.UtcNow;
     }
 
@@ -511,7 +545,11 @@
         var ids = _trackedFileIds.Take(100).ToArray();
         if (ids.Length == 0)
         {
-            if (expired.Length > 0) await InvokeAsync(StateHasChanged);
+            if (expired.Length > 0) await InvokeAsync(() =>
+            {
+                UpdateProgressVisibility();
+                StateHasChanged();
+            });
             return;
         }
 
@@ -540,6 +578,7 @@
                 _trackedFileIds.Remove(missingId);
                 _trackingStartedAt.Remove(missingId);
             }
+            UpdateProgressVisibility();
             StateHasChanged();
         });
     }
@@ -565,6 +604,7 @@
     private async Task RefreshTrackedStatusesAsync()
     {
         _trackingTimedOut = false;
+        if (_uploadTrackedIds.Count > 0) ShowUploadProgress();
         TrackVisibleFiles();
         await QueryArchiveStatusesAsync(_selectionVersion,
             _statusPollingCts?.Token ?? CancellationToken.None);
@@ -585,6 +625,7 @@
         _trackingStartedAt.Clear();
         _latestArchiveStatuses.Clear();
         _trackingTimedOut = false;
+        DismissUploadProgress();
     }
 
     private int UploadCompletedCount => _uploadTrackedIds.Count(id =>
@@ -592,10 +633,154 @@
     private int UploadFailedCount => _uploadTrackedIds.Count(id =>
         _latestArchiveStatuses.GetValueOrDefault(id) == DocumentArchiveStatuses.Failed);
     private int UploadProcessingCount => _uploadTrackedIds.Count - UploadCompletedCount - UploadFailedCount;
+    private int UploadTerminalFailedCount => _uploadTrackedIds.Count(id =>
+        _latestArchiveStatuses.GetValueOrDefault(id) == DocumentArchiveStatuses.Failed &&
+        !_trackedFileIds.Contains(id));
 
-    public async ValueTask DisposeAsync() => await CancelStatusTrackingAsync();
+    private void ShowMessage(string message, bool isError)
+    {
+        CancelAndDispose(ref _messageCts);
+        var version = ++_messageVersion;
+        _message = message;
+        _isError = isError;
+        _messageCts = new CancellationTokenSource();
+        _ = HideMessageAfterAsync(version,
+            isError ? FailureNoticeLifetime : SuccessMessageLifetime, _messageCts.Token);
+    }
 
-    private void ShowError(string message) { _message = message; _isError = true; }
+    private async Task HideMessageAfterAsync(long version, TimeSpan delay, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(delay, cancellationToken);
+            await InvokeAsync(() =>
+            {
+                if (version != _messageVersion || cancellationToken.IsCancellationRequested) return;
+                _message = null;
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    private void ClearMessage()
+    {
+        _messageVersion++;
+        CancelAndDispose(ref _messageCts);
+        _message = null;
+    }
+
+    private void ShowUploadResults(IReadOnlyCollection<DocumentUploadResultDto> results)
+    {
+        ClearUploadResults();
+        var version = _uploadResultsVersion;
+        _uploadResultsCts = new CancellationTokenSource();
+        _uploadResults = results.Select(x => new UploadResultNotice(Guid.NewGuid(), x)).ToList();
+        foreach (var notice in _uploadResults)
+            _ = HideUploadResultAfterAsync(notice.Id, version,
+                notice.Result.Success ? SuccessResultLifetime : FailureNoticeLifetime,
+                _uploadResultsCts.Token);
+    }
+
+    private async Task HideUploadResultAfterAsync(Guid noticeId, long version, TimeSpan delay,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(delay, cancellationToken);
+            await InvokeAsync(() =>
+            {
+                if (version != _uploadResultsVersion || cancellationToken.IsCancellationRequested) return;
+                _uploadResults.RemoveAll(x => x.Id == noticeId);
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    private void DismissUploadResult(Guid noticeId) =>
+        _uploadResults.RemoveAll(x => x.Id == noticeId);
+
+    private void ClearUploadResults()
+    {
+        _uploadResultsVersion++;
+        CancelAndDispose(ref _uploadResultsCts);
+        _uploadResults = [];
+    }
+
+    private void ShowUploadProgress()
+    {
+        _progressVersion++;
+        CancelAndDispose(ref _progressHideCts);
+        _showUploadProgress = true;
+    }
+
+    private void UpdateProgressVisibility()
+    {
+        if (_trackingTimedOut)
+        {
+            DismissUploadProgress();
+            return;
+        }
+        if (_uploadTrackedIds.Count == 0) return;
+        if (_uploadTrackedIds.Any(_trackedFileIds.Contains))
+        {
+            ShowUploadProgress();
+            return;
+        }
+        if (!_showUploadProgress || _progressHideCts is not null) return;
+        var version = ++_progressVersion;
+        _progressHideCts = new CancellationTokenSource();
+        _ = HideFinalProgressAfterAsync(version, _progressHideCts.Token);
+    }
+
+    private async Task HideFinalProgressAfterAsync(long version, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await Task.Delay(FinalProgressLifetime, cancellationToken);
+            await InvokeAsync(() =>
+            {
+                if (version != _progressVersion || cancellationToken.IsCancellationRequested ||
+                    _trackingTimedOut || _uploadTrackedIds.Any(_trackedFileIds.Contains)) return;
+                _showUploadProgress = false;
+                StateHasChanged();
+            });
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+    }
+
+    private void DismissUploadProgress()
+    {
+        _progressVersion++;
+        CancelAndDispose(ref _progressHideCts);
+        _showUploadProgress = false;
+    }
+
+    private static void CancelAndDispose(ref CancellationTokenSource? source)
+    {
+        var current = source;
+        source = null;
+        if (current is null) return;
+        current.Cancel();
+        current.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        ClearMessage();
+        ClearUploadResults();
+        DismissUploadProgress();
+        await CancelStatusTrackingAsync();
+    }
+
+    private void ShowError(string message) => ShowMessage(message, isError: true);
     private int SelectedFolderLevel => _selectedFolder?.Level ?? _selectedSystemFolder?.Level ?? 0;
     private string SelectedFolderName => _selectedFolder?.Name ?? _selectedSystemFolder?.Name ?? string.Empty;
     private string? SelectedFolderDescription => _selectedFolder?.Description ?? _selectedSystemFolder?.Description;
@@ -613,4 +798,6 @@
         : bytes >= 1_000 ? $"{bytes / 1_000d:0.##} KB" : $"{bytes} B";
     private static string StatusDetails(DocumentLibraryFileDto file) =>
         file.ArchiveError ?? file.ProcessingError ?? file.ProcessingStatusDisplay;
+
+    private sealed record UploadResultNotice(Guid Id, DocumentUploadResultDto Result);
 }
