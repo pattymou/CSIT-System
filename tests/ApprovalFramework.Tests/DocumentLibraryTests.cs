@@ -468,6 +468,12 @@ public sealed class DocumentLibraryTests
         Assert.Contains("SystemChildrenOf", source);
         Assert.Contains("document-thumbnail", source);
         Assert.Contains("OpenPreview", source);
+        Assert.Equal(2, source.Split("<span>📁</span><span>@l3.Name</span>", StringSplitOptions.None).Length - 1);
+        Assert.DoesNotContain("<span>📄</span><span>@l3.Name</span>", source);
+        Assert.Contains("L@(SelectedFolderLevel)", source);
+        Assert.Contains("共 @SelectedFileCount 份文件", source);
+        Assert.Contains(".folder-title-row", File.ReadAllText(Path.Combine(
+            FindRepositoryRoot(), "Components", "Pages", "DocumentLibrary.razor.css")));
     }
 
     private static DocumentLibraryService CreateService(TestFactory factory) => new(

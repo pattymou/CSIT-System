@@ -60,7 +60,7 @@
                                         <button type="button"
                                                 class="tree-leaf @(_selectedSystemFolder?.Key == l3.Key ? "active" : "")"
                                                 @onclick="() => SelectSystemFolder(l3)">
-                                            <span>📄</span><span>@l3.Name</span><small>@l3.DocumentCount</small>
+                                            <span>📁</span><span>@l3.Name</span><small>@l3.DocumentCount</small>
                                         </button>
                                     }
                                 </details>
@@ -80,7 +80,7 @@
                                         <button type="button"
                                                 class="tree-leaf @(_selectedFolder?.Id == l3.Id ? "active" : "")"
                                                 @onclick="() => SelectFolderAsync(l3)">
-                                            <span>📄</span><span>@l3.Name</span><small>@l3.DocumentCount</small>
+                                            <span>📁</span><span>@l3.Name</span><small>@l3.DocumentCount</small>
                                         </button>
                                     }
                                 </details>
@@ -104,14 +104,16 @@
             {
                 <div class="folder-heading">
                     <div>
-                        <div class="folder-level">L@SelectedFolderLevel</div>
-                        <h2>@SelectedFolderName</h2>
+                        <div class="folder-level">L@(SelectedFolderLevel)</div>
+                        <div class="folder-title-row">
+                            <h2>@SelectedFolderName</h2>
+                            @if (SelectedFolderLevel == 3)
+                            {
+                                <span class="file-count">共 @SelectedFileCount 份文件</span>
+                            }
+                        </div>
                         <p>@DisplayDescription(SelectedFolderDescription)</p>
                     </div>
-                    @if (SelectedFolderLevel == 3)
-                    {
-                        <span class="file-count">@SelectedFileCount 份文件</span>
-                    }
                 </div>
 
                 @if (SelectedFolderLevel < 3)
