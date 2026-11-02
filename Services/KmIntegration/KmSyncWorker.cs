@@ -72,6 +72,8 @@ public sealed class KmSyncWorker(
                     WHERE deletion.record_id = km_integration_outbox.project_id
                     AND deletion.status IN ('WaitingForKm', 'KmVerified', 'LocalReady', 'LocalCleanup', 'Completed')))
                   OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile'
+                    AND NOT EXISTS (SELECT 1 FROM document_file_deletion_jobs AS document_deletion
+                      WHERE document_deletion.document_file_id = km_integration_outbox.document_id)
                     AND EXISTS (SELECT 1 FROM document_processing_jobs AS document_job
                       JOIN document_files AS document_file ON document_file.id = document_job.document_file_id
                       WHERE document_job.id = km_integration_outbox.event_id
@@ -142,6 +144,8 @@ public sealed class KmSyncWorker(
                          deletion.Status == "Completed"))) ||
                      (x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
                        x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
+                        !db.DocumentLibraryFileDeletionJobs.Any(deletion =>
+                            deletion.DocumentFileId == x.DocumentId) &&
                        db.DocumentProcessingJobs.Any(job => job.Id == x.EventId &&
                            job.DocumentFileId == x.DocumentId &&
                            job.ArchiveStatus == DocumentArchiveStatuses.Completed &&
@@ -326,6 +330,8 @@ public sealed class KmSyncWorker(
             .Include(x => x.Folder).ThenInclude(x => x.Parent).ThenInclude(x => x!.Parent)
             .SingleOrDefaultAsync(x => x.Id == row.DocumentId, cancellationToken);
         if (job is null || file is null || file.StorageArea != DocumentStorageAreas.Library ||
+            await db.DocumentLibraryFileDeletionJobs.AsNoTracking().AnyAsync(
+                x => x.DocumentFileId == row.DocumentId, cancellationToken) ||
             job.ArchiveStatus != DocumentArchiveStatuses.Completed || job.ArchivedAt is null ||
             file.FileSize != row.SizeBytes || file.Sha256.Length != 64 ||
             !file.Sha256.All(Uri.IsHexDigit) || file.Sha256.Any(char.IsUpper) ||
@@ -450,6 +456,8 @@ public sealed class KmSyncWorker(
                 FROM document_processing_jobs AS job
                 JOIN document_files AS file ON file.id = job.document_file_id
                 WHERE job.archive_status = 'Completed' AND file.storage_area = 'Library'
+                  AND NOT EXISTS (SELECT 1 FROM document_file_deletion_jobs AS deletion
+                    WHERE deletion.document_file_id = file.id)
                   AND (EXISTS (SELECT 1 FROM pending_submissions AS submission
                         WHERE submission.id = file.id
                           AND submission.source_module_code = 'document-library'
@@ -470,6 +478,8 @@ public sealed class KmSyncWorker(
         var pending = await db.DocumentProcessingJobs.Include(x => x.DocumentFile)
             .Where(x => x.ArchiveStatus == DocumentArchiveStatuses.Completed &&
                 x.DocumentFile.StorageArea == DocumentStorageAreas.Library &&
+                !db.DocumentLibraryFileDeletionJobs.Any(deletion =>
+                    deletion.DocumentFileId == x.DocumentFileId) &&
                 (db.PendingSubmissions.Any(submission => submission.Id == x.DocumentFileId &&
                      submission.SourceModuleCode == "document-library" &&
                      submission.Status == ApprovalStatus.Committed &&

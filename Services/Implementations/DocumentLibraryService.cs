@@ -52,6 +52,11 @@ public sealed class DocumentLibraryService(
                 && x.IsFinal && x.IsRawDataExported)
             .OrderByDescending(x => x.CreatedAt)
             .ToListAsync(cancellationToken);
+        var reportRecordIds = testReports.Select(x => x.RecordId).Distinct().ToArray();
+        var reportModuleCodes = await db.ModuleRecords.AsNoTracking()
+            .Where(x => reportRecordIds.Contains(x.Id))
+            .Select(x => new { x.Id, x.Module.Code })
+            .ToDictionaryAsync(x => x.Id, x => x.Code, cancellationToken);
 
         var applicationModels = await db.VerificationApplications.AsNoTracking()
             .Where(x => x.ModuleRecordId.HasValue && !string.IsNullOrWhiteSpace(x.ProductModel))
@@ -72,6 +77,12 @@ public sealed class DocumentLibraryService(
                 x.Folder.Parent.Parent != null && x.Folder.Parent.Parent.Name == "產品驗證資料")
             .OrderByDescending(x => x.UploadedAt)
             .ToListAsync(cancellationToken);
+        var productFileIds = productInformationFiles.Select(x => x.Id).ToArray();
+        var productDeletionJobs = productFileIds.Length == 0
+            ? new Dictionary<Guid, DocumentLibraryFileDeletionJob>()
+            : await db.DocumentLibraryFileDeletionJobs.AsNoTracking()
+                .Where(x => productFileIds.Contains(x.DocumentFileId))
+                .ToDictionaryAsync(x => x.DocumentFileId, cancellationToken);
         var equipmentFiles = await db.ApparatusFiles.AsNoTracking().Include(x => x.Apparatus)
             .Where(x => x.Apparatus.ModuleCode.ToLower() == "equipment" &&
                 x.ArchiveStatus == FileArchiveStatuses.Archived)
@@ -130,7 +141,9 @@ public sealed class DocumentLibraryService(
                         IsImage = IsImage(x.ContentType, x.FileName), FileSize = x.FileSize,
                         UploadedAt = x.CreatedAt, ProcessingStatusDisplay = "正式入庫完成",
                         ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/files/{x.Id}/download",
-                        PreviewUrl = $"/api/files/{x.Id}/download"
+                        PreviewUrl = $"/api/files/{x.Id}/download", CanDelete = false,
+                        DeletionRestrictionMessage = "測試報告必須由原測試案件生命週期管理。",
+                        SourceManagementUrl = TestReportSourceUrl(x, reportModuleCodes)
                     }, bypassedIds.Contains(x.Id) ? AttachmentStatusPresentation.Exempt() : AttachmentStatusPresentation.Approved(),
                         AttachmentStatusPresentation.Archive("Completed"),
                         SourceKm(sourceKm, KmIntegrationSourceEntityTypes.TestReport, x.Id))).ToList();
@@ -139,7 +152,8 @@ public sealed class DocumentLibraryService(
 
                 var productFiles = productInformationFiles.Where(x => string.Equals(
                         x.Folder.Parent!.Name, modelName, StringComparison.OrdinalIgnoreCase))
-                    .Select(ToSystemFile).ToList();
+                    .Select(x => ToSystemFile(x,
+                        productDeletionJobs.GetValueOrDefault(x.Id))).ToList();
                 folders.Add(SystemFolder($"{modelKey}:product", modelKey, 3, "產品資訊",
                     "文件專區直接上傳的產品資訊。", 20, productFiles, canUpload: true,
                     uploadModelName: modelName));
@@ -154,7 +168,10 @@ public sealed class DocumentLibraryService(
                         UploadedAt = x.CreatedAt, ProcessingStatusDisplay = "正式入庫完成",
                         ProcessingStatusCssClass = "completed",
                         DownloadUrl = $"/api/document-library/files/{x.DocumentLibraryFileId}/download",
-                        PreviewUrl = $"/api/document-library/files/{x.DocumentLibraryFileId}/preview"
+                        PreviewUrl = $"/api/document-library/files/{x.DocumentLibraryFileId}/preview",
+                        CanDelete = false,
+                        DeletionRestrictionMessage = "驗證申請附件必須由原申請生命週期管理。",
+                        SourceManagementUrl = $"/verification-applications/{x.VerificationApplicationId}"
                     }, bypassedIds.Contains(x.VerificationApplicationId) ? AttachmentStatusPresentation.Exempt() : AttachmentStatusPresentation.Approved(),
                         AttachmentStatusPresentation.Archive("Completed"),
                         SourceKm(sourceKm, KmIntegrationSourceEntityTypes.VerificationApplicationFile, x.Id))).ToList();
@@ -182,7 +199,9 @@ public sealed class DocumentLibraryService(
                     IsImage = IsImage(x.ContentType, x.OriginalFileName ?? x.FileName), FileSize = x.FileSize,
                     UploadedAt = x.CreatedAt, ProcessingStatusDisplay = "正式入庫完成",
                     ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/assets/files/{x.Id}/content",
-                    PreviewUrl = $"/api/assets/files/{x.Id}/image"
+                    PreviewUrl = $"/api/assets/files/{x.Id}/image", CanDelete = false,
+                    DeletionRestrictionMessage = "設備附件必須由設備管理的安全刪除流程處理。",
+                    SourceManagementUrl = $"/assets/equipment/{x.ApparatusId}/edit"
                 }, supervisorApprovedIds.Contains(x.Id) ? AttachmentStatusPresentation.Approved() : AttachmentStatusPresentation.Exempt(),
                     AttachmentStatusPresentation.Archive(x.ArchiveStatus),
                     SourceKm(sourceKm, KmIntegrationSourceEntityTypes.ApparatusFile, x.Id,
@@ -200,7 +219,9 @@ public sealed class DocumentLibraryService(
                     IsImage = IsImage(x.ContentType, x.OriginalFileName), FileSize = x.FileSize,
                     UploadedAt = x.UploadedAt, ProcessingStatusDisplay = "正式入庫完成",
                     ProcessingStatusCssClass = "completed", DownloadUrl = $"/api/vendors/files/{x.Id}/content",
-                    PreviewUrl = $"/api/vendors/files/{x.Id}/content"
+                    PreviewUrl = $"/api/vendors/files/{x.Id}/content", CanDelete = false,
+                    DeletionRestrictionMessage = "廠商附件必須由廠商管理的原始生命週期處理。",
+                    SourceManagementUrl = $"/vendors/{x.VendorId}/edit"
                 }, supervisorApprovedIds.Contains(x.Id) ? AttachmentStatusPresentation.Approved() : AttachmentStatusPresentation.Exempt(),
                     AttachmentStatusPresentation.Archive(x.ArchiveStatus),
                     SourceKm(sourceKm, KmIntegrationSourceEntityTypes.VendorFile, x.Id,
@@ -395,9 +416,18 @@ public sealed class DocumentLibraryService(
             .Where(x => jobIds.Contains(x.EventId) &&
                 x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded)
             .ToDictionaryAsync(x => x.EventId, x => x.KmJobId, cancellationToken);
+        var fileIds = files.Select(x => x.Id).ToArray();
+        var deletionJobs = await db.DocumentLibraryFileDeletionJobs.AsNoTracking()
+            .Where(x => fileIds.Contains(x.DocumentFileId))
+            .ToDictionaryAsync(x => x.DocumentFileId, cancellationToken);
+        var referencedIds = (await db.VerificationApplicationFiles.AsNoTracking()
+            .Where(x => x.DocumentLibraryFileId.HasValue &&
+                        fileIds.Contains(x.DocumentLibraryFileId.Value))
+            .Select(x => x.DocumentLibraryFileId!.Value).ToListAsync(cancellationToken)).ToHashSet();
         return files.Select(x => ToDto(x, x.ProcessingJob,
             x.ProcessingJob is not null && kmJobs.TryGetValue(x.ProcessingJob.Id, out var kmJobId)
-                ? kmJobId : null)).ToList();
+                ? kmJobId : null, deletionJobs.GetValueOrDefault(x.Id),
+            !referencedIds.Contains(x.Id))).ToList();
     }
 
     public async Task<DocumentLibraryFileDto> UploadAsync(
@@ -427,6 +457,8 @@ public sealed class DocumentLibraryService(
             throw new InvalidOperationException($"檔案大小不可超過 {options.Value.MaxFileSizeBytes / 1_000_000} MB。");
 
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        if (await DocumentLibraryFileDeletionHold.ExistsAsync(db, documentFileId, cancellationToken))
+            throw new InvalidOperationException("This document ID is permanently held by its deletion audit.");
         var folder = await db.DocumentFolders.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == folderId, cancellationToken)
             ?? throw new KeyNotFoundException("找不到資料夾。");
@@ -590,6 +622,8 @@ public sealed class DocumentLibraryService(
         var entity = await db.DocumentLibraryFiles.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == fileId, cancellationToken);
         if (entity is null) return null;
+        if (await DocumentLibraryFileDeletionHold.IsActiveAsync(db, fileId, cancellationToken))
+            return null;
         var linkedRecordId = await db.VerificationApplicationFiles.AsNoTracking()
             .Where(x => x.DocumentLibraryFileId == fileId)
             .Select(x => x.VerificationApplication.ModuleRecordId)
@@ -608,6 +642,16 @@ public sealed class DocumentLibraryService(
         return applicationModels.TryGetValue(file.RecordId, out var model) && !string.IsNullOrWhiteSpace(model)
             ? model.Trim()
             : null;
+    }
+
+    private static string? TestReportSourceUrl(ModuleCaseFile file,
+        IReadOnlyDictionary<Guid, string> moduleCodes)
+    {
+        if (!moduleCodes.TryGetValue(file.RecordId, out var moduleCode) ||
+            string.IsNullOrWhiteSpace(moduleCode)) return null;
+        return file.CaseId.HasValue && file.TaskId.HasValue
+            ? $"/modules/{moduleCode}/{file.RecordId}/cases/{file.CaseId}/tasks/{file.TaskId}"
+            : $"/modules/{moduleCode}/detail/{file.RecordId}";
     }
 
     private static string EquipmentFolderName(Apparatus equipment)
@@ -649,7 +693,8 @@ public sealed class DocumentLibraryService(
         Files = files?.DistinctBy(x => x.SourceKey).ToList() ?? []
     };
 
-    private SystemDocumentFileDto ToSystemFile(DocumentLibraryFile file)
+    private SystemDocumentFileDto ToSystemFile(DocumentLibraryFile file,
+        DocumentLibraryFileDeletionJob? deletion = null)
     {
         var dto = ToDto(file, file.ProcessingJob, null);
         var download = $"/api/document-library/files/{file.Id}/download";
@@ -675,7 +720,13 @@ public sealed class DocumentLibraryService(
             KmStatusDisplay = dto.KmStatusDisplay,
             KmStatusTone = dto.KmStatusTone,
             DownloadUrl = download,
-            PreviewUrl = $"/api/document-library/files/{file.Id}/preview"
+            PreviewUrl = $"/api/document-library/files/{file.Id}/preview",
+            CanDelete = deletion is null,
+            DeletionRequestId = deletion?.Id,
+            DeletionStatus = deletion?.Status,
+            DeletionStatusDisplay = deletion is null
+                ? null : DocumentLibraryFileDeletionService.StatusDisplay(deletion.Status),
+            DeletionError = deletion?.LastErrorMessage
         };
     }
 
@@ -819,7 +870,9 @@ public sealed class DocumentLibraryService(
     private DocumentLibraryFileDto ToDto(
         DocumentLibraryFile entity,
         DocumentProcessingJob? job,
-        string? kmJobId) => new()
+        string? kmJobId,
+        DocumentLibraryFileDeletionJob? deletion = null,
+        bool sourceAllowsDeletion = true) => new()
     {
         Id = entity.Id,
         CsitJobId = job?.Id,
@@ -845,6 +898,12 @@ public sealed class DocumentLibraryService(
         ProcessingError = job?.KmErrorMessage ?? job?.LastError,
         ArchiveError = job?.ArchiveLastError,
         MetadataAvailable = !string.IsNullOrWhiteSpace(job?.MetadataJson),
+        CanDelete = sourceAllowsDeletion && deletion is null,
+        DeletionRequestId = deletion?.Id,
+        DeletionStatus = deletion?.Status,
+        DeletionStatusDisplay = deletion is null
+            ? null : DocumentLibraryFileDeletionService.StatusDisplay(deletion.Status),
+        DeletionError = deletion?.LastErrorMessage,
         ProcessingStatusCssClass = job?.Status switch
         {
             DocumentProcessingStatuses.Pending => "pending",

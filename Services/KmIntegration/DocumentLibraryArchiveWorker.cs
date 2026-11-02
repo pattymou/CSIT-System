@@ -60,6 +60,8 @@ public sealed class DocumentLibraryArchiveWorker(
                 FROM document_processing_jobs AS job
                 JOIN document_files AS file ON file.id = job.document_file_id
                 WHERE file.storage_area = 'Staging'
+                  AND NOT EXISTS (SELECT 1 FROM document_file_deletion_jobs AS deletion
+                    WHERE deletion.document_file_id = file.id)
                   AND job.archive_attempt_count < @max
                   AND (EXISTS (
                         SELECT 1 FROM pending_submissions AS submission
@@ -93,6 +95,8 @@ public sealed class DocumentLibraryArchiveWorker(
             job = await db.DocumentProcessingJobs.Include(x => x.DocumentFile)
                 .OrderBy(x => x.UpdatedAt).ThenBy(x => x.Id)
                 .FirstOrDefaultAsync(x => x.DocumentFile.StorageArea == DocumentStorageAreas.Staging &&
+                    !db.DocumentLibraryFileDeletionJobs.Any(deletion =>
+                        deletion.DocumentFileId == x.DocumentFileId) &&
                     x.ArchiveAttemptCount < options.ArchiveMaxRetryCount &&
                     (db.PendingSubmissions.Any(submission => submission.Id == x.DocumentFileId &&
                          submission.SourceModuleCode == ApprovalSourceMenuBinding.DocumentLibraryModule &&
@@ -165,6 +169,16 @@ public sealed class DocumentLibraryArchiveWorker(
                 if (current.ArchiveLeaseToken != lease ||
                     current.ArchiveStatus != DocumentArchiveStatuses.Archiving)
                     return;
+                if (await db.DocumentLibraryFileDeletionJobs.AsNoTracking().AnyAsync(
+                        x => x.DocumentFileId == current.DocumentFileId, cancellationToken))
+                {
+                    current.ArchiveFailed(lease,
+                        "Deletion requested; NAS archive completion was cancelled.", null,
+                        DateTime.UtcNow);
+                    await db.SaveChangesAsync(cancellationToken);
+                    if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+                    return;
+                }
                 current.DocumentFile.StorageArea = DocumentStorageAreas.Library;
                 current.ArchiveCompleted(lease, sha256, DateTime.UtcNow);
                 if (!await db.KmIntegrationOutbox.AnyAsync(x => x.EventId == current.Id,
@@ -225,6 +239,8 @@ public sealed class DocumentLibraryArchiveWorker(
         var completed = await db.DocumentProcessingJobs.AsNoTracking().Include(x => x.DocumentFile)
             .Where(x => x.ArchiveStatus == DocumentArchiveStatuses.Completed &&
                 x.DocumentFile.StorageArea == DocumentStorageAreas.Library &&
+                !db.DocumentLibraryFileDeletionJobs.Any(deletion =>
+                    deletion.DocumentFileId == x.DocumentFileId) &&
                 (db.PendingSubmissions.Any(submission => submission.Id == x.DocumentFileId &&
                      submission.SourceModuleCode == ApprovalSourceMenuBinding.DocumentLibraryModule &&
                      submission.Status == ApprovalStatus.Committed &&

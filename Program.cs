@@ -273,6 +273,8 @@ builder.Services.AddScoped<KmDeletionCallbackService>();
 builder.Services.AddScoped<EquipmentFileDeletionCallbackService>();
 builder.Services.AddScoped<EquipmentFileDeletionService>();
 builder.Services.AddScoped<EquipmentDeletionService>();
+builder.Services.AddScoped<DocumentLibraryDeletionAuthorizationService>();
+builder.Services.AddScoped<DocumentLibraryFileDeletionService>();
 builder.Services.AddScoped<KmDeletionDispatchService>();
 builder.Services.AddHostedService<KmDeletionBackgroundService>();
 builder.Services.AddScoped<VerificationCaseDeletionPreparationService>();

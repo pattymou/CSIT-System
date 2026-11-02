@@ -4,6 +4,7 @@ using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 using SIT.DepartmentSystem.Web.Services.Approval;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Controllers;
 
@@ -12,7 +13,9 @@ namespace SIT.DepartmentSystem.Web.Controllers;
 [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 public sealed class DocumentLibraryController(
     IDocumentLibraryService service,
-    DocumentLibraryApprovalUploadService approvalUploads) : ControllerBase
+    DocumentLibraryApprovalUploadService approvalUploads,
+    DocumentLibraryDeletionAuthorizationService deletionAuthorization,
+    DocumentLibraryFileDeletionService deletionService) : ControllerBase
 {
     [HttpGet("folders")]
     public async Task<ActionResult<List<DocumentFolderDto>>> GetFolders(CancellationToken cancellationToken) =>
@@ -177,5 +180,38 @@ public sealed class DocumentLibraryController(
             return File(preview.Stream, preview.ContentType ?? "application/octet-stream", enableRangeProcessing: true);
         }
         catch (FileNotFoundException ex) { return NotFound(ex.Message); }
+    }
+
+    [HttpPost("files/{id:guid}/deletion")]
+    [Authorize(Policy = SystemAuthorization.Policies.Administration)]
+    [BusinessWrite]
+    public async Task<IActionResult> RequestDeletion(Guid id,
+        CancellationToken cancellationToken)
+    {
+        if (!await deletionAuthorization.CanDeleteAsync(User, cancellationToken)) return Forbid();
+        try
+        {
+            var actor = ApprovalIdentity.Account(User);
+            var result = await deletionService.RequestAsync(id, actor, cancellationToken);
+            if (result is null) return NotFound();
+            return result.Completed
+                ? Ok(result)
+                : AcceptedAtAction(nameof(GetDeletion), new { requestId = result.RequestId }, result);
+        }
+        catch (InvalidOperationException ex)
+        {
+            return Conflict(new { error = "deletion_blocked", message = ex.Message });
+        }
+    }
+
+    [HttpGet("file-deletions/{requestId:guid}")]
+    [Authorize(Policy = SystemAuthorization.Policies.Administration)]
+    [BusinessWrite]
+    public async Task<IActionResult> GetDeletion(Guid requestId,
+        CancellationToken cancellationToken)
+    {
+        if (!await deletionAuthorization.CanDeleteAsync(User, cancellationToken)) return Forbid();
+        var result = await deletionService.GetAsync(requestId, cancellationToken);
+        return result is null ? NotFound() : Ok(result);
     }
 }

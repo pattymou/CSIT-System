@@ -8,7 +8,11 @@
 .custom-document-table { min-width:0; table-layout:fixed; }
 .document-file-cell { min-width:0; }
 .download-link { display:inline-block; white-space:nowrap; }
-.document-action-cell { min-width:76px; white-space:nowrap; }
+.document-action-cell { min-width:138px; white-space:normal; }
+.document-delete,.source-link{display:inline-block;margin:4px 0 0 5px;padding:7px 10px;border-radius:8px;text-decoration:none;white-space:nowrap}
+.document-delete{border:1px solid rgba(251,113,133,.38);color:#fecdd3;background:rgba(190,24,93,.2);cursor:pointer}
+.document-delete:disabled{cursor:not-allowed;opacity:.5}.source-link{border:1px solid rgba(103,232,249,.28);color:#a5f3fc;background:rgba(8,145,178,.13)}
+.deletion-state{display:block!important;margin-top:7px!important;color:#fcd34d!important;white-space:normal}
 .system-document-table .system-file-name-column { width:27%; }
 .system-document-table .system-file-archive-column { width:14%; }
 .system-document-table .system-file-km-column { width:13%; }
@@ -16,7 +20,7 @@
 .system-document-table .system-file-uploader-column { width:12%; }
 .system-document-table .system-file-size-column { width:7%; }
 .system-document-table .system-file-time-column { width:10%; }
-.system-document-table .system-file-action-column { width:7%; }
+.system-document-table .system-file-action-column { width:12%; }
 .custom-document-table .custom-file-name-column { width:27%; }
 .custom-document-table .custom-file-archive-column { width:14%; }
 .custom-document-table .custom-file-km-column { width:13%; }
@@ -24,7 +28,7 @@
 .custom-document-table .custom-file-uploader-column { width:12%; }
 .custom-document-table .custom-file-time-column { width:12%; }
 .custom-document-table .custom-file-sha-column { width:8%; }
-.custom-document-table .custom-file-action-column { width:7%; }
+.custom-document-table .custom-file-action-column { width:12%; }
 @media(max-width:900px) {
     .system-document-table,
     .custom-document-table { min-width:980px; }

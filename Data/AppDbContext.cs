@@ -50,6 +50,8 @@ public class AppDbContext : DbContext
     public DbSet<VerificationCaseDeletionCallbackReceipt> VerificationCaseDeletionCallbacks => Set<VerificationCaseDeletionCallbackReceipt>();
     public DbSet<EquipmentFileDeletionJob> EquipmentFileDeletionJobs => Set<EquipmentFileDeletionJob>();
     public DbSet<EquipmentFileDeletionCallbackReceipt> EquipmentFileDeletionCallbacks => Set<EquipmentFileDeletionCallbackReceipt>();
+    public DbSet<DocumentLibraryFileDeletionJob> DocumentLibraryFileDeletionJobs => Set<DocumentLibraryFileDeletionJob>();
+    public DbSet<DocumentLibraryFileDeletionCallbackReceipt> DocumentLibraryFileDeletionCallbacks => Set<DocumentLibraryFileDeletionCallbackReceipt>();
     public DbSet<EquipmentDeletionJob> EquipmentDeletionJobs => Set<EquipmentDeletionJob>();
     public DbSet<ValidationFormTemplate> ValidationFormTemplates => Set<ValidationFormTemplate>();
     public DbSet<ValidationFormTemplateVersion> ValidationFormTemplateVersions => Set<ValidationFormTemplateVersion>();
@@ -138,6 +140,7 @@ public class AppDbContext : DbContext
         modelBuilder.ConfigureKmIntegration();
         modelBuilder.ConfigureVerificationCaseDeletion();
         modelBuilder.ConfigureEquipmentFileDeletion();
+        modelBuilder.ConfigureDocumentLibraryFileDeletion();
         modelBuilder.ConfigureEquipmentDeletion();
         modelBuilder.ConfigureValidationRequests();
 

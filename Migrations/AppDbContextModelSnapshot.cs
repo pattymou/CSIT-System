@@ -549,6 +549,177 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.ToTable("document_files", (string)null);
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFileDeletionCallbackReceipt", b =>
+                {
+                    b.Property<Guid>("CallbackId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("callback_id");
+
+                    b.Property<Guid>("DeletionJobId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deletion_job_id");
+
+                    b.Property<string>("PayloadSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("payload_sha256");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.HasKey("CallbackId");
+
+                    b.HasIndex("DeletionJobId");
+
+                    b.ToTable("document_file_deletion_callbacks", (string)null);
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFileDeletionJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTime?>("ApprovalStagingRemovedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("approval_staging_removed_at");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempt_count");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTime?>("DbRecordsDeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("db_records_deleted_at");
+
+                    b.Property<Guid>("DocumentFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("document_file_id");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("file_name");
+
+                    b.Property<long>("FileSize")
+                        .HasColumnType("bigint")
+                        .HasColumnName("file_size");
+
+                    b.Property<Guid>("FolderId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("folder_id");
+
+                    b.Property<string>("KmDeletionJobId")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("km_deletion_job_id");
+
+                    b.Property<DateTime?>("KmVerifiedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("km_verified_at");
+
+                    b.Property<string>("LastErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("last_error_code");
+
+                    b.Property<string>("LastErrorMessage")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("last_error_message");
+
+                    b.Property<bool?>("LastErrorRetryable")
+                        .HasColumnType("boolean")
+                        .HasColumnName("last_error_retryable");
+
+                    b.Property<DateTime?>("LeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_expires_at");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uuid")
+                        .HasColumnName("lease_token");
+
+                    b.Property<DateTime?>("NasFileRemovedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("nas_file_removed_at");
+
+                    b.Property<string>("RelativePath")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("relative_path");
+
+                    b.Property<DateTime>("RequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("requested_at");
+
+                    b.Property<string>("RequestedBy")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("requested_by");
+
+                    b.Property<string>("Sha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("sha256");
+
+                    b.Property<DateTime?>("StagingFileRemovedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("staging_file_removed_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.Property<string>("StorageArea")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("storage_area");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("DocumentFileId")
+                        .IsUnique();
+
+                    b.HasIndex("KmDeletionJobId")
+                        .IsUnique()
+                        .HasFilter("km_deletion_job_id IS NOT NULL");
+
+                    b.HasIndex("Status", "UpdatedAt");
+
+                    b.ToTable("document_file_deletion_jobs", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_document_file_deletion_snapshot", "file_size > 0 AND length(sha256) = 64 AND length(btrim(relative_path)) > 0");
+
+                            t.HasCheckConstraint("ck_document_file_deletion_status", "status IN ('Preparing','Pending','Dispatching','Accepted','Processing','Failed','KmVerified','LocalCleanup','CleanupFailed','Completed')");
+                        });
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentProcessingCallbackReceipt", b =>
                 {
                     b.Property<Guid>("CallbackId")
@@ -8445,6 +8616,16 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .IsRequired();
 
                     b.Navigation("Folder");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFileDeletionCallbackReceipt", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFileDeletionJob", null)
+                        .WithMany()
+                        .HasForeignKey("DeletionJobId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired()
+                        .HasConstraintName("fk_document_file_deletion_callbacks_job");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.DocumentProcessingCallbackReceipt", b =>

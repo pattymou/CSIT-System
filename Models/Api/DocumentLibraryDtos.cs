@@ -46,6 +46,11 @@ public sealed class DocumentLibraryFileDto
     public string? ProcessingError { get; set; }
     public string? ArchiveError { get; set; }
     public bool MetadataAvailable { get; set; }
+    public bool CanDelete { get; set; } = true;
+    public Guid? DeletionRequestId { get; set; }
+    public string? DeletionStatus { get; set; }
+    public string? DeletionStatusDisplay { get; set; }
+    public string? DeletionError { get; set; }
 }
 
 public sealed class DocumentArchiveStatusBatchRequest
@@ -120,4 +125,23 @@ public sealed class SystemDocumentFileDto
     public string KmStatusTone { get; set; } = string.Empty;
     public string DownloadUrl { get; set; } = string.Empty;
     public string PreviewUrl { get; set; } = string.Empty;
+    public bool CanDelete { get; set; }
+    public string? DeletionRestrictionMessage { get; set; }
+    public string? SourceManagementUrl { get; set; }
+    public Guid? DeletionRequestId { get; set; }
+    public string? DeletionStatus { get; set; }
+    public string? DeletionStatusDisplay { get; set; }
+    public string? DeletionError { get; set; }
+}
+
+public sealed class DocumentLibraryFileDeletionStatusDto
+{
+    public Guid RequestId { get; set; }
+    public Guid FileId { get; set; }
+    public string Status { get; set; } = string.Empty;
+    public string StatusDisplay { get; set; } = string.Empty;
+    public string? ErrorCode { get; set; }
+    public string? ErrorMessage { get; set; }
+    public bool Retryable { get; set; }
+    public bool Completed { get; set; }
 }

@@ -1,6 +1,7 @@
 @page "/documents"
 @using SIT.DepartmentSystem.Web.Services
 @using SIT.DepartmentSystem.Web.Entities
+@using SIT.DepartmentSystem.Web.Services.KmIntegration
 @rendermode InteractiveServer
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @implements IAsyncDisposable
@@ -8,6 +9,7 @@
 @inject IDocumentLibraryService DocumentLibraryService
 @inject AuthenticationStateProvider AuthProvider
 @inject IAuthorizationService AuthorizationService
+@inject DocumentLibraryDeletionAuthorizationService DeletionAuthorization
 
 <PageTitle>文件專區</PageTitle>
 
@@ -20,6 +22,17 @@
         </div>
     </div>
 }
+
+<AppMessageDialog Visible="@(_deleteCandidate is not null)"
+                  Title="確認刪除文件"
+                  Message="@DeleteConfirmationMessage"
+                  Type="AppMessageDialogType.Warning"
+                  ShowCancel="true"
+                  ConfirmText="確認刪除"
+                  CancelText="取消"
+                  ConfirmIsDanger="true"
+                  OnConfirm="ConfirmDeleteAsync"
+                  OnClose="CloseDeleteConfirmation" />
 
 <div class="document-page">
     <header class="document-hero">
@@ -221,7 +234,24 @@
                                             <td>@DisplayUploader(file.UploadedBy)</td>
                                             <td>@FormatSize(file.FileSize)</td>
                                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
-                                            <td class="document-action-cell"><a class="download-link" href="@file.DownloadUrl">下載</a></td>
+                                            <td class="document-action-cell">
+                                                <a class="download-link" href="@file.DownloadUrl">下載</a>
+                                                @if (!string.IsNullOrWhiteSpace(file.SourceManagementUrl))
+                                                {
+                                                    <a class="source-link" href="@file.SourceManagementUrl"
+                                                       title="@file.DeletionRestrictionMessage">前往來源</a>
+                                                }
+                                                @if (_canDelete && file.CanDelete && file.FileId.HasValue)
+                                                {
+                                                    <button type="button" class="document-delete"
+                                                            disabled="@_deleteSubmitting"
+                                                            @onclick="() => ShowDeleteConfirmation(file)">刪除</button>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(file.DeletionStatusDisplay))
+                                                {
+                                                    <small class="deletion-state" title="@file.DeletionError">@file.DeletionStatusDisplay</small>
+                                                }
+                                            </td>
                                         </tr>
                                     }
                                 }
@@ -264,7 +294,19 @@
                                             <td>@DisplayUploader(file.UploadedBy)</td>
                                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
                                             <td><code title="@file.Sha256">@file.Sha256[..12]…</code></td>
-                                            <td class="document-action-cell"><a class="download-link" href="@($"/api/document-library/files/{file.Id}/download")">下載</a></td>
+                                            <td class="document-action-cell">
+                                                <a class="download-link" href="@($"/api/document-library/files/{file.Id}/download")">下載</a>
+                                                @if (_canDelete && file.CanDelete)
+                                                {
+                                                    <button type="button" class="document-delete"
+                                                            disabled="@_deleteSubmitting"
+                                                            @onclick="() => ShowDeleteConfirmation(file)">刪除</button>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(file.DeletionStatusDisplay))
+                                                {
+                                                    <small class="deletion-state" title="@file.DeletionError">@file.DeletionStatusDisplay</small>
+                                                }
+                                            </td>
                                         </tr>
                                     }
                                 }
@@ -286,6 +328,12 @@
     private bool _loading = true;
     private bool _uploading;
     private bool _canWrite;
+    private bool _canDelete;
+    private bool _deleteSubmitting;
+    private DeletionCandidate? _deleteCandidate;
+    private readonly Dictionary<Guid, Guid> _deletionRequests = [];
+    private CancellationTokenSource? _deletionPollingCts;
+    private Task? _deletionPollingTask;
     private string? _message;
     private bool _isError;
     private List<UploadResultNotice> _uploadResults = [];
@@ -315,11 +363,13 @@
     private static readonly TimeSpan SuccessResultLifetime = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan FailureNoticeLifetime = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan FinalProgressLifetime = TimeSpan.FromSeconds(8);
+    private static readonly TimeSpan DeletionPollingInterval = TimeSpan.FromSeconds(3);
 
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthProvider.GetAuthenticationStateAsync();
         _canWrite = (await AuthorizationService.AuthorizeAsync(auth.User, SystemAuthorization.Policies.BusinessWrite)).Succeeded;
+        _canDelete = _canWrite && await DeletionAuthorization.CanDeleteAsync(auth.User);
         await LoadFoldersAsync();
         await LoadSystemDocumentsAsync();
     }
@@ -355,6 +405,7 @@
     private async Task SelectFolderAsync(DocumentFolderDto folder)
     {
         await CancelStatusTrackingAsync();
+        await CancelDeletionPollingAsync();
         var selectionVersion = _selectionVersion;
         _selectedSystemFolder = null;
         _selectedFolder = folder;
@@ -379,6 +430,7 @@
     private async Task SelectSystemFolderAsync(SystemDocumentFolderDto folder)
     {
         await CancelStatusTrackingAsync();
+        await CancelDeletionPollingAsync();
         _selectedFolder = null;
         _selectedSystemFolder = folder;
         _files = [];
@@ -484,7 +536,21 @@
                              DocumentArchiveStatuses.Failed))
                 AddTrackedFile(file.FileId!.Value, file.ArchiveStatus, uploaded: false);
         }
+        TrackVisibleDeletions();
         EnsureStatusPolling();
+    }
+
+    private void TrackVisibleDeletions()
+    {
+        foreach (var file in _files.Where(x => x.DeletionRequestId.HasValue &&
+                     x.DeletionStatus != DocumentLibraryFileDeletionStatuses.Completed))
+            _deletionRequests[file.DeletionRequestId!.Value] = file.Id;
+        if (_selectedSystemFolder is not null)
+            foreach (var file in _selectedSystemFolder.Files.Where(x => x.FileId.HasValue &&
+                         x.DeletionRequestId.HasValue &&
+                         x.DeletionStatus != DocumentLibraryFileDeletionStatuses.Completed))
+                _deletionRequests[file.DeletionRequestId!.Value] = file.FileId!.Value;
+        EnsureDeletionPolling();
     }
 
     private void AddTrackedFile(Guid fileId, string status, bool uploaded)
@@ -637,6 +703,194 @@
         _latestArchiveStatuses.GetValueOrDefault(id) == DocumentArchiveStatuses.Failed &&
         !_trackedFileIds.Contains(id));
 
+    private void ShowDeleteConfirmation(DocumentLibraryFileDto file) =>
+        _deleteCandidate = new DeletionCandidate(file.Id, file.OriginalFileName,
+            file.UploadedBy, file.UploadedAt, file.ArchiveStatusDisplay,
+            file.KmStatusDisplay);
+
+    private void ShowDeleteConfirmation(SystemDocumentFileDto file)
+    {
+        if (file.FileId is not { } fileId) return;
+        _deleteCandidate = new DeletionCandidate(fileId, file.FileName,
+            file.UploadedBy, file.UploadedAt, file.ArchiveStatusDisplay,
+            file.KmStatusDisplay);
+    }
+
+    private string DeleteConfirmationMessage => _deleteCandidate is null ? string.Empty :
+        $"原始檔名：{_deleteCandidate.FileName}；上傳者：{DisplayUploader(_deleteCandidate.UploadedBy)}；" +
+        $"上傳時間：{_deleteCandidate.UploadedAt.ToLocalTime():yyyy/MM/dd HH:mm}；" +
+        $"正式入庫：{_deleteCandidate.ArchiveStatus}；KM：{_deleteCandidate.KmStatus}。" +
+        "確認後將建立可追蹤的安全刪除工作；若文件曾送入 KM，必須等候 KM 完成回呼及完整清除驗證，才會移除本地資料與實體檔案。";
+
+    private void CloseDeleteConfirmation() => _deleteCandidate = null;
+
+    private async Task ConfirmDeleteAsync()
+    {
+        var candidate = _deleteCandidate;
+        _deleteCandidate = null;
+        if (candidate is null || _deleteSubmitting) return;
+        _deleteSubmitting = true;
+        var selectionVersion = _selectionVersion;
+        try
+        {
+            var response = await Api.PostJsonAsync(
+                $"/api/document-library/files/{candidate.FileId}/deletion", new { });
+            if (!response.IsSuccessStatusCode)
+            {
+                ShowError(ApiErrorMessage(response.Body, "刪除要求未建立。"));
+                return;
+            }
+            var result = global::System.Text.Json.JsonSerializer.Deserialize<DocumentLibraryFileDeletionStatusDto>(
+                response.Body,
+                new global::System.Text.Json.JsonSerializerOptions(global::System.Text.Json.JsonSerializerDefaults.Web))
+                ?? throw new InvalidOperationException("無法讀取刪除工作狀態。");
+            if (selectionVersion != _selectionVersion) return;
+            ApplyDeletionStatus(result);
+            if (!result.Completed && !(result.Status == DocumentLibraryFileDeletionStatuses.Failed &&
+                                      !result.Retryable))
+            {
+                _deletionRequests[result.RequestId] = result.FileId;
+                EnsureDeletionPolling();
+            }
+            ShowMessage(result.Completed ? "文件已安全刪除。" : result.StatusDisplay,
+                result.Status == DocumentLibraryFileDeletionStatuses.Failed && !result.Retryable);
+        }
+        catch (Exception ex)
+        {
+            ShowError($"刪除要求失敗：{ex.Message}");
+        }
+        finally { _deleteSubmitting = false; }
+    }
+
+    private void EnsureDeletionPolling()
+    {
+        if (_deletionRequests.Count == 0 || _deletionPollingTask is { IsCompleted: false }) return;
+        _deletionPollingCts?.Dispose();
+        _deletionPollingCts = new CancellationTokenSource();
+        _deletionPollingTask = PollDeletionStatusesAsync(_selectionVersion,
+            _deletionPollingCts.Token);
+    }
+
+    private async Task PollDeletionStatusesAsync(int selectionVersion,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(DeletionPollingInterval);
+            while (_deletionRequests.Count > 0 &&
+                   await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                foreach (var requestId in _deletionRequests.Keys.ToArray())
+                {
+                    DocumentLibraryFileDeletionStatusDto result;
+                    try
+                    {
+                        result = await Api.GetAsync<DocumentLibraryFileDeletionStatusDto>(
+                            $"/api/document-library/file-deletions/{requestId}");
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    {
+                        return;
+                    }
+                    catch { continue; }
+                    if (cancellationToken.IsCancellationRequested ||
+                        selectionVersion != _selectionVersion) return;
+                    await InvokeAsync(() =>
+                    {
+                        ApplyDeletionStatus(result);
+                        if (result.Completed ||
+                            result.Status == DocumentLibraryFileDeletionStatuses.Failed &&
+                            !result.Retryable)
+                            _deletionRequests.Remove(requestId);
+                        StateHasChanged();
+                    });
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
+        finally
+        {
+            if (!cancellationToken.IsCancellationRequested) await InvokeAsync(() =>
+            {
+                _deletionPollingTask = null;
+                if (_deletionRequests.Count > 0 && selectionVersion == _selectionVersion)
+                    EnsureDeletionPolling();
+            });
+        }
+    }
+
+    private void ApplyDeletionStatus(DocumentLibraryFileDeletionStatusDto result)
+    {
+        var custom = _files.FirstOrDefault(x => x.Id == result.FileId);
+        var system = _selectedSystemFolder?.Files.FirstOrDefault(x => x.FileId == result.FileId);
+        if (result.Completed)
+        {
+            if (custom is not null)
+            {
+                _files.Remove(custom);
+                if (_selectedFolder is not null && _selectedFolder.DocumentCount > 0)
+                    _selectedFolder.DocumentCount--;
+            }
+            if (system is not null)
+            {
+                _selectedSystemFolder!.Files.Remove(system);
+                if (_selectedSystemFolder.DocumentCount > 0) _selectedSystemFolder.DocumentCount--;
+            }
+            _trackedFileIds.Remove(result.FileId);
+            _uploadTrackedIds.Remove(result.FileId);
+            _trackingStartedAt.Remove(result.FileId);
+            _latestArchiveStatuses.Remove(result.FileId);
+            _deletionRequests.Remove(result.RequestId);
+            return;
+        }
+
+        if (custom is not null)
+        {
+            custom.CanDelete = false;
+            custom.DeletionRequestId = result.RequestId;
+            custom.DeletionStatus = result.Status;
+            custom.DeletionStatusDisplay = result.StatusDisplay;
+            custom.DeletionError = result.ErrorMessage;
+        }
+        if (system is not null)
+        {
+            system.CanDelete = false;
+            system.DeletionRequestId = result.RequestId;
+            system.DeletionStatus = result.Status;
+            system.DeletionStatusDisplay = result.StatusDisplay;
+            system.DeletionError = result.ErrorMessage;
+        }
+    }
+
+    private async Task CancelDeletionPollingAsync()
+    {
+        if (_deletionPollingCts is not null)
+        {
+            await _deletionPollingCts.CancelAsync();
+            _deletionPollingCts.Dispose();
+            _deletionPollingCts = null;
+        }
+        _deletionPollingTask = null;
+        _deletionRequests.Clear();
+        _deleteCandidate = null;
+    }
+
+    private static string ApiErrorMessage(string body, string fallback)
+    {
+        if (string.IsNullOrWhiteSpace(body)) return fallback;
+        try
+        {
+            using var json = global::System.Text.Json.JsonDocument.Parse(body);
+            return json.RootElement.TryGetProperty("message", out var message) &&
+                   !string.IsNullOrWhiteSpace(message.GetString())
+                ? message.GetString()!
+                : fallback;
+        }
+        catch (global::System.Text.Json.JsonException) { return fallback; }
+    }
+
     private void ShowMessage(string message, bool isError)
     {
         CancelAndDispose(ref _messageCts);
@@ -777,6 +1031,7 @@
         ClearMessage();
         ClearUploadResults();
         DismissUploadProgress();
+        await CancelDeletionPollingAsync();
         await CancelStatusTrackingAsync();
     }
 
@@ -800,4 +1055,6 @@
         file.ArchiveError ?? file.ProcessingError ?? file.ProcessingStatusDisplay;
 
     private sealed record UploadResultNotice(Guid Id, DocumentUploadResultDto Result);
+    private sealed record DeletionCandidate(Guid FileId, string FileName, string? UploadedBy,
+        DateTime UploadedAt, string ArchiveStatus, string KmStatus);
 }

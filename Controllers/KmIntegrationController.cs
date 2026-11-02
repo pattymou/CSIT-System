@@ -100,6 +100,8 @@ public sealed class KmIntegrationController(
             .Include(x => x.ProcessingJob)
             .SingleOrDefaultAsync(x => x.Id == documentFileId, cancellationToken);
         if (file?.ProcessingJob is null || file.StorageArea != DocumentStorageAreas.Library ||
+            await DocumentLibraryFileDeletionHold.IsActiveAsync(db, documentFileId,
+                cancellationToken) ||
             file.ProcessingJob.ArchiveStatus != DocumentArchiveStatuses.Completed ||
             !(await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
                   x.Id == documentFileId && x.SourceModuleCode == "document-library" &&
@@ -407,6 +409,10 @@ public sealed class KmIntegrationController(
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = db.Database.IsRelational()
             ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
+
+        if (await DocumentLibraryFileDeletionHold.ExistsAsync(db, callback.DocumentFileId,
+                cancellationToken))
+            return Conflict(new { error = "deletion_in_progress" });
 
         var existingReceipt = await db.DocumentProcessingCallbacks.AsNoTracking()
             .SingleOrDefaultAsync(x => x.CallbackId == callback.CallbackId, cancellationToken);
