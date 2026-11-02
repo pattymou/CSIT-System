@@ -157,7 +157,8 @@ public sealed class DocumentLibraryApprovalLifecycleTests
             File("third.txt", "third"), admin)).File!;
         var remaining = new List<DocumentLibraryFileDto>();
         for (var index = 4; index <= 10; index++)
-            remaining.Add((await env.Upload.UploadAsync(env.CustomFolderId,
+            remaining.Add((await env.Upload.UploadAsync(
+                index % 2 == 0 ? env.ProductFolderId : env.CustomFolderId,
                 File($"batch-{index}.txt", $"content-{index}"), admin)).File!);
 
         var pending = Assert.Single(await env.Formal.GetArchiveStatusesAsync([first.Id]));
