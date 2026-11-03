@@ -27,6 +27,24 @@ public sealed class KmQueueMonitorTests
     }
 
     [Fact]
+    public void QueuePageUsesScopedDarkSurfacesAndVisibleInteractionStates()
+    {
+        var css = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "Components", "Pages",
+            "System", "KmQueue.razor.css"));
+        Assert.Contains(".kmq-table-wrap", css);
+        Assert.Contains("background: rgba(5, 24, 36, .88);", css);
+        Assert.Contains(".kmq-table tbody tr:hover td", css);
+        Assert.Contains(".kmq-tabs button.is-active", css);
+        Assert.Contains(".kmq-stats button.is-active", css);
+        Assert.Contains(".kmq-status.is-waiting", css);
+        Assert.Contains(".kmq-status.is-processing", css);
+        Assert.Contains(".kmq-status.is-completed", css);
+        Assert.Contains(".kmq-status.is-failed", css);
+        Assert.DoesNotContain("background: #fff", css, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("background:#fff", css, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task DedicatedPolicyAllowsAdminAndEnabledTeamLeaderOnly()
     {
         var factory = new InMemoryFactory();
@@ -211,6 +229,15 @@ public sealed class KmQueueMonitorTests
 
     private static void Set<T>(object item, string property, T value) =>
         item.GetType().GetProperty(property)!.SetValue(item, value);
+
+    private static string FindRepositoryRoot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null &&
+               !File.Exists(Path.Combine(directory.FullName, "SIT.DepartmentSystem.Web.csproj")))
+            directory = directory.Parent;
+        return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
+    }
 
     private sealed class InMemoryFactory : IDbContextFactory<AppDbContext>
     {
