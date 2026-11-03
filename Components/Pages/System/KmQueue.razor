@@ -1,0 +1,299 @@
+@page "/administration/km-queue"
+@attribute [Authorize(Policy = SystemAuthorization.Policies.KmQueueRead)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@implements IAsyncDisposable
+@inject BrowserApiClient Api
+
+<PageTitle>KM 處理佇列</PageTitle>
+
+<div class="kmq-heading">
+    <div>
+        <h1>KM 處理佇列</h1>
+        <p>唯讀檢視 KM 寫入與文件刪除處理狀態；每 10 秒自動更新。</p>
+    </div>
+    <button type="button" class="kmq-refresh" @onclick="RefreshAsync" disabled="@_loading">
+        @(_loading ? "更新中…" : "立即更新")
+    </button>
+</div>
+
+<div class="kmq-tabs" role="tablist" aria-label="KM 佇列類型">
+    <button type="button" role="tab" aria-selected="@(_tab == QueueTab.Ingestion)"
+            class="@TabClass(QueueTab.Ingestion)" @onclick="() => ChangeTabAsync(QueueTab.Ingestion)">
+        寫入佇列
+    </button>
+    <button type="button" role="tab" aria-selected="@(_tab == QueueTab.Deletion)"
+            class="@TabClass(QueueTab.Deletion)" @onclick="() => ChangeTabAsync(QueueTab.Deletion)">
+        刪除佇列
+    </button>
+</div>
+
+@if (_page is not null)
+{
+    <div class="kmq-stats" aria-label="佇列統計與篩選">
+        @StatButton("全部未完成", KmQueueFilters.Unfinished, _page.Stats.Unfinished)
+        @StatButton("等待中", KmQueueFilters.Waiting, _page.Stats.Waiting)
+        @StatButton("處理中", KmQueueFilters.Processing, _page.Stats.Processing)
+        @StatButton("失敗", KmQueueFilters.Failed, _page.Stats.Failed)
+        @StatButton("最近完成", KmQueueFilters.Completed, _page.Stats.Completed)
+    </div>
+}
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="kmq-message kmq-error" role="alert">@_error</div>
+}
+else if (_page is null)
+{
+    <div class="kmq-message">正在載入佇列…</div>
+}
+else
+{
+    @if (!string.IsNullOrWhiteSpace(_page.Notice))
+    {
+        <div class="kmq-message kmq-notice">@_page.Notice</div>
+    }
+    <div class="kmq-meta">
+        <span>共 @_page.Total 筆</span>
+        <span>最後更新：@FormatTaipei(_lastRefreshedAt)</span>
+    </div>
+    <div class="kmq-table-wrap">
+        <table class="kmq-table">
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>檔案名稱</th>
+                    <th>來源模組</th>
+                    @if (_tab == QueueTab.Deletion)
+                    {
+                        <th>刪除類別</th>
+                    }
+                    <th>上傳者</th>
+                    <th>原始上傳日期時間</th>
+                    <th>排入佇列時間</th>
+                    <th>狀態</th>
+                    <th>重試次數</th>
+                    <th>重試狀態／下次重試</th>
+                    <th>錯誤／詳細資訊</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_page.Items.Count == 0)
+                {
+                    <tr><td colspan="@(_tab == QueueTab.Deletion ? 11 : 10)" class="kmq-empty">此篩選目前沒有資料。</td></tr>
+                }
+                else
+                {
+                    @foreach (var item in _page.Items)
+                    {
+                        <tr>
+                            <td>@item.QueueNumber</td>
+                            <td class="kmq-file">@item.FileName</td>
+                            <td>@item.SourceModule</td>
+                            @if (_tab == QueueTab.Deletion)
+                            {
+                                <td>@item.DeletionCategory</td>
+                            }
+                            <td>@item.UploadedBy</td>
+                            <td>@FormatTaipei(item.UploadedAt)</td>
+                            <td>@FormatTaipei(item.QueuedAt)</td>
+                            <td><span class="kmq-status @StatusClass(item.Status)">@item.StatusDisplay</span></td>
+                            <td>@item.RetryCount</td>
+                            <td>
+                                @if (!string.IsNullOrWhiteSpace(item.RetryState))
+                                {
+                                    <div>@item.RetryState</div>
+                                }
+                                @if (item.NextRetryAt.HasValue)
+                                {
+                                    <div class="kmq-muted">@FormatTaipei(item.NextRetryAt)</div>
+                                }
+                            </td>
+                            <td class="kmq-detail">
+                                @if (!string.IsNullOrWhiteSpace(item.ErrorCode))
+                                {
+                                    <div class="kmq-code">@item.ErrorCode</div>
+                                }
+                                <div>@item.Detail</div>
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+    <div class="kmq-pagination">
+        <button type="button" @onclick="PreviousPageAsync" disabled="@(_loading || _page.Page <= 1)">上一頁</button>
+        <span>第 @_page.Page / @TotalPages 頁</span>
+        <button type="button" @onclick="NextPageAsync" disabled="@(_loading || _page.Page >= TotalPages)">下一頁</button>
+    </div>
+}
+
+@code {
+    private static readonly TimeZoneInfo TaipeiTimeZone = ResolveTaipeiTimeZone();
+    private readonly CancellationTokenSource _lifetime = new();
+    private CancellationTokenSource? _loadCancellation;
+    private KmQueuePageDto? _page;
+    private QueueTab _tab = QueueTab.Ingestion;
+    private string _filter = KmQueueFilters.Unfinished;
+    private int _pageNumber = 1;
+    private long _loadVersion;
+    private bool _loading;
+    private bool _disposed;
+    private string? _error;
+    private DateTime? _lastRefreshedAt;
+
+    private int TotalPages => _page is null ? 1 : Math.Max(1,
+        (int)Math.Ceiling(_page.Total / (double)_page.PageSize));
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        _ = RunRefreshLoopAsync(_lifetime.Token);
+        await LoadAsync();
+    }
+
+    private async Task RunRefreshLoopAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+                await InvokeAsync(LoadAsync);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_disposed) return;
+        var version = Interlocked.Increment(ref _loadVersion);
+        _loadCancellation?.Cancel();
+        _loadCancellation?.Dispose();
+        _loadCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        var cancellationToken = _loadCancellation.Token;
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            var queue = _tab == QueueTab.Ingestion ? "ingestion" : "deletion";
+            var result = await Api.GetAsync<KmQueuePageDto>(
+                $"/api/administration/km-queue/{queue}?filter={Uri.EscapeDataString(_filter)}&page={_pageNumber}",
+                cancellationToken);
+            if (version != _loadVersion || cancellationToken.IsCancellationRequested) return;
+            _page = result;
+            _lastRefreshedAt = DateTime.UtcNow;
+            if (_pageNumber > TotalPages)
+            {
+                _pageNumber = TotalPages;
+                await LoadAsync();
+                return;
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+        catch (Exception)
+        {
+            if (version == _loadVersion)
+                _error = "KM 佇列讀取失敗，請稍後再試。";
+        }
+        finally
+        {
+            if (version == _loadVersion)
+            {
+                _loading = false;
+                if (!_disposed) StateHasChanged();
+            }
+        }
+    }
+
+    private Task RefreshAsync() => LoadAsync();
+
+    private async Task ChangeTabAsync(QueueTab tab)
+    {
+        if (_tab == tab) return;
+        _tab = tab;
+        _filter = KmQueueFilters.Unfinished;
+        _pageNumber = 1;
+        _page = null;
+        await LoadAsync();
+    }
+
+    private async Task SelectFilterAsync(string filter)
+    {
+        if (_filter == filter) return;
+        _filter = filter;
+        _pageNumber = 1;
+        await LoadAsync();
+    }
+
+    private async Task PreviousPageAsync()
+    {
+        if (_pageNumber <= 1) return;
+        _pageNumber--;
+        await LoadAsync();
+    }
+
+    private async Task NextPageAsync()
+    {
+        if (_pageNumber >= TotalPages) return;
+        _pageNumber++;
+        await LoadAsync();
+    }
+
+    private RenderFragment StatButton(string label, string filter, int count) => builder =>
+    {
+        var sequence = 0;
+        builder.OpenElement(sequence++, "button");
+        builder.AddAttribute(sequence++, "type", "button");
+        builder.AddAttribute(sequence++, "class", _filter == filter ? "is-active" : null);
+        builder.AddAttribute(sequence++, "onclick", EventCallback.Factory.Create(this,
+            () => SelectFilterAsync(filter)));
+        builder.AddContent(sequence++, $"{label} {count}");
+        builder.CloseElement();
+    };
+
+    private string TabClass(QueueTab tab) => _tab == tab ? "is-active" : string.Empty;
+
+    private static string StatusClass(string status) => status switch
+    {
+        "Completed" => "is-completed",
+        "Failed" or "DeliveryFailed" or "CleanupFailed" => "is-failed",
+        "Pending" or "Preparing" or "Prepared" => "is-waiting",
+        _ => "is-processing"
+    };
+
+    private static string FormatTaipei(DateTime? value)
+    {
+        if (!value.HasValue) return "—";
+        var utc = value.Value.Kind == DateTimeKind.Utc
+            ? value.Value
+            : DateTime.SpecifyKind(value.Value, DateTimeKind.Utc);
+        return TimeZoneInfo.ConvertTimeFromUtc(utc, TaipeiTimeZone)
+            .ToString("yyyy/MM/dd HH:mm:ss");
+    }
+
+    private static TimeZoneInfo ResolveTaipeiTimeZone()
+    {
+        try { return TimeZoneInfo.FindSystemTimeZoneById("Taipei Standard Time"); }
+        catch (TimeZoneNotFoundException)
+        {
+            return TimeZoneInfo.FindSystemTimeZoneById("Asia/Taipei");
+        }
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _lifetime.Cancel();
+        _loadCancellation?.Cancel();
+        _loadCancellation?.Dispose();
+        _lifetime.Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    private enum QueueTab { Ingestion, Deletion }
+}

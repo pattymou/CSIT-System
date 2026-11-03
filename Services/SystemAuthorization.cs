@@ -11,6 +11,7 @@ public static class SystemAuthorization
         public const string CsitStaff = "CsitStaff";
         public const string ReservationUser = "ReservationUser";
         public const string Administration = "Administration";
+        public const string KmQueueRead = "KmQueueRead";
         public const string BusinessWrite = "BusinessWrite";
     }
 

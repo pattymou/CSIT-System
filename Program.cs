@@ -237,6 +237,8 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy(SystemAuthorization.Policies.Administration, policy =>
         policy.RequireAuthenticatedUser()
             .AddRequirements(new AdministrationAccessRequirement()));
+    options.AddPolicy(SystemAuthorization.Policies.KmQueueRead, policy =>
+        policy.RequireAuthenticatedUser().AddRequirements(new KmQueueReadRequirement()));
     options.AddPolicy(SystemAuthorization.Policies.BusinessWrite, policy =>
         policy.RequireAuthenticatedUser()
             .AddRequirements(new BusinessWriteRequirement()));
@@ -283,6 +285,7 @@ builder.Services.AddScoped<VerificationCaseLocalCleanupService>();
 builder.Services.AddScoped<KmSyncWorker>();
 builder.Services.AddScoped<KmManualRetryService>();
 builder.Services.AddScoped<KmSyncDiagnostics>();
+builder.Services.AddScoped<KmQueueQueryService>();
 builder.Services.AddHostedService<KmSyncBackgroundService>();
 builder.Services.AddScoped<DocumentLibraryArchiveWorker>();
 builder.Services.AddHostedService<DocumentLibraryArchiveBackgroundService>();
@@ -363,6 +366,7 @@ builder.Services.AddScoped<IApprovalCommitHandler, DocumentLibraryUploadApproval
 builder.Services.AddScoped<ApprovalCommitWorker>();
 builder.Services.AddHostedService<ApprovalCommitBackgroundService>();
 builder.Services.AddScoped<IAuthorizationHandler, AdministrationAccessHandler>();
+builder.Services.AddScoped<IAuthorizationHandler, KmQueueReadHandler>();
 builder.Services.AddSingleton<IAuthorizationHandler, BusinessWriteHandler>();
 builder.Services.AddScoped<IBusinessWriteAuthorizationGuard, BusinessWriteAuthorizationGuard>();
 builder.Services.AddScoped<ProvisioningActorResolver>();

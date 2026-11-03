@@ -46,6 +46,12 @@
             }
             @if (IsAdministrationSection(block) && _canAccessAdministration)
             {
+                @if (_canReadKmQueue)
+                {
+                    <NavLink class="nav-link-custom" href="/administration/km-queue" Match="NavLinkMatch.Prefix">
+                        <span class="nav-item-icon" aria-hidden="true">⇄</span><span class="nav-item-label">KM 處理佇列</span>
+                    </NavLink>
+                }
                 <NavLink class="nav-link-custom" href="/administration/accounts" Match="NavLinkMatch.Prefix">
                     <span class="nav-item-icon" aria-hidden="true">↪</span><span class="nav-item-label">帳號管理</span>
                 </NavLink>
@@ -59,6 +65,7 @@
     private List<MenuItemDto> _items = [];
     private bool _isAdmin;
     private bool _canAccessAdministration;
+    private bool _canReadKmQueue;
 
     private bool CanDisplaySection(MenuSectionDto section) =>
         !IsAdministrationSection(section) || _canAccessAdministration;
@@ -84,6 +91,8 @@
         _canAccessAdministration = (await AuthorizationService.AuthorizeAsync(
             auth.User,
             SystemAuthorization.Policies.Administration)).Succeeded;
+        _canReadKmQueue = (await AuthorizationService.AuthorizeAsync(
+            auth.User, SystemAuthorization.Policies.KmQueueRead)).Succeeded;
 
         _sections = (await MenuService.GetSectionsAsync())
             .Where(x => x.IsEnabled)

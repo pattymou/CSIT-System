@@ -18,6 +18,14 @@ public sealed class BrowserApiClient(IJSRuntime js) : IAsyncDisposable
             ?? throw new InvalidOperationException("伺服器回傳空白資料。");
     }
 
+    public async Task<T> GetAsync<T>(string url, CancellationToken cancellationToken)
+    {
+        var response = await SendAsync("GET", url, null, cancellationToken);
+        response.EnsureSuccess();
+        return JsonSerializer.Deserialize<T>(response.Body, JsonOptions)
+            ?? throw new InvalidOperationException("伺服器回傳空白資料。");
+    }
+
     public async Task<T?> GetOptionalAsync<T>(string url) where T : class
     {
         var response = await SendAsync("GET", url, null);
@@ -72,10 +80,15 @@ public sealed class BrowserApiClient(IJSRuntime js) : IAsyncDisposable
             "uploadAccumulatedFiles", url, inputContainer, true);
     }
 
-    private async Task<BrowserApiResponse> SendAsync(string method, string url, object? body)
+    private Task<BrowserApiResponse> SendAsync(string method, string url, object? body) =>
+        SendAsync(method, url, body, CancellationToken.None);
+
+    private async Task<BrowserApiResponse> SendAsync(string method, string url, object? body,
+        CancellationToken cancellationToken)
     {
         var module = await GetModuleAsync();
-        return await module.InvokeAsync<BrowserApiResponse>("request", method, url, body);
+        return await module.InvokeAsync<BrowserApiResponse>(
+            "request", cancellationToken, method, url, body);
     }
 
     private async Task<IJSObjectReference> GetModuleAsync() =>
