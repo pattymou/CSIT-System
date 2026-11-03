@@ -5,6 +5,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
+using SIT.DepartmentSystem.Web.Models;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
@@ -24,6 +25,7 @@ public sealed class DocumentLibraryApprovalUploadService(
     IApprovalStagingStorage staging,
     ApprovalSubmissionService submissions,
     IDocumentLibraryFormalUploadService formalUploads,
+    SharedIdentityProvisioningClient identityAccounts,
     IAuthorizationService authorization,
     IOptions<DocumentStorageOptions> storageOptions)
 {
@@ -59,7 +61,7 @@ public sealed class DocumentLibraryApprovalUploadService(
                 "已建立合法免審紀錄，等待正式 NAS 入庫。", null, archived);
         }
 
-        var source = await ResolvePendingSourceAsync(account, context, cancellationToken);
+        var source = await ResolvePendingSourceAsync(uploader, account, context, cancellationToken);
         var decision = new ApprovalUploadDecision(ApprovalUploadDecisionKind.Pending,
             menu.Code, ApprovalSourceMenuBinding.DocumentLibraryModule);
         StagedFileMetadata? staged = null;
@@ -121,29 +123,65 @@ public sealed class DocumentLibraryApprovalUploadService(
     }
 
     private async Task<ApprovalSourceIdentity> ResolvePendingSourceAsync(
+        ClaimsPrincipal uploader,
         string account,
         FolderContext context,
         CancellationToken cancellationToken)
     {
+        if (!Guid.TryParse(uploader.FindFirstValue("identity_sub"), out var identityUserId))
+            throw new UnauthorizedAccessException("A verified Shared Identity session is required.");
+
+        IReadOnlyList<SharedIdentityAccountListItem> identityDirectory;
+        try
+        {
+            identityDirectory = await identityAccounts.ListAccountsAsync(cancellationToken);
+        }
+        catch (SharedIdentityProvisioningException exception)
+        {
+            throw new InvalidOperationException(
+                "無法讀取 Shared Identity 帳號資料，文件未送審。", exception);
+        }
+
+        var identityMatches = identityDirectory.Where(x => x.IdentityUserId == identityUserId)
+            .Take(2).ToList();
+        if (identityMatches.Count != 1)
+            throw new InvalidOperationException(
+                "無法由 Shared Identity 唯一確認目前登入帳號，文件未送審。");
+        var identityAccount = identityMatches[0];
+        if (!string.Equals(identityAccount.Account?.Trim(), account, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(identityAccount.AccountStatus?.Trim(), "Active", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(identityAccount.SystemAccessStatus?.Trim(), "Active", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(identityAccount.CsitRole?.Trim(), "CsitStaff", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(identityAccount.DataAccessLevel?.Trim(), SystemAuthorization.DataAccessLevels.Editor,
+                StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(identityAccount.Department))
+            throw new InvalidOperationException(
+                "Shared Identity 帳號無效或不具文件上傳資格，文件未送審。");
+        if (string.IsNullOrWhiteSpace(identityAccount.TeamCode))
+            throw new InvalidOperationException(
+                "Shared Identity 帳號缺少 TeamCode，文件未送審；請由系統管理員確認帳號 Team 設定。");
+
+        var teamCode = identityAccount.TeamCode.Trim();
+        var normalizedTeamCode = teamCode.ToLowerInvariant();
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var users = await db.Users.AsNoTracking().Where(x => x.Account.ToLower() == account)
-            .Take(2).Select(x => new { x.Department }).ToListAsync(cancellationToken);
-        if (users.Count != 1 || string.IsNullOrWhiteSpace(users[0].Department))
+        var teams = await db.SystemOptions.AsNoTracking()
+            .Where(x => x.IsEnabled && x.Category == SystemOptionCategories.Team &&
+                x.Value.ToLower() == normalizedTeamCode)
+            .Take(2).Select(x => new { x.Id, x.Value }).ToListAsync(cancellationToken);
+        if (teams.Count != 1)
             throw new InvalidOperationException(
-                "Shared Identity 帳號缺少唯一且可信任的部門資料，無法判定送審 Team。");
-        var department = users[0].Department.Trim();
-        var normalizedDepartment = department.ToLower();
-        var matches = await (from team in db.SystemOptions.AsNoTracking()
-            join routing in db.TeamRoutings.AsNoTracking() on team.Id equals routing.TeamOptionId
-            where team.IsEnabled && team.Category == SystemOptionCategories.Team && routing.IsEnabled &&
-                (team.Name.ToLower() == normalizedDepartment || team.Value.ToLower() == normalizedDepartment)
-            select new { team.Id, team.Value, routing.LeaderAccount }).Take(2).ToListAsync(cancellationToken);
-        if (matches.Count != 1 || string.IsNullOrWhiteSpace(matches[0].LeaderAccount))
+                "Shared Identity TeamCode 無法唯一對應已啟用的 CSIT Team，文件未送審。");
+
+        var routings = await db.TeamRoutings.AsNoTracking()
+            .Where(x => x.TeamOptionId == teams[0].Id && x.IsEnabled)
+            .Take(2).Select(x => new { x.LeaderAccount }).ToListAsync(cancellationToken);
+        if (routings.Count != 1 || string.IsNullOrWhiteSpace(routings[0].LeaderAccount))
             throw new InvalidOperationException(
-                "無法由 Shared Identity 部門唯一判定已啟用的 Team 與主管，文件未送審；請先修正 Team Routing。");
+                "使用者 Team 沒有唯一且啟用中的主管 routing，文件未送審；請先修正 Team Routing。");
+
+        var department = identityAccount.Department?.Trim() ?? string.Empty;
         return new ApprovalSourceIdentity(ApprovalSourceMenuBinding.DocumentLibraryModule,
             DocumentLibraryUploadApprovalCommitHandler.ContextType, context.Id.ToString("N"),
-            context.Display, department, matches[0].Id, matches[0].Value);
+            context.Display, department, teams[0].Id, teams[0].Value);
     }
 
     private sealed record FolderContext(Guid Id, string Display);

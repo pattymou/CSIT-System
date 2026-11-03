@@ -1,7 +1,10 @@
+using System.Net;
+using System.Net.Http.Json;
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
@@ -126,13 +129,111 @@ public sealed class DocumentLibraryApprovalLifecycleTests
     }
 
     [Fact]
+    public async Task SameDepartmentDifferentTeamCodes_RouteToTheirOwnLeadersAndRemainIsolated()
+    {
+        await using var env = await Environment.CreateAsync();
+        var first = await env.Upload.UploadAsync(env.CustomFolderId,
+            File("team-a.txt", "team-a"), Principal("employee", "User", "Claim Department"));
+        var second = await env.Upload.UploadAsync(env.CustomFolderId,
+            File("team-b.txt", "team-b"), Principal("employee-b", "User", "Claim Department"));
+
+        await using (var db = await env.Factory.CreateDbContextAsync())
+        {
+            var rows = await db.PendingSubmissions.OrderBy(x => x.SubmittedByAccount).ToListAsync();
+            Assert.Equal(2, rows.Count);
+            Assert.Equal(env.TeamAId, rows[0].SubmittedTeamOptionId);
+            Assert.Equal("TEAM-A", rows[0].SubmittedTeamCode);
+            Assert.Equal("Shared Department", rows[0].SubmittedDepartment);
+            Assert.Equal(env.TeamBId, rows[1].SubmittedTeamOptionId);
+            Assert.Equal("TEAM-B", rows[1].SubmittedTeamCode);
+            Assert.Equal("Shared Department", rows[1].SubmittedDepartment);
+        }
+
+        var leaderA = Principal("leader", "User", "Any Department");
+        var leaderB = Principal("otherleader", "User", "Any Department");
+        var leaderAItems = await env.Submissions.ListForReviewAsync(
+            leaderA, ApprovalSourceMenuBinding.DocumentLibraryMenu);
+        var leaderBItems = await env.Submissions.ListForReviewAsync(
+            leaderB, ApprovalSourceMenuBinding.DocumentLibraryMenu);
+        Assert.Contains(leaderAItems, x => x.Id == first.SubmissionId);
+        Assert.DoesNotContain(leaderAItems, x => x.Id == second.SubmissionId);
+        Assert.Contains(leaderBItems, x => x.Id == second.SubmissionId);
+        Assert.DoesNotContain(leaderBItems, x => x.Id == first.SubmissionId);
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+            env.Submissions.ApproveAsync(second.SubmissionId!.Value, leaderA));
+    }
+
+    [Fact]
+    public async Task UntrustedTeamCodeClaim_CannotOverrideSharedIdentityTeam()
+    {
+        await using var env = await Environment.CreateAsync();
+        var pending = await env.Upload.UploadAsync(env.CustomFolderId,
+            File("claim-spoof.txt", "content"),
+            Principal("employee", "User", "Wrong Department", "TEAM-B"));
+
+        await using var db = await env.Factory.CreateDbContextAsync();
+        var row = await db.PendingSubmissions.SingleAsync(x => x.Id == pending.SubmissionId);
+        Assert.Equal(env.TeamAId, row.SubmittedTeamOptionId);
+        Assert.Equal("TEAM-A", row.SubmittedTeamCode);
+    }
+
+    [Theory]
+    [InlineData("missing-team-code")]
+    [InlineData("disabled-account")]
+    [InlineData("disabled-system-access")]
+    [InlineData("invalid-role")]
+    [InlineData("read-only-account")]
+    [InlineData("unknown-team")]
+    [InlineData("disabled-team")]
+    [InlineData("missing-routing")]
+    [InlineData("disabled-routing")]
+    [InlineData("missing-leader")]
+    [InlineData("conflicting-routing")]
+    public async Task InvalidIdentityOrRoutingConfiguration_FailsClosedWithoutStaging(string scenario)
+    {
+        await using var env = await Environment.CreateAsync();
+        await env.ConfigureFailureAsync(scenario);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => env.Upload.UploadAsync(
+            env.CustomFolderId, File("blocked.txt", "blocked"),
+            Principal("employee", "User", "Team A")));
+
+        await using var db = await env.Factory.CreateDbContextAsync();
+        Assert.Empty(db.PendingSubmissions);
+        Assert.Empty(db.DocumentLibraryFiles);
+        Assert.Empty(db.KmIntegrationOutbox);
+        Assert.Empty(Directory.GetFiles(env.ApprovalRootPath, "*", SearchOption.AllDirectories));
+    }
+
+    [Fact]
+    public async Task SharedIdentityUnavailableOrSubjectAccountMismatch_NeverFallsBackToDepartment()
+    {
+        await using var env = await Environment.CreateAsync();
+        env.FailIdentityAccountList = true;
+        var unavailable = await Assert.ThrowsAsync<InvalidOperationException>(() => env.Upload.UploadAsync(
+            env.CustomFolderId, File("unavailable.txt", "blocked"),
+            Principal("employee", "User", "Team A")));
+        Assert.Contains("無法讀取 Shared Identity", unavailable.Message);
+
+        env.FailIdentityAccountList = false;
+        var mismatch = await Assert.ThrowsAsync<InvalidOperationException>(() => env.Upload.UploadAsync(
+            env.CustomFolderId, File("mismatch.txt", "blocked"),
+            Principal("employee", "User", "Team A", subject: IdentityId("employee-b"))));
+        Assert.Contains("帳號無效", mismatch.Message);
+
+        await using var db = await env.Factory.CreateDbContextAsync();
+        Assert.Empty(db.PendingSubmissions);
+        Assert.Empty(db.DocumentLibraryFiles);
+    }
+
+    [Fact]
     public async Task MissingRoutingAndLegacyFilesWithoutEvidence_FailClosed()
     {
         await using var env = await Environment.CreateAsync();
         var unrouteable = Principal("unrouteable", "User", "Unknown Department");
         var error = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             env.Upload.UploadAsync(env.CustomFolderId, File("blocked.txt", "blocked"), unrouteable));
-        Assert.Contains("無法由 Shared Identity 部門唯一判定", error.Message);
+        Assert.Contains("缺少 TeamCode", error.Message);
 
         var legacy = await env.Formal.StageApprovedAsync(Guid.NewGuid(), env.CustomFolderId,
             File("legacy.txt", "legacy-content"), "legacy");
@@ -222,18 +323,34 @@ public sealed class DocumentLibraryApprovalLifecycleTests
         };
     }
 
-    private static ClaimsPrincipal Principal(string account, string role, string department)
+    private static ClaimsPrincipal Principal(string account, string role, string department,
+        string? untrustedTeamCode = null, Guid? subject = null)
     {
-        var identity = new ClaimsIdentity([
+        var claims = new List<Claim>
+        {
             new Claim("account", account),
             new Claim(ClaimTypes.NameIdentifier, account),
             new Claim(ClaimTypes.Role, role),
             new Claim("department", department),
+            new Claim("identity_sub", (subject ?? IdentityId(account)).ToString()),
             new Claim(SystemAuthorization.DataAccessLevelClaim, SystemAuthorization.DataAccessLevels.Editor),
             new Claim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff)
-        ], "test", ClaimTypes.Name, ClaimTypes.Role);
+        };
+        if (untrustedTeamCode is not null) claims.Add(new Claim("team_code", untrustedTeamCode));
+        var identity = new ClaimsIdentity(claims, "test", ClaimTypes.Name, ClaimTypes.Role);
         return new ClaimsPrincipal(identity);
     }
+
+    private static Guid IdentityId(string account) => account switch
+    {
+        "admin" => Guid.Parse("10000000-0000-0000-0000-000000000001"),
+        "leader" => Guid.Parse("10000000-0000-0000-0000-000000000002"),
+        "otherleader" => Guid.Parse("10000000-0000-0000-0000-000000000003"),
+        "employee" => Guid.Parse("10000000-0000-0000-0000-000000000004"),
+        "employee-b" => Guid.Parse("10000000-0000-0000-0000-000000000005"),
+        "unrouteable" => Guid.Parse("10000000-0000-0000-0000-000000000006"),
+        _ => Guid.Parse("10000000-0000-0000-0000-000000000099")
+    };
 
     private sealed class Environment : IAsyncDisposable
     {
@@ -242,6 +359,14 @@ public sealed class DocumentLibraryApprovalLifecycleTests
         public InMemoryFactory Factory { get; } = new();
         public Guid CustomFolderId { get; private set; }
         public Guid ProductFolderId { get; private set; }
+        public Guid TeamAId { get; private set; }
+        public Guid TeamBId { get; private set; }
+        private TestIdentityDirectory Identity { get; } = new();
+        public bool FailIdentityAccountList
+        {
+            set => Identity.FailAccountList = value;
+        }
+        public string ApprovalRootPath => ApprovalRoot;
         public DocumentLibraryApprovalUploadService Upload { get; private set; } = null!;
         public ApprovalSubmissionService Submissions { get; private set; } = null!;
         public ApprovalCommitWorker Commit { get; private set; } = null!;
@@ -274,7 +399,8 @@ public sealed class DocumentLibraryApprovalLifecycleTests
             var productL3 = Folder(3, "產品資訊", productL2.Id, now);
             CustomFolderId = customL3.Id;
             ProductFolderId = productL3.Id;
-            var teamId = Guid.NewGuid();
+            TeamAId = Guid.NewGuid();
+            TeamBId = Guid.NewGuid();
             await using var db = await Factory.CreateDbContextAsync();
             db.DocumentFolders.AddRange(customL1, customL2, customL3, productL1, productL2, productL3);
             db.MenuItems.Add(new MenuItem
@@ -284,20 +410,40 @@ public sealed class DocumentLibraryApprovalLifecycleTests
                 RoutePath = "/documents", IsEnabled = true, RequiresSupervisorApproval = false,
                 CreatedAt = now, UpdatedAt = now
             });
-            db.SystemOptions.Add(new SystemOption
-            {
-                Id = teamId, Category = SystemOptionCategories.Team, Name = "Team A", Value = "TEAM-A",
-                IsEnabled = true, CreatedAt = now, UpdatedAt = now
-            });
-            db.TeamRoutings.Add(new TeamRouting
-            {
-                Id = Guid.NewGuid(), TeamOptionId = teamId, LeaderAccount = "leader",
-                LeaderDisplayName = "Leader", IsEnabled = true, CreatedAt = now, UpdatedAt = now
-            });
+            db.SystemOptions.AddRange(
+                new SystemOption
+                {
+                    Id = TeamAId, Category = SystemOptionCategories.Team, Name = "Team A", Value = "TEAM-A",
+                    IsEnabled = true, CreatedAt = now, UpdatedAt = now
+                },
+                new SystemOption
+                {
+                    Id = TeamBId, Category = SystemOptionCategories.Team, Name = "Team B", Value = "TEAM-B",
+                    IsEnabled = true, CreatedAt = now, UpdatedAt = now
+                });
+            db.TeamRoutings.AddRange(
+                new TeamRouting
+                {
+                    Id = Guid.NewGuid(), TeamOptionId = TeamAId, LeaderAccount = "leader",
+                    LeaderDisplayName = "Leader", IsEnabled = true, CreatedAt = now, UpdatedAt = now
+                },
+                new TeamRouting
+                {
+                    Id = Guid.NewGuid(), TeamOptionId = TeamBId, LeaderAccount = "otherleader",
+                    LeaderDisplayName = "Other Leader", IsEnabled = true, CreatedAt = now, UpdatedAt = now
+                });
             db.Users.AddRange(
                 User("admin", "Administration"), User("leader", "Team A"),
-                User("employee", "Team A"), User("unrouteable", "Unknown Department"));
+                User("otherleader", "Team B"), User("employee", "Legacy Department"),
+                User("employee-b", "Legacy Department"), User("unrouteable", "Unknown Department"));
             await db.SaveChangesAsync();
+
+            Identity.Accounts.AddRange(
+                IdentityAccount("leader", "TEAM-A"),
+                IdentityAccount("otherleader", "TEAM-B"),
+                IdentityAccount("employee", "TEAM-A"),
+                IdentityAccount("employee-b", "TEAM-B"),
+                IdentityAccount("unrouteable", null));
         }
 
         private void BuildServices()
@@ -313,10 +459,19 @@ public sealed class DocumentLibraryApprovalLifecycleTests
             var registry = new ApprovalCommitHandlerRegistry([handler]);
             var auth = new TestAuthorization(Factory);
             var reviewer = new ApprovalReviewerScopeResolver(Factory, auth);
+            var configuration = new ConfigurationBuilder().AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["SharedIdentity:ProvisioningClientId"] = "test-client",
+                    ["SharedIdentity:ProvisioningClientSecret"] = "test-secret"
+                }).Build();
+            var identityAccounts = new SharedIdentityProvisioningClient(
+                new TestIdentityHttpClientFactory(Identity), configuration,
+                NullLogger<SharedIdentityProvisioningClient>.Instance);
             Submissions = new ApprovalSubmissionService(Factory, reviewer, registry, roots, staging,
                 NullLogger<ApprovalSubmissionService>.Instance);
             Upload = new DocumentLibraryApprovalUploadService(Factory, new ApprovalMenuResolver(Factory),
-                registry, staging, Submissions, Formal, auth,
+                registry, staging, Submissions, Formal, identityAccounts, auth,
                 Options.Create(new DocumentStorageOptions
                     { RootPath = LibraryRoot, MaxFileSizeBytes = 200_000_000 }));
             Commit = new ApprovalCommitWorker(Factory, registry,
@@ -330,6 +485,70 @@ public sealed class DocumentLibraryApprovalLifecycleTests
                 Options.Create(new DocumentStorageOptions { RootPath = LibraryRoot }),
                 Options.Create(new DocumentStagingOptions { RootPath = DocumentStagingRoot }),
                 NullLogger<DocumentLibraryArchiveWorker>.Instance);
+        }
+
+        public async Task ConfigureFailureAsync(string scenario)
+        {
+            if (scenario == "missing-team-code")
+            {
+                Identity.Replace("employee", account => account with { TeamCode = null });
+                return;
+            }
+            if (scenario == "unknown-team")
+            {
+                Identity.Replace("employee", account => account with { TeamCode = "TEAM-MISSING" });
+                return;
+            }
+            if (scenario == "disabled-account")
+            {
+                Identity.Replace("employee", account => account with { AccountStatus = "Disabled" });
+                return;
+            }
+            if (scenario == "disabled-system-access")
+            {
+                Identity.Replace("employee", account => account with { SystemAccessStatus = "Disabled" });
+                return;
+            }
+            if (scenario == "invalid-role")
+            {
+                Identity.Replace("employee", account => account with { CsitRole = "RdApplicant" });
+                return;
+            }
+            if (scenario == "read-only-account")
+            {
+                Identity.Replace("employee", account => account with { DataAccessLevel = "ReadOnly" });
+                return;
+            }
+
+            await using var db = await Factory.CreateDbContextAsync();
+            var team = await db.SystemOptions.SingleAsync(x => x.Id == TeamAId);
+            var routing = await db.TeamRoutings.SingleAsync(x => x.TeamOptionId == TeamAId);
+            switch (scenario)
+            {
+                case "disabled-team":
+                    team.IsEnabled = false;
+                    break;
+                case "missing-routing":
+                    db.TeamRoutings.Remove(routing);
+                    break;
+                case "disabled-routing":
+                    routing.IsEnabled = false;
+                    break;
+                case "missing-leader":
+                    routing.LeaderAccount = string.Empty;
+                    break;
+                case "conflicting-routing":
+                    db.TeamRoutings.Add(new TeamRouting
+                    {
+                        Id = Guid.NewGuid(), TeamOptionId = TeamAId, LeaderAccount = "otherleader",
+                        LeaderDisplayName = "Conflicting Leader", IsEnabled = true,
+                        CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow
+                    });
+                    break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(scenario));
+            }
+            await db.SaveChangesAsync();
         }
 
         public ValueTask DisposeAsync()
@@ -346,9 +565,57 @@ public sealed class DocumentLibraryApprovalLifecycleTests
 
         private static AppUser User(string account, string department) => new()
         {
-            Id = Guid.NewGuid(), Account = account, DisplayName = account,
+            Id = Guid.NewGuid(), IdentityUserId = IdentityId(account), Account = account, DisplayName = account,
             Department = department, Email = $"{account}@example.test"
         };
+
+        private static SharedIdentityAccountListItem IdentityAccount(string account, string? teamCode) => new(
+            IdentityId(account), account.ToUpperInvariant(), account, account,
+            "Shared Department", teamCode, "Engineer", null, $"{account}@askey.com",
+            "CsitStaff", "Editor", "Active", "Active", DateTimeOffset.UtcNow,
+            null, null);
+    }
+
+    private sealed class TestIdentityDirectory
+    {
+        public List<SharedIdentityAccountListItem> Accounts { get; } = [];
+        public bool FailAccountList { get; set; }
+
+        public void Replace(string account,
+            Func<SharedIdentityAccountListItem, SharedIdentityAccountListItem> replace)
+        {
+            var index = Accounts.FindIndex(x => string.Equals(x.Account, account,
+                StringComparison.OrdinalIgnoreCase));
+            if (index < 0) throw new InvalidOperationException($"Missing test account {account}.");
+            Accounts[index] = replace(Accounts[index]);
+        }
+    }
+
+    private sealed class TestIdentityHttpClientFactory(TestIdentityDirectory directory) : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new TestIdentityHttpHandler(directory))
+        {
+            BaseAddress = new Uri("http://identity.test/")
+        };
+    }
+
+    private sealed class TestIdentityHttpHandler(TestIdentityDirectory directory) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/connect/token", StringComparison.Ordinal))
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = JsonContent.Create(new { access_token = "test-token" })
+                });
+            if (directory.FailAccountList)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable));
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = JsonContent.Create(directory.Accounts)
+            });
+        }
     }
 
     private sealed class FixedRoot(string root) : IApprovalStagingRootResolver

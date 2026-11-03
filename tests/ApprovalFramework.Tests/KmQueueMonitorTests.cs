@@ -14,8 +14,7 @@ namespace ApprovalFramework.Tests;
 
 public sealed class KmQueueMonitorTests
 {
-    private static readonly DateTime Now =
-        new(2026, 11, 3, 8, 0, 0, DateTimeKind.Utc);
+    private static readonly DateTime Now = DateTime.UtcNow;
 
     [Fact]
     public void QueueDtoDoesNotExposeStoragePathsAndControllerRequiresDedicatedPolicy()
