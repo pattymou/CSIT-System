@@ -85,6 +85,7 @@ public sealed class KmQueueMonitorTests
         Assert.Equal("等待自動重試", unfinished.Items.Single(x => x.Id == waitingRetry.Id).RetryState);
         Assert.Equal("不可自動重試／需要人工處理",
             unfinished.Items.Single(x => x.Id == callbackFailure.Id).RetryState);
+        Assert.All(unfinished.Items, item => Assert.Equal("未記錄", item.UploadedBy));
 
         var recent = await service.GetIngestionAsync(KmQueueFilters.Completed, 1);
         Assert.Single(recent.Items);
@@ -134,6 +135,7 @@ public sealed class KmQueueMonitorTests
         Assert.Equal(2, unfinished.Total);
         Assert.Contains(unfinished.Items, x => x.Status == DocumentLibraryFileDeletionStatuses.KmVerified);
         Assert.Contains(unfinished.Items, x => x.RetryState == "本地清理失敗");
+        Assert.All(unfinished.Items, item => Assert.Equal("原始紀錄已刪除", item.UploadedBy));
         Assert.DoesNotContain(unfinished.Items, x => x.Id == completed.Id);
 
         var recent = await service.GetDeletionAsync(KmQueueFilters.Completed, 1);

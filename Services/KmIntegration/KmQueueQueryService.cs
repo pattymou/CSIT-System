@@ -50,7 +50,7 @@ public sealed class KmQueueQueryService(
                 : Safe(row.LastErrorMessage);
             return new KmQueueItemDto(
                 offset + index + 1, row.Id, source?.FileName ?? row.FileName,
-                SourceModule(row.SourceEntityType), source?.Uploader ?? "原始紀錄已刪除",
+                SourceModule(row.SourceEntityType), source?.Uploader ?? "未記錄",
                 source?.UploadedAt, row.CreatedAt, row.Status.ToString(),
                 IngestionStatusDisplay(row.Status), row.RetryCount, row.NextRetryAt,
                 IngestionRetryState(row, unsupported, now), row.LastErrorCode, detail);

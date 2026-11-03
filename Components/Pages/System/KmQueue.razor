@@ -94,7 +94,7 @@ else
                                 <td>@item.DeletionCategory</td>
                             }
                             <td>@item.UploadedBy</td>
-                            <td>@FormatTaipei(item.UploadedAt)</td>
+                            <td>@FormatOriginalUpload(item)</td>
                             <td>@FormatTaipei(item.QueuedAt)</td>
                             <td><span class="kmq-status @StatusClass(item.Status)">@item.StatusDisplay</span></td>
                             <td>@item.RetryCount</td>
@@ -274,6 +274,12 @@ else
             : DateTime.SpecifyKind(value.Value, DateTimeKind.Utc);
         return TimeZoneInfo.ConvertTimeFromUtc(utc, TaipeiTimeZone)
             .ToString("yyyy/MM/dd HH:mm:ss");
+    }
+
+    private static string FormatOriginalUpload(KmQueueItemDto item)
+    {
+        if (item.UploadedAt.HasValue) return FormatTaipei(item.UploadedAt);
+        return item.UploadedBy == "原始紀錄已刪除" ? "原始紀錄已刪除" : "未記錄";
     }
 
     private static TimeZoneInfo ResolveTaipeiTimeZone()
