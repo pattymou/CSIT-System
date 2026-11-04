@@ -39,23 +39,34 @@
     {
         <div class="attachment-table-wrap">
             <table class="attachment-table">
+                <colgroup>
+                    <col class="attachment-name-column" />
+                    <col class="attachment-size-column" />
+                    <col class="attachment-uploader-column" />
+                    <col class="attachment-status-column" />
+                    <col class="attachment-status-column" />
+                    <col class="attachment-date-column" />
+                    <col class="attachment-action-column" />
+                </colgroup>
                 <thead><tr><th>檔案名稱</th><th>大小</th><th>上傳者</th><th>正式入庫</th><th>KM 分析</th><th>上傳時間</th><th></th></tr></thead>
                 <tbody>
                     @foreach (var file in _files)
                     {
                         <tr>
-                            <td>@file.FileName</td>
+                            <td class="attachment-file-name" title="@file.FileName">@file.FileName</td>
                             <td>@FormatSize(file.FileSize)</td>
                             <td>@Display(file.UploadedBy)</td>
                             <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Archive(file.FormalArchiveStatus)" Title="@file.FormalArchiveError" /></td>
                             <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Km(file.KmAnalysisStatus != VerificationAttachmentKmStatuses.NotApplicable, file.KmAnalysisStatus != VerificationAttachmentKmStatuses.Disabled, file.KmAnalysisStatus)" Title="@file.KmAnalysisError" /></td>
                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
                             <td class="attachment-actions">
-                                <a class="table-link-btn" href="@($"/api/verification-application-files/{file.Id}/download")">下載</a>
-                                @if (CanManage)
-                                {
-                                    <button type="button" class="table-chip-btn danger" disabled="@_working" @onclick="() => DeleteAsync(file)">移除</button>
-                                }
+                                <div class="attachment-action-row">
+                                    <a class="attachment-action-button download" href="@($"/api/verification-application-files/{file.Id}/download")">下載</a>
+                                    @if (CanManage)
+                                    {
+                                        <button type="button" class="attachment-action-button remove" disabled="@_working" @onclick="() => DeleteAsync(file)">移除</button>
+                                    }
+                                </div>
                             </td>
                         </tr>
                     }
@@ -64,21 +75,6 @@
         </div>
     }
 </div>
-
-<style>
-    .validation-attachments { display:grid; gap:10px; padding:13px; border:1px dashed rgba(148,163,184,.38); border-radius:9px; background:rgba(15,23,42,.22); }
-    .attachment-upload { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-    .attachment-upload input[type=file] { width:auto!important; min-height:auto!important; padding:7px!important; flex:1 1 340px; }
-    .attachment-hint,.attachment-empty { color:#94a3b8; font-size:.78rem; }
-    .attachment-message { padding:9px 11px; border-radius:8px; font-size:.82rem; }
-    .attachment-message.success { color:#99f6e4; background:rgba(13,148,136,.14); }
-    .attachment-message.error { color:#fecaca; background:rgba(220,38,38,.14); }
-    .attachment-table-wrap { overflow-x:auto; }
-    .attachment-table { width:100%; min-width:980px; border-collapse:collapse; font-size:.82rem; }
-    .attachment-table th,.attachment-table td { padding:9px 8px; text-align:left; border-bottom:1px solid rgba(148,163,184,.15); }
-    .attachment-table th { color:#94a3b8; font-weight:700; }
-    .attachment-actions { white-space:nowrap; text-align:right!important; }
-</style>
 
 @code {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);

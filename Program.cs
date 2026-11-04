@@ -329,6 +329,7 @@ builder.Services.AddScoped<ApprovalPolicyResolver>();
 builder.Services.AddScoped<ApprovalReviewerScopeResolver>();
 builder.Services.AddScoped<ApprovalSubmissionService>();
 builder.Services.AddScoped<MySubmissionWorkspaceService>();
+builder.Services.AddScoped<MySubmissionQueryService>();
 builder.Services.AddScoped<ApprovalContextUploads>();
 builder.Services.AddScoped<VendorApprovalSourceResolver>();
 builder.Services.AddScoped<VendorApprovalUploadService>();

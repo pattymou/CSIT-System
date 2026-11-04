@@ -88,9 +88,13 @@
 }
 
 .my-submission-actions .table-chip-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     padding: 9px 11px;
     border-radius: 10px;
     font-size: 13px;
+    text-decoration: none;
 }
 
 .my-submission-actions .table-chip-btn + .table-chip-btn { margin-left: 6px; }
@@ -105,6 +109,37 @@
 }
 
 .my-submission-link:hover { color: #a8ecff; }
+
+.my-submission-source {
+    display: inline-flex;
+    max-width: 100%;
+    padding: 4px 8px;
+    border: 1px solid rgba(126, 217, 255, .32);
+    border-radius: 999px;
+    overflow: hidden;
+    background: rgba(35, 93, 119, .28);
+    color: #b9e8f5;
+    font-size: 12px;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.my-submission-source.verification {
+    border-color: rgba(116, 190, 174, .4);
+    background: rgba(40, 105, 91, .3);
+    color: #c1eadf;
+}
+
+.my-submission-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-top: 16px;
+    color: #b9cbd4;
+    font-size: 13px;
+}
 
 .my-submission-dialog-backdrop {
     position: fixed;

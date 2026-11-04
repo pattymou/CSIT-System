@@ -3,9 +3,9 @@
 @attribute [Authorize]
 @rendermode InteractiveServer
 @using SIT.DepartmentSystem.Web.Services.Approval
-@using SIT.DepartmentSystem.Web.Entities
 @using Microsoft.AspNetCore.Http
 @inject ApprovalSubmissionService Submissions
+@inject MySubmissionQueryService Query
 @inject MySubmissionWorkspaceService Workspace
 @inject AuthenticationStateProvider AuthProvider
 
@@ -19,73 +19,80 @@
 }
 
 <nav class="my-submission-tabs" role="tablist" aria-label="我的提交分類">
-    <button type="button" role="tab" class="my-submission-tab @(_selectedStatus == ApprovalStatus.Pending ? "active" : "")"
-            aria-selected="@(_selectedStatus == ApprovalStatus.Pending)" @onclick="() => SelectTabAsync(ApprovalStatus.Pending)">
+    <button type="button" role="tab" class="my-submission-tab @(_selectedView == MySubmissionView.Pending ? "active" : "")"
+            aria-selected="@(_selectedView == MySubmissionView.Pending)" @onclick="() => SelectTabAsync(MySubmissionView.Pending)">
         待審核 <span class="my-submission-count">@_counts.Pending</span>
     </button>
-    <button type="button" role="tab" class="my-submission-tab @(_selectedStatus == ApprovalStatus.Rejected ? "active" : "")"
-            aria-selected="@(_selectedStatus == ApprovalStatus.Rejected)" @onclick="() => SelectTabAsync(ApprovalStatus.Rejected)">
-        已退回 <span class="my-submission-count">@_counts.Rejected</span>
+    <button type="button" role="tab" class="my-submission-tab @(_selectedView == MySubmissionView.Returned ? "active" : "")"
+            aria-selected="@(_selectedView == MySubmissionView.Returned)" @onclick="() => SelectTabAsync(MySubmissionView.Returned)">
+        已退回 <span class="my-submission-count">@_counts.Returned</span>
     </button>
 </nav>
 
 <section class="my-submission-panel" role="tabpanel">
     <div class="my-submission-panel-head">
-        <h2>@(_selectedStatus == ApprovalStatus.Pending ? "待審核" : "已退回")</h2>
+        <h2>@(_selectedView == MySubmissionView.Pending ? "待審核" : "已退回")</h2>
         <button type="button" class="table-chip-btn" @onclick="RefreshAsync" disabled="@_busy">重新整理</button>
     </div>
     @if (_items.Count == 0)
     {
-        <div class="record-empty-box">@(_selectedStatus == ApprovalStatus.Pending ? "目前沒有待審核的提交。" : "目前沒有需要處理的退回項目。")</div>
+        <div class="record-empty-box">@(_selectedView == MySubmissionView.Pending ? "目前沒有待審核的提交。" : "目前沒有需要處理的退回項目。")</div>
     }
     else
     {
         <div class="project-table-wrap my-submission-table-wrap">
-            <table class="project-table my-submission-table @(_selectedStatus == ApprovalStatus.Pending ? "pending" : "rejected")">
-                @if (_selectedStatus == ApprovalStatus.Pending)
+            <table class="project-table my-submission-table @(_selectedView == MySubmissionView.Pending ? "pending" : "rejected")">
+                @if (_selectedView == MySubmissionView.Pending)
                 {
                     <colgroup><col class="source" /><col class="context" /><col class="file" /><col class="uploader" /><col class="date" /><col class="action" /></colgroup>
-                    <thead><tr><th>來源</th><th>項目</th><th>檔案</th><th>上傳者</th><th>提交時間</th><th>操作</th></tr></thead>
+                    <thead><tr><th>來源</th><th>項目</th><th>檔案</th><th>提交人</th><th>提交時間</th><th>操作</th></tr></thead>
                 }
                 else
                 {
                     <colgroup><col class="source" /><col class="context" /><col class="file" /><col class="uploader" /><col class="reason" /><col class="date" /><col class="action" /></colgroup>
-                    <thead><tr><th>來源</th><th>項目</th><th>檔案</th><th>上傳者</th><th>退回原因</th><th>提交時間</th><th>操作</th></tr></thead>
+                    <thead><tr><th>來源</th><th>項目</th><th>檔案</th><th>提交人</th><th>退回原因</th><th>提交時間</th><th>操作</th></tr></thead>
                 }
                 <tbody>
                     @foreach (var item in _items)
                     {
                         <tr>
-                            <td>@item.SourceTitle</td>
-                            <td title="@ContextLabel(item)">
-                                @if (item.ContextRoute is not null)
+                            <td><span class="my-submission-source @(item.SourceKind == MySubmissionSourceKind.VerificationApplication ? "verification" : "document")">@item.SourceTitle</span></td>
+                            <td title="@item.ItemLabel">
+                                @if (item.ItemRoute is not null)
                                 {
-                                    <a class="my-submission-link" href="@item.ContextRoute">@ContextLabel(item)</a>
+                                    <a class="my-submission-link" href="@item.ItemRoute">@item.ItemLabel</a>
                                 }
-                                else { @ContextLabel(item) }
+                                else { @item.ItemLabel }
                             </td>
-                            <td title="@item.OriginalFileName">
-                                @if (item.HasStagingFile)
+                            <td title="@item.FileLabel">
+                                @if (item.FileDownloadRoute is not null)
                                 {
-                                    <a class="my-submission-link" href="@($"/api/supervisor-submissions/{item.Id}/file")">@item.OriginalFileName</a>
+                                    <a class="my-submission-link" href="@item.FileDownloadRoute">@item.FileLabel</a>
                                 }
-                                else { @Display(item.OriginalFileName) }
+                                else { @item.FileLabel }
                             </td>
                             <td title="@item.SubmittedByAccount">@Display(item.SubmittedByAccount)</td>
-                            @if (_selectedStatus == ApprovalStatus.Rejected)
+                            @if (_selectedView == MySubmissionView.Returned)
                             {
-                                <td class="my-submission-reason" title="@item.RejectReason">@Display(item.RejectReason)</td>
+                                <td class="my-submission-reason" title="@item.ReturnReason">@Display(item.ReturnReason)</td>
                             }
                             <td>@item.SubmittedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
                             <td class="my-submission-actions">
-                                @if (_selectedStatus == ApprovalStatus.Pending)
+                                @if (item.SourceKind == MySubmissionSourceKind.ApprovalSubmission)
                                 {
-                                    <button type="button" class="table-chip-btn danger" disabled="@_busy" @onclick="() => WithdrawAsync(item.Id)">撤回</button>
+                                    @if (_selectedView == MySubmissionView.Pending)
+                                    {
+                                        <button type="button" class="table-chip-btn danger" disabled="@_busy" @onclick="() => WithdrawAsync(item)">撤回</button>
+                                    }
+                                    else
+                                    {
+                                        <button type="button" class="table-chip-btn" disabled="@_busy" @onclick="() => BeginResubmit(item)">重新上傳</button>
+                                        <button type="button" class="table-chip-btn danger" disabled="@_busy" @onclick="() => DismissAsync(item)">移除</button>
+                                    }
                                 }
-                                else
+                                else if (item.ItemRoute is not null)
                                 {
-                                    <button type="button" class="table-chip-btn" disabled="@_busy" @onclick="() => BeginResubmit(item)">重新上傳</button>
-                                    <button type="button" class="table-chip-btn danger" disabled="@_busy" @onclick="() => DismissAsync(item.Id)">移除</button>
+                                    <a class="table-chip-btn" href="@item.ItemRoute">@item.PrimaryActionLabel</a>
                                 }
                             </td>
                         </tr>
@@ -93,6 +100,14 @@
                 </tbody>
             </table>
         </div>
+        @if (_totalCount > PageSize)
+        {
+            <nav class="my-submission-pagination" aria-label="我的提交項目分頁">
+                <button type="button" class="table-chip-btn" disabled="@(_busy || _page <= 1)" @onclick="PreviousPageAsync">上一頁</button>
+                <span>第 @_page / @TotalPages 頁，共 @_totalCount 筆</span>
+                <button type="button" class="table-chip-btn" disabled="@(_busy || _page >= TotalPages)" @onclick="NextPageAsync">下一頁</button>
+            </nav>
+        }
     }
 </section>
 
@@ -101,8 +116,8 @@
     <div class="my-submission-dialog-backdrop">
         <section class="my-submission-dialog" role="dialog" aria-modal="true" aria-labelledby="my-submission-dialog-title">
             <h2 id="my-submission-dialog-title">重新上傳</h2>
-            <p><strong>項目：</strong>@ContextLabel(_resubmitting)</p>
-            <p><strong>退回原因：</strong>@Display(_resubmitting.RejectReason)</p>
+            <p><strong>項目：</strong>@_resubmitting.ItemLabel</p>
+            <p><strong>退回原因：</strong>@Display(_resubmitting.ReturnReason)</p>
             @if (_isError && !string.IsNullOrWhiteSpace(_message))
             {
                 <p class="error-text" role="alert">@_message</p>
@@ -118,21 +133,40 @@
 }
 
 @code {
-    private ApprovalStatus _selectedStatus = ApprovalStatus.Pending;
-    private MySubmissionCounts _counts = new(0, 0);
-    private List<ApprovalSubmissionDto> _items = [];
-    private ApprovalSubmissionDto? _resubmitting;
+    private MySubmissionView _selectedView = MySubmissionView.Pending;
+    private MySubmissionWorkspaceCounts _counts = new(0, 0);
+    private List<MySubmissionWorkspaceItemDto> _items = [];
+    private MySubmissionWorkspaceItemDto? _resubmitting;
+    private const int PageSize = 50;
+    private int _page = 1;
+    private int _totalCount;
     private IBrowserFile? _newFile;
     private string? _message;
     private bool _isError;
     private bool _busy;
+    private int TotalPages => Math.Max(1, (int)Math.Ceiling(_totalCount / (double)PageSize));
 
     protected override async Task OnInitializedAsync() => await ReloadAsync();
 
-    private async Task SelectTabAsync(ApprovalStatus status)
+    private async Task SelectTabAsync(MySubmissionView view)
     {
-        _selectedStatus = status;
+        _selectedView = view;
+        _page = 1;
         _message = null;
+        await ReloadAsync();
+    }
+
+    private async Task PreviousPageAsync()
+    {
+        if (_page <= 1) return;
+        _page--;
+        await ReloadAsync();
+    }
+
+    private async Task NextPageAsync()
+    {
+        if (_page >= TotalPages) return;
+        _page++;
         await ReloadAsync();
     }
 
@@ -143,19 +177,27 @@
         try
         {
             var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
-            _counts = await Submissions.CountMineAsync(user);
-            _items = (await Submissions.ListMineAsync(user, _selectedStatus)).ToList();
+            var result = await Query.ListAsync(user, _selectedView, _page, PageSize);
+            if (_page > 1 && result.Items.Count == 0 && result.TotalCount > 0)
+            {
+                _page = Math.Max(1, (int)Math.Ceiling(result.TotalCount / (double)PageSize));
+                result = await Query.ListAsync(user, _selectedView, _page, PageSize);
+            }
+            _counts = result.Counts;
+            _totalCount = result.TotalCount;
+            _items = result.Items.ToList();
         }
         catch { ShowError("無法載入提交項目，請稍後再試。"); }
     }
 
-    private async Task WithdrawAsync(Guid id)
+    private async Task WithdrawAsync(MySubmissionWorkspaceItemDto item)
     {
+        if (item.SourceKind != MySubmissionSourceKind.ApprovalSubmission) return;
         _busy = true;
         try
         {
             var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
-            await Submissions.WithdrawMineAsync(id, user);
+            await Submissions.WithdrawMineAsync(item.Id, user);
             await ReloadAsync();
             ShowSuccess("已撤回送審。");
         }
@@ -165,13 +207,14 @@
         finally { _busy = false; }
     }
 
-    private async Task DismissAsync(Guid id)
+    private async Task DismissAsync(MySubmissionWorkspaceItemDto item)
     {
+        if (item.SourceKind != MySubmissionSourceKind.ApprovalSubmission) return;
         _busy = true;
         try
         {
             var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
-            await Submissions.DismissMineAsync(id, user);
+            await Submissions.DismissMineAsync(item.Id, user);
             await ReloadAsync();
             ShowSuccess("已從待處理清單移除。");
         }
@@ -181,8 +224,9 @@
         finally { _busy = false; }
     }
 
-    private void BeginResubmit(ApprovalSubmissionDto item)
+    private void BeginResubmit(MySubmissionWorkspaceItemDto item)
     {
+        if (item.SourceKind != MySubmissionSourceKind.ApprovalSubmission) return;
         _resubmitting = item;
         _newFile = null;
         _message = null;
@@ -212,10 +256,6 @@
     private void ShowError(string message) { _message = message; _isError = true; }
     private void ShowSuccess(string message) { _message = message; _isError = false; }
     private static string Display(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
-    private static string ContextLabel(ApprovalSubmissionDto item) =>
-        string.IsNullOrWhiteSpace(item.ContextDisplay) || Guid.TryParse(item.ContextDisplay, out _)
-            ? "原項目（目前無法解析）" : item.ContextDisplay;
-
     private sealed class BrowserSubmissionFile(IBrowserFile file) : IFormFile
     {
         public string ContentType { get; set; } = file.ContentType;
