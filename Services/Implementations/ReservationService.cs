@@ -7,6 +7,7 @@ using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.ValidationRequests;
 
 namespace SIT.DepartmentSystem.Web.Services.Implementations;
 
@@ -18,19 +19,22 @@ public sealed class ReservationService : IReservationService
     private readonly IApparatusResourceCapabilityService _resourceCapabilities;
     private readonly IReservationPolicyService _policy;
     private readonly IEnvironmentGroupDeviceService _environmentGroupDevices;
+    private readonly IValidationRequestApplicationOptionSource _validationRequestOptions;
 
     public ReservationService(
         AppDbContext db,
         IApparatusAvailabilityService availability,
         IApparatusResourceCapabilityService resourceCapabilities,
         IReservationPolicyService policy,
-        IEnvironmentGroupDeviceService environmentGroupDevices)
+        IEnvironmentGroupDeviceService environmentGroupDevices,
+        IValidationRequestApplicationOptionSource validationRequestOptions)
     {
         _db = db;
         _availability = availability;
         _resourceCapabilities = resourceCapabilities;
         _policy = policy;
         _environmentGroupDevices = environmentGroupDevices;
+        _validationRequestOptions = validationRequestOptions;
     }
 
     public async Task<IReadOnlyList<ReservationEnvironmentOptionDto>> GetEnvironmentOptionsAsync(
@@ -203,14 +207,13 @@ public sealed class ReservationService : IReservationService
     {
         EnsureReservationUser(user);
         var applicant = await ResolveApplicantAsync(user, cancellationToken);
-        var options = await _db.SystemOptions.AsNoTracking()
+        var departments = await _db.SystemOptions.AsNoTracking()
             .Where(x => x.IsEnabled
-                && (x.Category == SystemOptionCategories.Department
-                    || x.Category == SystemOptionCategories.Customer
-                    || x.Category == SystemOptionCategories.SubPu))
+                && x.Category == SystemOptionCategories.Department)
             .OrderBy(x => x.Sort).ThenBy(x => x.Name).ThenBy(x => x.Value)
-            .Select(x => new { x.Category, x.Name, x.Value })
+            .Select(x => ToReservationOption(x.Value, x.Name))
             .ToListAsync(cancellationToken);
+        var validationOptions = await _validationRequestOptions.GetAsync(cancellationToken);
 
         return new ReservationApplicationOptionsDto
         {
@@ -220,12 +223,9 @@ public sealed class ReservationService : IReservationService
                 Department = Require(applicant.Department, nameof(AppUser.Department)),
                 Email = Clean(applicant.Email)
             },
-            Departments = options.Where(x => x.Category == SystemOptionCategories.Department)
-                .Select(x => ToReservationOption(x.Value, x.Name)).ToList(),
-            Customers = options.Where(x => x.Category == SystemOptionCategories.Customer)
-                .Select(x => ToReservationOption(x.Value, x.Name)).ToList(),
-            SubPus = options.Where(x => x.Category == SystemOptionCategories.SubPu)
-                .Select(x => ToReservationOption(x.Value, x.Name)).ToList()
+            Departments = departments,
+            Customers = validationOptions.Customers.Select(ToReservationOption).ToList(),
+            SubPus = validationOptions.PuCodes.Select(ToReservationOption).ToList()
         };
     }
 
@@ -1172,10 +1172,11 @@ public sealed class ReservationService : IReservationService
         await _policy.EnsureDepartmentQuotaAsync(
             entity.ApplicantDepartment, entity.StartTime, entity.EndTime, apparatusIds.Length, entity.Id,
             acquireTransactionLock: true, cancellationToken: cancellationToken);
-        await EnsureApplicationOptionIsActiveAsync(
-            entity.Customer, SystemOptionCategories.Customer, nameof(entity.Customer), cancellationToken);
-        await EnsureApplicationOptionIsActiveAsync(
-            entity.ProjectSubPu, SystemOptionCategories.SubPu, nameof(entity.ProjectSubPu), cancellationToken);
+        var validationOptions = await _validationRequestOptions.GetAsync(cancellationToken);
+        EnsureApplicationOptionIsActive(
+            entity.Customer, validationOptions.Customers, nameof(entity.Customer));
+        EnsureApplicationOptionIsActive(
+            entity.ProjectSubPu, validationOptions.PuCodes, nameof(entity.ProjectSubPu));
     }
 
     private async Task<bool> CanReviewApparatusForUpdateAsync(
@@ -1234,17 +1235,14 @@ public sealed class ReservationService : IReservationService
             ?? throw new InvalidOperationException("Authenticated user profile was not found.");
     }
 
-    private async Task EnsureApplicationOptionIsActiveAsync(
+    private static void EnsureApplicationOptionIsActive(
         string? value,
-        string category,
-        string fieldName,
-        CancellationToken cancellationToken)
+        IReadOnlyList<ValidationOptionDto> options,
+        string fieldName)
     {
         var canonicalValue = Require(value, fieldName);
-        if (!await _db.SystemOptions.AsNoTracking().AnyAsync(
-                x => x.Category == category && x.IsEnabled && x.Value == canonicalValue,
-                cancellationToken))
-            throw new InvalidOperationException($"{fieldName} must be a currently enabled {category} option.");
+        if (!options.Any(x => string.Equals(x.ValueCode, canonicalValue, StringComparison.Ordinal)))
+            throw new InvalidOperationException($"{fieldName} must be a currently enabled validation request option.");
     }
 
     private static ReservationOptionDto ToReservationOption(string value, string name) => new()
@@ -1252,6 +1250,9 @@ public sealed class ReservationService : IReservationService
         Value = value,
         Label = string.IsNullOrWhiteSpace(name) ? value : name
     };
+
+    private static ReservationOptionDto ToReservationOption(ValidationOptionDto option) =>
+        ToReservationOption(option.ValueCode, option.DisplayLabel);
 
     private async Task EnsureStoredEnvironmentSelectionsValidAsync(
         Reservation entity,

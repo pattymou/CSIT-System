@@ -319,6 +319,7 @@ builder.Services.AddScoped<IAssignableEngineerDirectory>(provider => provider.Ge
 builder.Services.AddScoped<LabOwnerDirectory>();
 builder.Services.AddScoped<IMenuManagementService, MenuManagementService>();
 builder.Services.AddScoped<IValidationRequestConfigurationService, ValidationRequestConfigurationService>();
+builder.Services.AddScoped<IValidationRequestApplicationOptionSource, ValidationRequestApplicationOptionSource>();
 builder.Services.AddScoped<IApprovalCommitHandlerRegistry, ApprovalCommitHandlerRegistry>();
 builder.Services.AddScoped<IApprovalStagingRootResolver, ApprovalStagingRootResolver>();
 builder.Services.AddScoped<IApprovalStagingStorage, ApprovalStagingStorage>();
