@@ -4,6 +4,21 @@
     opacity: 0.75;
 }
 
+.sidebar {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+@media (max-width: 820px) {
+    .sidebar {
+        height: auto;
+        min-height: 0;
+        overflow: visible;
+        position: relative;
+    }
+}
+
 #blazor-error-ui {
     color-scheme: light only;
     background: lightyellow;
