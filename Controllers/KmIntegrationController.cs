@@ -493,6 +493,8 @@ public sealed class KmIntegrationController(
                 PayloadSha256 = payloadSha256,
                 ReceivedAt = now
             });
+            await KmAnalysisCallbackService.ProjectDocumentLibraryCallbackAsync(db, row, callback,
+                payloadSha256, metadataJson, now, cancellationToken);
             await db.SaveChangesAsync(cancellationToken);
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             logger.LogInformation("Document library callback accepted DocumentFileId={DocumentFileId} CsitJobId={CsitJobId} KmJobId={KmJobId} Status={Status}",

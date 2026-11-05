@@ -123,6 +123,11 @@ public sealed class DocumentLibraryKmIntegrationTests
                 Assert.Equal(DocumentProcessingStatuses.Completed, job.Status);
                 Assert.Equal(DocumentArchiveStatuses.Completed, job.ArchiveStatus);
                 Assert.Equal(2, await db.DocumentProcessingCallbacks.CountAsync());
+                var unified = Assert.Single(await db.KmDocumentAnalysisResults.ToListAsync());
+                Assert.Equal(KmAnalysisSourceTypes.DocumentLibraryFile, unified.SourceType);
+                Assert.Equal(uploaded.Id, unified.SourceEntityId);
+                Assert.Equal("1.0", unified.MetadataSchemaVersion);
+                Assert.Equal(2, await db.KmAnalysisCallbackReceipts.CountAsync());
                 using var metadata = JsonDocument.Parse(job.MetadataJson!);
                 Assert.Equal("1.0", metadata.RootElement.GetProperty("metadataSchemaVersion").GetString());
                 Assert.True(metadata.RootElement.TryGetProperty("document", out _));

@@ -219,6 +219,10 @@ builder.Services.AddAuthorization(options =>
         policy.AddAuthenticationSchemes(KmIntegrationAuthorization.Scheme)
             .RequireAuthenticatedUser().AddRequirements(
                 new KmServicePrincipalRequirement(KmIntegrationAuthorization.StatusWriteScope)));
+    options.AddPolicy(KmIntegrationAuthorization.AnalysisStatusWritePolicy, policy =>
+        policy.AddAuthenticationSchemes(KmIntegrationAuthorization.Scheme)
+            .RequireAuthenticatedUser().AddRequirements(
+                new KmServicePrincipalRequirement(KmIntegrationAuthorization.AnalysisStatusWriteScope)));
     options.AddPolicy(KmIntegrationAuthorization.DeletionStatusWritePolicy, policy =>
         policy.AddAuthenticationSchemes(KmIntegrationAuthorization.Scheme)
             .RequireAuthenticatedUser().AddRequirements(
@@ -286,6 +290,8 @@ builder.Services.AddScoped<KmSyncWorker>();
 builder.Services.AddScoped<KmManualRetryService>();
 builder.Services.AddScoped<KmSyncDiagnostics>();
 builder.Services.AddScoped<KmQueueQueryService>();
+builder.Services.AddScoped<KmAnalysisCallbackService>();
+builder.Services.AddScoped<KmAnalysisQueryService>();
 builder.Services.AddHostedService<KmSyncBackgroundService>();
 builder.Services.AddScoped<DocumentLibraryArchiveWorker>();
 builder.Services.AddHostedService<DocumentLibraryArchiveBackgroundService>();

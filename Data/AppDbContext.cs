@@ -70,6 +70,9 @@ public class AppDbContext : DbContext
     public DbSet<DocumentLibraryFile> DocumentLibraryFiles => Set<DocumentLibraryFile>();
     public DbSet<DocumentProcessingJob> DocumentProcessingJobs => Set<DocumentProcessingJob>();
     public DbSet<DocumentProcessingCallbackReceipt> DocumentProcessingCallbacks => Set<DocumentProcessingCallbackReceipt>();
+    public DbSet<KmDocumentAnalysisResult> KmDocumentAnalysisResults => Set<KmDocumentAnalysisResult>();
+    public DbSet<KmAnalysisCallbackReceipt> KmAnalysisCallbackReceipts => Set<KmAnalysisCallbackReceipt>();
+    public DbSet<KmAnalysisReviewRevision> KmAnalysisReviewRevisions => Set<KmAnalysisReviewRevision>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -127,10 +130,26 @@ public class AppDbContext : DbContext
         if (ChangeTracker.Entries<KmIntegrationManualRetryAudit>().Any(x =>
                 x.State is EntityState.Modified or EntityState.Deleted))
             throw new InvalidOperationException("KM manual retry audits are append-only.");
+        if (ChangeTracker.Entries<KmAnalysisCallbackReceipt>().Any(x =>
+                x.State is EntityState.Modified or EntityState.Deleted) ||
+            ChangeTracker.Entries<KmAnalysisReviewRevision>().Any(x =>
+                x.State is EntityState.Modified or EntityState.Deleted) ||
+            ChangeTracker.Entries<KmDocumentAnalysisResult>().Any(x => x.State == EntityState.Deleted))
+            throw new InvalidOperationException("KM analysis receipts, results, and review revisions are append-only.");
+        var allowedResultChanges = new HashSet<string>
+        {
+            nameof(KmDocumentAnalysisResult.ReviewStatus), nameof(KmDocumentAnalysisResult.ReviewedBy),
+            nameof(KmDocumentAnalysisResult.ReviewedAt), nameof(KmDocumentAnalysisResult.SupersededAt)
+        };
+        if (ChangeTracker.Entries<KmDocumentAnalysisResult>().Where(x => x.State == EntityState.Modified)
+            .SelectMany(x => x.Properties.Where(p => p.IsModified))
+            .Any(x => !allowedResultChanges.Contains(x.Metadata.Name)))
+            throw new InvalidOperationException("Original KM analysis result data is immutable.");
     }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
+        modelBuilder.ConfigureKmAnalysis();
         modelBuilder.ConfigureTestCatalog();
         modelBuilder.ConfigureVerificationApplicationRouting();
         modelBuilder.ConfigureSystemMasterData();

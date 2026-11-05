@@ -11,10 +11,12 @@ public static class KmIntegrationAuthorization
     public const string Policy = "KmIntegrationServicePrincipal";
     public const string DocumentReadPolicy = "KmIntegrationDocumentRead";
     public const string StatusWritePolicy = "KmIntegrationStatusWrite";
+    public const string AnalysisStatusWritePolicy = "KmAnalysisStatusWrite";
     public const string DeletionStatusWritePolicy = "KmDeletionStatusWrite";
     public const string Audience = "csit.integration.dev";
     public const string DocumentReadScope = "csit.document.read";
     public const string StatusWriteScope = "csit.ingestion.status.write";
+    public const string AnalysisStatusWriteScope = "csit.km.status.write";
 }
 
 // The service bearer validator is deliberately unavailable until Client Credentials is delivered.

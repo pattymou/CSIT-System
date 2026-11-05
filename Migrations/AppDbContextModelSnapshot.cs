@@ -1314,6 +1314,259 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         });
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmAnalysisCallbackReceipt", b =>
+                {
+                    b.Property<Guid>("CallbackId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("callback_id");
+
+                    b.Property<string>("Endpoint")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("endpoint");
+
+                    b.Property<Guid>("OutboxId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("outbox_id");
+
+                    b.Property<string>("PayloadSha256")
+                        .IsRequired()
+                        .HasColumnType("char(64)")
+                        .HasColumnName("payload_sha256");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.HasKey("CallbackId");
+
+                    b.HasIndex("OutboxId");
+
+                    b.ToTable("km_analysis_callback_receipts", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_km_analysis_callback_sha256", "length(payload_sha256) = 64");
+
+                            t.HasCheckConstraint("ck_km_analysis_callback_status", "status IN ('Processing','Completed','Failed')");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmAnalysisReviewRevision", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AnalysisResultId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("analysis_result_id");
+
+                    b.Property<string>("CorrectionsJson")
+                        .HasColumnType("jsonb")
+                        .HasColumnName("corrections_json");
+
+                    b.Property<string>("Decision")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("decision");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("reason");
+
+                    b.Property<DateTime>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at");
+
+                    b.Property<string>("ReviewedBy")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("reviewed_by");
+
+                    b.Property<int>("Revision")
+                        .HasColumnType("integer")
+                        .HasColumnName("revision");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AnalysisResultId", "Revision")
+                        .IsUnique();
+
+                    b.ToTable("km_analysis_review_revisions", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_km_analysis_review_decision", "decision IN ('Verified','Rejected')");
+
+                            t.HasCheckConstraint("ck_km_analysis_review_revision", "revision >= 1");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmDocumentAnalysisResult", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<Guid>("AnalysisResultId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("analysis_result_id");
+
+                    b.Property<DateTime>("AnalyzedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("analyzed_at");
+
+                    b.Property<Guid>("CallbackId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("callback_id");
+
+                    b.Property<string>("CallbackPayloadSha256")
+                        .IsRequired()
+                        .HasColumnType("char(64)")
+                        .HasColumnName("callback_payload_sha256");
+
+                    b.Property<Guid>("CsitJobId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("csit_job_id");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("document_id");
+
+                    b.Property<Guid>("EventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("event_id");
+
+                    b.Property<DateTime>("IndexedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("indexed_at");
+
+                    b.Property<string>("KmJobId")
+                        .IsRequired()
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("km_job_id");
+
+                    b.Property<string>("MetadataSchemaVersion")
+                        .IsRequired()
+                        .HasMaxLength(12)
+                        .HasColumnType("character varying(12)")
+                        .HasColumnName("metadata_schema_version");
+
+                    b.Property<Guid>("OutboxId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("outbox_id");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<string>("ResultJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("result_json");
+
+                    b.Property<string>("ReviewStatus")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("review_status");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at");
+
+                    b.Property<string>("ReviewedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("reviewed_by");
+
+                    b.Property<Guid>("SourceEntityId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_entity_id");
+
+                    b.Property<int>("SourceRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("source_revision");
+
+                    b.Property<string>("SourceSha256")
+                        .IsRequired()
+                        .HasColumnType("char(64)")
+                        .HasColumnName("source_sha256");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("source_type");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime?>("SupersededAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("superseded_at");
+
+                    b.Property<Guid?>("SupersedesResultId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("supersedes_result_id");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer")
+                        .HasColumnName("version");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AnalysisResultId")
+                        .IsUnique();
+
+                    b.HasIndex("CallbackId")
+                        .IsUnique();
+
+                    b.HasIndex("OutboxId");
+
+                    b.HasIndex("SupersedesResultId");
+
+                    b.HasIndex("DocumentId", "Version");
+
+                    b.HasIndex("SourceType", "SourceEntityId");
+
+                    b.HasIndex("SourceType", "SourceEntityId", "DocumentId", "Version", "SourceRevision")
+                        .IsUnique();
+
+                    b.ToTable("km_document_analysis_results", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_km_analysis_payload_sha256", "length(callback_payload_sha256) = 64");
+
+                            t.HasCheckConstraint("ck_km_analysis_review_status", "review_status IN ('PendingVerification','Verified','Rejected')");
+
+                            t.HasCheckConstraint("ck_km_analysis_schema_version", "metadata_schema_version IN ('1.0','2.0')");
+
+                            t.HasCheckConstraint("ck_km_analysis_source_revision", "source_revision >= 1");
+
+                            t.HasCheckConstraint("ck_km_analysis_source_sha256", "length(source_sha256) = 64");
+
+                            t.HasCheckConstraint("ck_km_analysis_source_type", "source_type IN ('TestReport','DocumentLibraryFile','VerificationApplicationAttachment','VendorFile','EquipmentAttachment')");
+
+                            t.HasCheckConstraint("ck_km_analysis_status", "status = 'Completed'");
+
+                            t.HasCheckConstraint("ck_km_analysis_version", "version >= 1");
+                        });
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmIntegrationManualRetryAudit", b =>
                 {
                     b.Property<Guid>("Id")
@@ -8708,6 +8961,52 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("PreferredEquipment");
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmAnalysisCallbackReceipt", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.KmIntegrationOutbox", "Outbox")
+                        .WithMany()
+                        .HasForeignKey("OutboxId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Outbox");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmAnalysisReviewRevision", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.KmDocumentAnalysisResult", "AnalysisResult")
+                        .WithMany("ReviewRevisions")
+                        .HasForeignKey("AnalysisResultId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("AnalysisResult");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmDocumentAnalysisResult", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.KmAnalysisCallbackReceipt", null)
+                        .WithMany()
+                        .HasForeignKey("CallbackId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.KmIntegrationOutbox", "Outbox")
+                        .WithMany()
+                        .HasForeignKey("OutboxId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.KmDocumentAnalysisResult", "SupersedesResult")
+                        .WithMany()
+                        .HasForeignKey("SupersedesResultId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
+                    b.Navigation("Outbox");
+
+                    b.Navigation("SupersedesResult");
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.MenuItem", b =>
                 {
                     b.HasOne("SIT.DepartmentSystem.Web.Entities.MenuSection", "Section")
@@ -9209,6 +9508,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("PlannedTestItems");
 
                     b.Navigation("Requirements");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmDocumentAnalysisResult", b =>
+                {
+                    b.Navigation("ReviewRevisions");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.MenuSection", b =>
