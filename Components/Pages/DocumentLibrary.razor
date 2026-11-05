@@ -216,17 +216,19 @@
                                     {
                                         <tr @key="file.SourceKey">
                                             <td class="document-file-cell">
-                                                @if (file.IsImage)
-                                                {
-                                                    <button type="button" class="document-thumbnail-button" title="開啟大圖預覽" @onclick="() => OpenPreview(file.PreviewUrl, file.FileName)">
-                                                        <img class="document-thumbnail" src="@file.PreviewUrl" alt="@file.FileName" loading="lazy" />
-                                                    </button>
-                                                }
-                                                else
-                                                {
-                                                    <span class="document-type-icon" aria-hidden="true">📄</span>
-                                                }
-                                                <span><strong>@file.FileName</strong><small>@FormatSize(file.FileSize)</small></span>
+                                                <div class="document-file-content">
+                                                    @if (file.IsImage)
+                                                    {
+                                                        <button type="button" class="document-thumbnail-button" title="開啟大圖預覽" @onclick="() => OpenPreview(file.PreviewUrl, file.FileName)">
+                                                            <img class="document-thumbnail" src="@file.PreviewUrl" alt="@file.FileName" loading="lazy" />
+                                                        </button>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="document-type-icon" aria-hidden="true">📄</span>
+                                                    }
+                                                    <span class="document-file-details"><strong>@file.FileName</strong><small>@FormatSize(file.FileSize)</small></span>
+                                                </div>
                                             </td>
                                             <td><AttachmentStatusPill Status="@Status(file.ArchiveStatusDisplay, file.ArchiveStatusTone)" Title="@file.ArchiveError" /></td>
                                             <td><AttachmentStatusPill Status="@Status(file.KmStatusDisplay, file.KmStatusTone)" /></td>
@@ -276,17 +278,19 @@
                                     {
                                         <tr>
                                             <td class="document-file-cell">
-                                                @if (IsImage(file.ContentType, file.OriginalFileName))
-                                                {
-                                                    <button type="button" class="document-thumbnail-button" title="開啟大圖預覽" @onclick="() => OpenPreview(DocumentPreviewUrl(file.Id), file.OriginalFileName)">
-                                                        <img class="document-thumbnail" src="@DocumentPreviewUrl(file.Id)" alt="@file.OriginalFileName" loading="lazy" />
-                                                    </button>
-                                                }
-                                                else
-                                                {
-                                                    <span class="document-type-icon" aria-hidden="true">📄</span>
-                                                }
-                                                <span><strong>@file.OriginalFileName</strong><small>@file.StandardFileName</small></span>
+                                                <div class="document-file-content">
+                                                    @if (IsImage(file.ContentType, file.OriginalFileName))
+                                                    {
+                                                        <button type="button" class="document-thumbnail-button" title="開啟大圖預覽" @onclick="() => OpenPreview(DocumentPreviewUrl(file.Id), file.OriginalFileName)">
+                                                            <img class="document-thumbnail" src="@DocumentPreviewUrl(file.Id)" alt="@file.OriginalFileName" loading="lazy" />
+                                                        </button>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="document-type-icon" aria-hidden="true">📄</span>
+                                                    }
+                                                    <span class="document-file-details"><strong>@file.OriginalFileName</strong><small>@file.StandardFileName</small></span>
+                                                </div>
                                             </td>
                                             <td><AttachmentStatusPill Status="@Status(file.ArchiveStatusDisplay, file.ArchiveStatusTone)" Title="@file.ArchiveError" /></td>
                                             <td><AttachmentStatusPill Status="@Status(file.KmStatusDisplay, file.KmStatusTone)" Title="@file.ProcessingError" /></td>
