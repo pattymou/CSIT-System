@@ -42,7 +42,8 @@ public static partial class DevKmServiceIngress
                  path.Equals("/api/integrations/km/v2/analysis-results", StringComparison.OrdinalIgnoreCase))) ||
                (HttpMethods.IsGet(context.Request.Method) &&
                 (DocumentContentPath().IsMatch(path) || DocumentLibraryContentPath().IsMatch(path) ||
-                 VendorFileContentPath().IsMatch(path) || EquipmentDocumentContentPath().IsMatch(path)));
+                 VendorFileContentPath().IsMatch(path) || EquipmentDocumentContentPath().IsMatch(path) ||
+                 TestReportCorrelationPath().IsMatch(path)));
     }
 
     [GeneratedRegex(@"^/api/integrations/km/v1/documents/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/versions/[1-9][0-9]*/content$",
@@ -60,4 +61,8 @@ public static partial class DevKmServiceIngress
     [GeneratedRegex(@"^/api/integrations/km/v1/equipment-documents/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/content$",
         RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex EquipmentDocumentContentPath();
+
+    [GeneratedRegex(@"^/api/integrations/km/v2/test-report-correlations/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex TestReportCorrelationPath();
 }

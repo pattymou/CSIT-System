@@ -79,6 +79,19 @@ public sealed record KmV2DocumentJobAcceptedResponse(
     string KmJobId,
     string Status);
 
+public sealed record KmV2TestReportCorrelationResponse(
+    string SchemaVersion,
+    string SourceSystem,
+    string SourceType,
+    Guid SourceEntityId,
+    Guid DocumentId,
+    int Version,
+    Guid EventId,
+    Guid CsitJobId,
+    string KmJobId,
+    string SourceSha256,
+    string Status);
+
 public sealed record EquipmentMetadataEvidence(
     string SourceFileName, int? Page, string? Section, string? Excerpt);
 public sealed record EquipmentTechnicalSpecificationSuggestion(
