@@ -200,7 +200,8 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
         KmAnalysisSourceTypes.VendorFile => outbox.EventType == KmIntegrationEventTypes.VendorFileArchived &&
             outbox.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile,
         KmAnalysisSourceTypes.EquipmentAttachment =>
-            outbox.EventType is KmIntegrationEventTypes.EquipmentDocumentArchived or "EquipmentAttachmentArchived" &&
+            outbox.EventType is KmIntegrationEventTypes.EquipmentDocumentArchived or
+                KmIntegrationEventTypes.EquipmentAttachmentArchived &&
             outbox.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile,
         _ => false
     };
@@ -246,9 +247,19 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
                 var file = await db.VendorFiles.AsNoTracking().SingleOrDefaultAsync(x =>
                     x.Id == outbox.SourceEntityId && x.Id == outbox.DocumentId, cancellationToken);
                 if (file is null) throw Gone("source_deleted");
+                var approved = file.ApprovalOperationId.HasValue &&
+                    (await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
+                         x.Id == file.ApprovalOperationId.Value && x.SourceModuleCode == "vendor" &&
+                         x.Status == ApprovalStatus.Committed && x.ReviewerAccount != null &&
+                         x.ReviewedAt != null, cancellationToken) ||
+                     await db.ApprovalAuditEvents.AsNoTracking().AnyAsync(x =>
+                         x.SubmissionId == file.ApprovalOperationId.Value &&
+                         x.SourceModuleCode == "vendor" &&
+                         x.Action == ApprovalAuditActions.ApprovalBypassed, cancellationToken));
                 if (file.ArchiveStatus != FileArchiveStatuses.Archived || file.ApprovalOperationId is null ||
                     file.ApprovedAt is null || string.IsNullOrWhiteSpace(file.ApprovedBy) ||
-                    string.IsNullOrWhiteSpace(file.Sha256)) throw Unprocessable("source_not_formal");
+                    string.IsNullOrWhiteSpace(file.Sha256) || !approved)
+                    throw Unprocessable("source_not_formal");
                 return new(file.Sha256);
             }
             case KmAnalysisSourceTypes.EquipmentAttachment:
@@ -257,10 +268,12 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
                     .SingleOrDefaultAsync(x => x.Id == outbox.SourceEntityId, cancellationToken);
                 if (file?.Apparatus is null) throw Gone("source_deleted");
                 var approved = await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
-                        x.Id == file.Id && x.Status == ApprovalStatus.Committed &&
+                        x.Id == file.Id && x.SourceModuleCode == "equipment" &&
+                        x.Status == ApprovalStatus.Committed &&
                         x.ReviewerAccount != null && x.ReviewedAt != null, cancellationToken) ||
                     await db.ApprovalAuditEvents.AsNoTracking().AnyAsync(x =>
-                        x.SubmissionId == file.Id && x.Action == ApprovalAuditActions.ApprovalBypassed,
+                        x.SubmissionId == file.Id && x.SourceModuleCode == "equipment" &&
+                        x.Action == ApprovalAuditActions.ApprovalBypassed,
                         cancellationToken);
                 if (file.Apparatus.ModuleCode != "equipment" || file.ArchiveStatus != FileArchiveStatuses.Archived ||
                     string.IsNullOrWhiteSpace(file.Sha256) || !approved)

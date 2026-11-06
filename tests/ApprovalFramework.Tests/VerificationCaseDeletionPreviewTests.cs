@@ -21,16 +21,19 @@ public sealed class VerificationCaseDeletionPreviewTests
             await using var db = NewDb();
             var (first, record, task, team) = Accepted("VA-FIRST", "SAME-MODEL");
             var (second, otherRecord, _, _) = Accepted("VA-SECOND", "SAME-MODEL");
+            const string archivedSha256 =
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
             var documentFile = new DocumentLibraryFile
             {
                 Id = Guid.NewGuid(), FolderId = Guid.NewGuid(), OriginalFileName = "request.pdf",
                 StandardFileName = Path.GetFileName(localFile), RelativePath = Path.GetFileName(localFile),
-                StorageArea = DocumentStorageAreas.Library, FileSize = 1, Sha256 = "hash"
+                StorageArea = DocumentStorageAreas.Library, FileSize = 1, Sha256 = archivedSha256
             };
             var attachment = new VerificationApplicationFile
             {
                 Id = Guid.NewGuid(), VerificationApplicationId = first.Id, FileName = "request.pdf",
                 FilePath = "verification-applications/original.pdf", FileSize = 1, UploadedBy = "applicant",
+                Sha256 = archivedSha256,
                 DocumentLibraryFileId = documentFile.Id, DocumentLibraryFile = documentFile
             };
             var reportDocumentId = Guid.NewGuid();

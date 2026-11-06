@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -11,6 +12,50 @@ namespace ApprovalFramework.Tests;
 
 public sealed class EquipmentDocumentKmLifecycleTests
 {
+    [Theory]
+    [InlineData("manual.pdf", "application/pdf", KmIntegrationEventTypes.EquipmentDocumentArchived)]
+    [InlineData("front.png", "image/png", KmIntegrationEventTypes.EquipmentAttachmentArchived)]
+    public async Task EquipmentPdfAndImageUseV2AndAuthorizedContentRoute(
+        string fileName, string contentType, string expectedEventType)
+    {
+        var factory = new TestDbFactory(Guid.NewGuid().ToString("N"));
+        var file = SeedDocument(factory, fileName, contentType);
+        var mock = new EquipmentMockKmClient();
+
+        Assert.Equal(1, await Worker(factory, mock, enabled: true).ProcessBatchAsync());
+        var request = Assert.IsType<KmV2DocumentJobRequest>(mock.LastRequest);
+        Assert.Equal(expectedEventType, request.EventType);
+        Assert.Equal(KmAnalysisSourceTypes.EquipmentAttachment, request.Source.Type);
+        Assert.Equal(file.Id, request.Document.Id);
+
+        var controller = new KmIntegrationController(factory,
+            NullLogger<KmIntegrationController>.Instance);
+        var download = await controller.DownloadEquipmentDocument(file.Id, default);
+        var result = Assert.IsType<FileStreamResult>(download);
+        await result.FileStream.DisposeAsync();
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task MissingOrChecksumChangedEquipmentFileIsRejected(bool deleteFile)
+    {
+        var factory = new TestDbFactory(Guid.NewGuid().ToString("N"));
+        var file = SeedDocument(factory);
+        var path = Path.Combine(file.FilePath, file.FileName);
+        if (deleteFile) File.Delete(path);
+        else File.WriteAllBytes(path, Enumerable.Repeat((byte)255, (int)file.FileSize).ToArray());
+        var mock = new EquipmentMockKmClient();
+
+        Assert.Equal(1, await Worker(factory, mock, enabled: true).ProcessBatchAsync());
+        Assert.Null(mock.LastRequest);
+        await using var db = factory.CreateDbContext();
+        var row = await db.KmIntegrationOutbox.SingleAsync();
+        Assert.Equal(KmIntegrationStatus.Failed, row.Status);
+        Assert.Equal("EQUIPMENT_ATTACHMENT_UNAVAILABLE", row.LastErrorCode);
+        Assert.Null(row.NextRetryAt);
+    }
+
     [Fact]
     public async Task EquipmentOutbox_WaitsWhenDisabled_ThenDispatchesAndStoresCallbackSuggestions()
     {
@@ -19,19 +64,19 @@ public sealed class EquipmentDocumentKmLifecycleTests
         var mock = new EquipmentMockKmClient();
 
         Assert.Equal(0, await Worker(factory, mock, enabled: false).ProcessBatchAsync());
-        Assert.Null(mock.LastEquipmentRequest);
+        Assert.Null(mock.LastRequest);
         await using (var waiting = factory.CreateDbContext())
             Assert.Equal(KmIntegrationStatus.Pending,
                 (await waiting.KmIntegrationOutbox.SingleAsync()).Status);
 
         Assert.Equal(1, await Worker(factory, mock, enabled: true).ProcessBatchAsync());
-        var request = Assert.IsType<EquipmentDocumentIngestionRequest>(mock.LastEquipmentRequest);
+        var request = Assert.IsType<KmV2DocumentJobRequest>(mock.LastRequest);
         Assert.Equal(file.Id, request.EventId);
-        Assert.Equal(file.Id, request.DocumentId);
-        Assert.Equal("EQ-KM-001", request.Equipment.Id);
-        Assert.Equal("ASSET-KM-001", request.Equipment.ProductsId);
-        Assert.Equal("Manual", request.File.DocumentKind);
-        Assert.Equal(1, request.Version);
+        Assert.Equal(file.Id, request.Document.Id);
+        Assert.Equal(file.Id, request.Source.EntityId);
+        Assert.Equal("EQ-KM-001", request.Source.EquipmentId);
+        Assert.Equal(KmAnalysisSourceTypes.EquipmentAttachment, request.Source.Type);
+        Assert.Equal(1, request.Document.Version);
 
         var controller = new KmIntegrationController(factory,
             NullLogger<KmIntegrationController>.Instance);
@@ -69,7 +114,7 @@ public sealed class EquipmentDocumentKmLifecycleTests
     }
 
     [Fact]
-    public async Task EquipmentCallback_RejectsMismatch_AndPhotoCannotEnterOutbox()
+    public async Task EquipmentCallback_RejectsMismatch_AndPhotoUsesAttachmentEvent()
     {
         var factory = new TestDbFactory(Guid.NewGuid().ToString("N"));
         var file = SeedDocument(factory);
@@ -97,8 +142,9 @@ public sealed class EquipmentDocumentKmLifecycleTests
             Sha256 = new string('A', 64), ArchiveStatus = FileArchiveStatuses.Archived,
             ArchiveUpdatedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow
         };
-        Assert.Throws<InvalidOperationException>(() =>
-            KmIntegrationOutbox.ForArchivedEquipmentDocument(equipment, photo, DateTime.UtcNow));
+        var photoOutbox = KmIntegrationOutbox.ForArchivedEquipmentDocument(
+            equipment, photo, DateTime.UtcNow);
+        Assert.Equal(KmIntegrationEventTypes.EquipmentAttachmentArchived, photoOutbox.EventType);
 
         await using var check = factory.CreateDbContext();
         Assert.Equal(KmIntegrationStatus.Sent,
@@ -106,7 +152,8 @@ public sealed class EquipmentDocumentKmLifecycleTests
         Assert.Null((await check.ApparatusFiles.SingleAsync()).MetadataJson);
     }
 
-    private static ApparatusFile SeedDocument(TestDbFactory factory)
+    private static ApparatusFile SeedDocument(TestDbFactory factory,
+        string originalFileName = "manual.pdf", string contentType = "application/pdf")
     {
         using var db = factory.CreateDbContext();
         var now = DateTime.UtcNow;
@@ -116,17 +163,24 @@ public sealed class EquipmentDocumentKmLifecycleTests
             Name = "Original equipment name", Kind = "RF Tester", Brand = "Legacy Brand",
             Model = "MODEL-1", CreatedAt = now, UpdatedAt = now
         };
+        var bytes = Enumerable.Range(1, 12).Select(x => (byte)x).ToArray();
         var file = new ApparatusFile
         {
             Id = Guid.NewGuid(), ApparatusId = equipment.Id, Apparatus = equipment,
-            FileName = "stored-manual.pdf", OriginalFileName = "manual.pdf",
-            FilePath = Path.GetTempPath(), ContentType = "application/pdf", FileSize = 12,
-            Sha256 = new string('A', 64), ArchiveStatus = FileArchiveStatuses.Archived,
+            FileName = "stored-" + originalFileName, OriginalFileName = originalFileName,
+            FilePath = Path.Combine(Path.GetTempPath(), "csit-equipment-km-" + Guid.NewGuid().ToString("N")),
+            ContentType = contentType, FileSize = bytes.Length,
+            Sha256 = Convert.ToHexString(SHA256.HashData(bytes)),
+            ArchiveStatus = FileArchiveStatuses.Archived,
             ArchiveUpdatedAt = now, CreatedAt = now,
             MetadataVerificationStatus = MetadataVerificationStatuses.NotApplicable
         };
         db.Apparatuses.Add(equipment);
         db.ApparatusFiles.Add(file);
+        Directory.CreateDirectory(file.FilePath);
+        File.WriteAllBytes(Path.Combine(file.FilePath, file.FileName), bytes);
+        db.ApprovalAuditEvents.Add(ApprovalAuditEvent.Create(file.Id, "equipment", "equipment",
+            ApprovalAuditActions.ApprovalBypassed, "admin", now, null, null));
         db.KmIntegrationOutbox.Add(
             KmIntegrationOutbox.ForArchivedEquipmentDocument(equipment, file, now));
         db.SaveChanges();
@@ -149,16 +203,16 @@ public sealed class EquipmentDocumentKmLifecycleTests
 
     private sealed class EquipmentMockKmClient : IKmIntegrationClient
     {
-        public EquipmentDocumentIngestionRequest? LastEquipmentRequest { get; private set; }
+        public KmV2DocumentJobRequest? LastRequest { get; private set; }
 
         public Task<KmDeliveryResult> SubmitAsync(KmIngestionRequest request,
             CancellationToken cancellationToken) =>
             Task.FromResult(KmDeliveryResult.Failure(false, "UNEXPECTED", "Unexpected request."));
 
-        public Task<KmDeliveryResult> SubmitEquipmentDocumentAsync(
-            EquipmentDocumentIngestionRequest request, CancellationToken cancellationToken)
+        public Task<KmDeliveryResult> SubmitDocumentJobAsync(
+            KmV2DocumentJobRequest request, CancellationToken cancellationToken)
         {
-            LastEquipmentRequest = request;
+            LastRequest = request;
             return Task.FromResult(KmDeliveryResult.Success("equipment-job-1"));
         }
     }

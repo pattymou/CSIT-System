@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Security.Cryptography;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -15,6 +16,40 @@ namespace ApprovalFramework.Tests;
 
 public sealed class VendorAttachmentLifecycleTests
 {
+    [Theory]
+    [InlineData("notes.txt", "text/plain")]
+    [InlineData("label.png", "image/png")]
+    public async Task VendorAcceptedFormatsUseSameV2Contract(string fileName, string contentType)
+    {
+        var factory = new TestDbFactory(Guid.NewGuid().ToString("N"));
+        var file = Seed(factory, fileName, contentType);
+        var mock = new VendorMockKmClient();
+
+        Assert.Equal(1, await Worker(factory, mock, OptionsForVendor(true)).ProcessBatchAsync());
+        var request = Assert.IsType<KmV2DocumentJobRequest>(mock.LastRequest);
+        Assert.Equal("2.0", request.SchemaVersion);
+        Assert.Equal(fileName, request.Document.OriginalFileName);
+        Assert.Equal(contentType, request.Document.ContentType);
+        Assert.Equal(KmV2ApprovalModes.ApprovalBypassed, request.Document.Approval.Mode);
+        Assert.Equal(file.VendorId, request.Source.VendorId);
+    }
+
+    [Fact]
+    public async Task SameNameAndShaDifferentIdsDispatchAsSeparateJobs()
+    {
+        var factory = new TestDbFactory(Guid.NewGuid().ToString("N"));
+        var first = Seed(factory, "same.txt", "text/plain");
+        var second = Seed(factory, "same.txt", "text/plain");
+        var mock = new VendorMockKmClient();
+
+        Assert.Equal(2, await Worker(factory, mock, OptionsForVendor(true)).ProcessBatchAsync());
+        Assert.Equal(2, mock.Requests.Count);
+        Assert.NotEqual(first.Id, second.Id);
+        Assert.Equal(mock.Requests[0].Document.Sha256, mock.Requests[1].Document.Sha256);
+        Assert.NotEqual(mock.Requests[0].Source.EntityId, mock.Requests[1].Source.EntityId);
+        Assert.NotEqual(mock.Requests[0].CsitJobId, mock.Requests[1].CsitJobId);
+    }
+
     [Fact]
     public async Task VendorApprovalPolicy_PendsEmployee_BypassesLeaderAndAdmin_AndRejectsReadOnlyLeader()
     {
@@ -60,20 +95,23 @@ public sealed class VendorAttachmentLifecycleTests
         var mock = new VendorMockKmClient();
         var disabled = OptionsForVendor(false);
         Assert.Equal(0, await Worker(factory, mock, disabled).ProcessBatchAsync());
-        Assert.Null(mock.LastVendorRequest);
+        Assert.Null(mock.LastRequest);
         await using (var db = factory.CreateDbContext())
             Assert.Equal(KmIntegrationStatus.Pending, (await db.KmIntegrationOutbox.SingleAsync()).Status);
 
         var enabled = OptionsForVendor(true);
         Assert.Equal(1, await Worker(factory, mock, enabled).ProcessBatchAsync());
-        Assert.NotNull(mock.LastVendorRequest);
-        Assert.Equal(file.Id, mock.LastVendorRequest!.DocumentId);
-        Assert.Equal(KmIntegrationEventTypes.VendorFileArchived, mock.LastVendorRequest.EventType);
-        Assert.Equal("VendorFile", KmIntegrationSourceEntityTypes.VendorFile);
+        Assert.NotNull(mock.LastRequest);
+        Assert.Equal(file.Id, mock.LastRequest!.Document.Id);
+        Assert.Equal(KmIntegrationEventTypes.VendorFileArchived, mock.LastRequest.EventType);
+        Assert.Equal(KmAnalysisSourceTypes.VendorFile, mock.LastRequest.Source.Type);
+        Assert.Equal(mock.LastRequest.CsitJobId,
+            (await factory.CreateDbContext().KmIntegrationOutbox.SingleAsync()).Id);
 
         var controller = new KmIntegrationController(factory,
             NullLogger<KmIntegrationController>.Instance);
-        var callback = new KmStatusCallback("vendor-job-1", "CSIT", file.Id, 1,
+        var callback = new KmStatusCallback(
+            "vendor-job-" + mock.LastRequest.CsitJobId.ToString("N"), "CSIT", file.Id, 1,
             "Processing", new KmCallbackTimestamps(DateTime.UtcNow, null, null), null);
         Assert.IsType<NoContentResult>(await controller.Status(callback, default));
         callback = callback with
@@ -97,7 +135,8 @@ public sealed class VendorAttachmentLifecycleTests
         Assert.Equal(1, await Worker(factory, mock, OptionsForVendor(true)).ProcessBatchAsync());
         var controller = new KmIntegrationController(factory,
             NullLogger<KmIntegrationController>.Instance);
-        var mismatch = new KmStatusCallback("vendor-job-1", "CSIT", Guid.NewGuid(), 1,
+        var mismatch = new KmStatusCallback(
+            "vendor-job-" + mock.LastRequest!.CsitJobId.ToString("N"), "CSIT", Guid.NewGuid(), 1,
             "Processing", new KmCallbackTimestamps(DateTime.UtcNow, null, null), null);
         Assert.IsType<ConflictObjectResult>(await controller.Status(mismatch, default));
 
@@ -114,7 +153,8 @@ public sealed class VendorAttachmentLifecycleTests
         Assert.Empty(check.VendorFiles);
     }
 
-    private static VendorFile Seed(TestDbFactory factory)
+    private static VendorFile Seed(TestDbFactory factory,
+        string originalFileName = "manual.pdf", string contentType = "application/pdf")
     {
         using var db = factory.CreateDbContext();
         var now = DateTime.UtcNow;
@@ -125,11 +165,14 @@ public sealed class VendorAttachmentLifecycleTests
             UpdatedBy = "tester", CreatedAt = now, UpdatedAt = now
         };
         var id = Guid.NewGuid();
+        var bytes = Enumerable.Range(0, 12).Select(x => (byte)x).ToArray();
+        var sha256 = Convert.ToHexString(SHA256.HashData(bytes));
         var file = new VendorFile
         {
-            Id = id, VendorId = vendor.Id, Vendor = vendor, OriginalFileName = "manual.pdf",
-            StoredFileName = id.ToString("N") + ".pdf", FolderPath = Path.GetTempPath(),
-            ContentType = "application/pdf", FileSize = 12, Sha256 = new string('A', 64),
+            Id = id, VendorId = vendor.Id, Vendor = vendor, OriginalFileName = originalFileName,
+            StoredFileName = id.ToString("N") + Path.GetExtension(originalFileName),
+            FolderPath = Path.GetTempPath(), ContentType = contentType,
+            FileSize = bytes.Length, Sha256 = sha256,
             ArchiveStatus = FileArchiveStatuses.Archived, ArchiveAttemptCount = 1,
             ArchiveUpdatedAt = now, UploadedBy = "tester", UploadedAt = now,
             ApprovalOperationId = id, ApprovedBy = "leader", ApprovedAt = now,
@@ -137,7 +180,10 @@ public sealed class VendorAttachmentLifecycleTests
         };
         db.Vendors.Add(vendor);
         db.VendorFiles.Add(file);
+        db.ApprovalAuditEvents.Add(ApprovalAuditEvent.Create(id, "vendors", "vendor",
+            ApprovalAuditActions.ApprovalBypassed, "leader", now, null, null));
         db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForArchivedVendorFile(file, now));
+        File.WriteAllBytes(Path.Combine(file.FolderPath, file.StoredFileName), bytes);
         db.SaveChanges();
         return file;
     }
@@ -156,16 +202,19 @@ public sealed class VendorAttachmentLifecycleTests
 
     private sealed class VendorMockKmClient : IKmIntegrationClient
     {
-        public VendorFileIngestionRequest? LastVendorRequest { get; private set; }
+        public KmV2DocumentJobRequest? LastRequest { get; private set; }
+        public List<KmV2DocumentJobRequest> Requests { get; } = [];
         public Task<KmDeliveryResult> SubmitAsync(KmIngestionRequest request,
             CancellationToken cancellationToken) =>
             Task.FromResult(KmDeliveryResult.Failure(false, "UNEXPECTED", "Unexpected request."));
 
-        public Task<KmDeliveryResult> SubmitVendorFileAsync(VendorFileIngestionRequest request,
+        public Task<KmDeliveryResult> SubmitDocumentJobAsync(KmV2DocumentJobRequest request,
             CancellationToken cancellationToken)
         {
-            LastVendorRequest = request;
-            return Task.FromResult(KmDeliveryResult.Success("vendor-job-1"));
+            LastRequest = request;
+            Requests.Add(request);
+            return Task.FromResult(KmDeliveryResult.Success(
+                "vendor-job-" + request.CsitJobId.ToString("N")));
         }
     }
 

@@ -74,7 +74,10 @@ public sealed class KmIntegrationOutbox
             attachment.VerificationApplicationId != application.Id ||
             document is null || attachment.DocumentLibraryFileId != document.Id ||
             document.StorageArea != DocumentStorageAreas.Library ||
-            document.FileSize <= 0 || string.IsNullOrWhiteSpace(document.StandardFileName))
+            document.FileSize <= 0 || string.IsNullOrWhiteSpace(document.StandardFileName) ||
+            string.IsNullOrWhiteSpace(attachment.Sha256) || attachment.Sha256.Length != 64 ||
+            document.Sha256.Length != 64 ||
+            !string.Equals(attachment.Sha256, document.Sha256, StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException(
                 "Only a formally archived verification application attachment can enter the KM outbox.");
 
@@ -155,9 +158,11 @@ public sealed class KmIntegrationOutbox
         Apparatus equipment, ApparatusFile file, DateTime now)
     {
         var originalName = file.OriginalFileName ?? file.FileName;
+        var eventType = ManagedAssetFileStorage.IsImage(file.ContentType, originalName)
+            ? KmIntegrationEventTypes.EquipmentAttachmentArchived
+            : KmIntegrationEventTypes.EquipmentDocumentArchived;
         if (equipment.ModuleCode != "equipment" || file.Id == Guid.Empty ||
             file.ApparatusId != equipment.Id || file.ArchiveStatus != FileArchiveStatuses.Archived ||
-            ManagedAssetFileStorage.IsImage(file.ContentType, originalName) ||
             string.IsNullOrWhiteSpace(originalName) || file.FileSize <= 0 ||
             file.Sha256 is null || file.Sha256.Length != 64)
             throw new InvalidOperationException(
@@ -166,7 +171,7 @@ public sealed class KmIntegrationOutbox
         return new KmIntegrationOutbox
         {
             Id = Guid.NewGuid(), EventId = file.Id,
-            EventType = KmIntegrationEventTypes.EquipmentDocumentArchived,
+            EventType = eventType,
             SourceSystem = "CSIT",
             SourceEntityType = KmIntegrationSourceEntityTypes.ApparatusFile,
             SourceEntityId = file.Id, DocumentId = file.Id, Version = 1,
@@ -289,6 +294,7 @@ public static class KmIntegrationEventTypes
         "VerificationApplicationAttachmentArchived";
     public const string VendorFileArchived = "VendorFileArchived";
     public const string EquipmentDocumentArchived = "EquipmentDocumentArchived";
+    public const string EquipmentAttachmentArchived = "EquipmentAttachmentArchived";
 }
 
 public static class KmIntegrationSourceEntityTypes

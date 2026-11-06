@@ -53,11 +53,23 @@ public sealed class AssetApprovalUploadService(
             throw new InvalidOperationException("此來源目前不需主管審核，請從原項目重新上傳。");
         if (decision.Kind != ApprovalUploadDecisionKind.Pending)
         {
-            // Keep the existing formal upload behavior when the menu flag is off.
-            await formal.UploadFilesAsync(moduleCode, assetId, files, Actor(uploader));
-            if (decision.Kind == ApprovalUploadDecisionKind.ApprovalBypassed)
-                foreach (var _ in files)
-                    await submissions.RecordBypassAsync(Guid.NewGuid(), decision, uploader, cancellationToken);
+            if (string.Equals(moduleCode, "equipment", StringComparison.OrdinalIgnoreCase))
+            {
+                foreach (var file in files)
+                {
+                    var operationId = Guid.NewGuid();
+                    await submissions.RecordBypassAsync(operationId, decision, uploader, cancellationToken);
+                    await formal.UploadFilesAsync(moduleCode, assetId, [file], Actor(uploader), operationId);
+                }
+            }
+            else
+            {
+                // Non-equipment asset modules retain their existing direct formal upload path.
+                await formal.UploadFilesAsync(moduleCode, assetId, files, Actor(uploader));
+                if (decision.Kind == ApprovalUploadDecisionKind.ApprovalBypassed)
+                    foreach (var _ in files)
+                        await submissions.RecordBypassAsync(Guid.NewGuid(), decision, uploader, cancellationToken);
+            }
             return (decision.Kind, null);
         }
 

@@ -100,7 +100,7 @@ public sealed class KmQueueMonitorTests
         Assert.Equal(2, unfinished.Total);
         Assert.DoesNotContain(unfinished.Items, x => x.Status == nameof(KmIntegrationStatus.Completed));
         Assert.Equal("等待自動重試", unfinished.Items.Single(x => x.Id == waitingRetry.Id).RetryState);
-        Assert.Equal("不可自動重試／需要人工處理",
+        Assert.Equal("KM 已接收；依回報錯誤處理",
             unfinished.Items.Single(x => x.Id == callbackFailure.Id).RetryState);
         Assert.All(unfinished.Items, item => Assert.Equal("未記錄", item.UploadedBy));
 
@@ -110,7 +110,7 @@ public sealed class KmQueueMonitorTests
     }
 
     [Fact]
-    public async Task UnsupportedVerificationAttachmentRemainsVisibleForManualHandling()
+    public async Task VerificationAttachmentIsVisibleAndWaitsForAutomaticDispatch()
     {
         var factory = new InMemoryFactory();
         var item = Outbox(KmIntegrationStatus.Pending, Now,
@@ -125,8 +125,15 @@ public sealed class KmQueueMonitorTests
             Options.Create(new KmIntegrationOptions { Enabled = true }),
             Options.Create(new KmDeletionOptions { Enabled = true }));
         var result = await service.GetIngestionAsync(KmQueueFilters.Unfinished, 1);
-        Assert.Equal("不可自動重試／需要人工處理", result.Items[0].RetryState);
-        Assert.Contains("不支援", result.Items[0].Detail);
+        Assert.Equal(string.Empty, result.Items[0].RetryState);
+        Assert.Null(result.Items[0].Detail);
+
+        service = new KmQueueQueryService(factory,
+            Options.Create(new KmIntegrationOptions { Enabled = false }),
+            Options.Create(new KmDeletionOptions { Enabled = true }));
+        result = await service.GetIngestionAsync(KmQueueFilters.Unfinished, 1);
+        Assert.Equal("KM 功能停用／等待派送", result.Items[0].RetryState);
+        Assert.Contains("KM 功能停用／等待派送", result.Notice);
     }
 
     [Fact]

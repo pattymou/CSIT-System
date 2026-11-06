@@ -439,7 +439,8 @@ public class ApparatusService : IApparatusService
 
         var fileIds = entity.Files.Select(x => x.Id).ToArray();
         if (fileIds.Length > 0 && await _db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
-                x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
+                 x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                 fileIds.Contains(x.SourceEntityId)))
             throw new InvalidOperationException(
                 "This equipment has documents tracked by KM and cannot be physically deleted.");
@@ -1017,7 +1018,7 @@ public class ApparatusService : IApparatusService
         outboxes.TryGetValue(x.Id, out var outbox);
         deletions.TryGetValue(x.Id, out var deletion);
         var isDocument = x.Apparatus?.ModuleCode == "equipment" &&
-            !ManagedAssetFileStorage.IsImage(x.ContentType, x.OriginalFileName ?? x.FileName);
+            x.ArchiveStatus == FileArchiveStatuses.Archived;
         return new ApparatusFileDto
         {
             Id = x.Id,
@@ -1107,7 +1108,8 @@ public class ApparatusService : IApparatusService
         var ids = files.Select(x => x.Id).ToArray();
         if (ids.Length == 0) return new Dictionary<Guid, KmIntegrationOutbox>();
         return await _db.KmIntegrationOutbox.AsNoTracking()
-            .Where(x => x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+            .Where(x => (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
+                         x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                 ids.Contains(x.SourceEntityId))
             .ToDictionaryAsync(x => x.SourceEntityId);
@@ -1233,10 +1235,10 @@ public class ApparatusService : IApparatusService
     private async Task EnsureEquipmentOutboxAsync(
         Apparatus apparatus, ApparatusFile file, bool saveChanges = true)
     {
-        var originalName = file.OriginalFileName ?? file.FileName;
-        if (ManagedAssetFileStorage.IsImage(file.ContentType, originalName)) return;
         if (!await _db.KmIntegrationOutbox.AnyAsync(x =>
-                x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
+                 x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
+                x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                 x.SourceEntityId == file.Id))
             _db.KmIntegrationOutbox.Add(
                 KmIntegrationOutbox.ForArchivedEquipmentDocument(apparatus, file, DateTime.UtcNow));

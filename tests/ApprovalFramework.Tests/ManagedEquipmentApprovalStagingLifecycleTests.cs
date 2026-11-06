@@ -41,8 +41,11 @@ public sealed class ManagedEquipmentApprovalStagingLifecycleTests
             Assert.False(formal.IsRawDataExported);
             Assert.Null(formal.NasFolderPath);
             Assert.True(System.IO.File.Exists(Path.Combine(formal.FilePath, formal.FileName)));
-            Assert.False(await db.KmIntegrationOutbox.AnyAsync(x =>
-                x.SourceEntityId == formal.Id));
+            var outbox = await db.KmIntegrationOutbox.SingleAsync(x =>
+                x.SourceEntityId == formal.Id);
+            Assert.Equal(KmIntegrationEventTypes.EquipmentAttachmentArchived,
+                outbox.EventType);
+            Assert.Equal(KmIntegrationStatus.Pending, outbox.Status);
             Assert.True(await db.ApprovalAuditEvents.AnyAsync(x => x.SubmissionId == pending.Id &&
                 x.Action == ApprovalAuditActions.Committed));
         }

@@ -490,6 +490,30 @@ public sealed class KmIntegrationTests
     }
 
     [Fact]
+    public async Task UnknownEventIsRejectedWithoutTestReportFallback()
+    {
+        var factory = Factory();
+        Seed(factory);
+        using (var db = factory.CreateDbContext())
+        {
+            var row = db.KmIntegrationOutbox.Single();
+            typeof(KmIntegrationOutbox).GetProperty(nameof(KmIntegrationOutbox.EventType))!
+                .SetValue(row, "UnknownArchivedEvent");
+            db.SaveChanges();
+        }
+        var client = new StubKmClient(_ =>
+            throw new InvalidOperationException("Unknown events must not use TestReport v1."));
+
+        Assert.Equal(1, await Worker(factory, client).ProcessBatchAsync());
+        Assert.Null(client.LastRequest);
+        using var check = factory.CreateDbContext();
+        var rejected = check.KmIntegrationOutbox.Single();
+        Assert.Equal(KmIntegrationStatus.Failed, rejected.Status);
+        Assert.Equal("UNSUPPORTED_EVENT", rejected.LastErrorCode);
+        Assert.Null(rejected.NextRetryAt);
+    }
+
+    [Fact]
     public async Task DiagnosticsExposePendingFailedRetriesAndLastAttempt()
     {
         var factory = Factory();

@@ -62,6 +62,7 @@ public sealed class KmIntegrationController(
              await VerificationCaseDeletionHold.IsActiveAsync(db, attachmentRecordId, cancellationToken)) ||
             attachment.VerificationApplication.Status != VerificationApplicationStatus.Accepted ||
             attachment.DocumentLibraryFile.StorageArea != DocumentStorageAreas.Library ||
+            await DocumentLibraryFileDeletionHold.ExistsAsync(db, documentId, cancellationToken) ||
             !await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
                 x.SourceSystem == "CSIT" &&
                 x.EventType == KmIntegrationEventTypes.VerificationApplicationAttachmentArchived &&
@@ -79,10 +80,28 @@ public sealed class KmIntegrationController(
             var prefix = fullRoot.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
                 + Path.DirectorySeparatorChar;
             if (!path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return NotFound();
-            return OpenFile(path, attachment.DocumentLibraryFile.ContentType,
-                attachment.DocumentLibraryFile.OriginalFileName);
+            if (!System.IO.File.Exists(path)) return NotFound();
+            var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 81920, true);
+            var digest = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken));
+            if (!string.Equals(digest, attachment.DocumentLibraryFile.Sha256,
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(digest, attachment.Sha256, StringComparison.OrdinalIgnoreCase))
+            {
+                await stream.DisposeAsync();
+                logger.LogWarning(
+                    "Rejected verification attachment download checksum mismatch DocumentId={DocumentId}",
+                    documentId);
+                return Conflict(new { error = "checksum_mismatch" });
+            }
+            stream.Position = 0;
+            return File(stream, attachment.DocumentLibraryFile.ContentType ?? "application/octet-stream",
+                Path.GetFileName(attachment.DocumentLibraryFile.OriginalFileName));
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return NotFound();
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or IOException)
         {
             return NotFound();
         }
@@ -242,7 +261,15 @@ public sealed class KmIntegrationController(
         var file = await db.VendorFiles.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == vendorFileId, cancellationToken);
         if (file is null || file.ArchiveStatus != FileArchiveStatuses.Archived ||
-            file.ApprovalOperationId is null || string.IsNullOrWhiteSpace(file.Sha256) ||
+            file.ApprovalOperationId is null || file.ApprovedAt is null ||
+            string.IsNullOrWhiteSpace(file.ApprovedBy) || string.IsNullOrWhiteSpace(file.Sha256) ||
+            !(await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
+                  x.Id == file.ApprovalOperationId && x.SourceModuleCode == "vendor" &&
+                  x.Status == ApprovalStatus.Committed && x.ReviewerAccount != null &&
+                  x.ReviewedAt != null, cancellationToken) ||
+              await db.ApprovalAuditEvents.AsNoTracking().AnyAsync(x =>
+                  x.SubmissionId == file.ApprovalOperationId && x.SourceModuleCode == "vendor" &&
+                  x.Action == ApprovalAuditActions.ApprovalBypassed, cancellationToken)) ||
             !await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
                 x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile &&
@@ -288,10 +315,20 @@ public sealed class KmIntegrationController(
         var originalName = file?.OriginalFileName ?? file?.FileName;
         if (file?.Apparatus is null || file.Apparatus.ModuleCode != "equipment" ||
             file.ArchiveStatus != FileArchiveStatuses.Archived ||
-            ManagedAssetFileStorage.IsImage(file.ContentType, originalName ?? string.Empty) ||
             string.IsNullOrWhiteSpace(file.Sha256) ||
+            await db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+                x.ApparatusFileId == apparatusFileId &&
+                x.Status != EquipmentFileDeletionStatuses.Completed, cancellationToken) ||
+            !(await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
+                  x.Id == apparatusFileId && x.SourceModuleCode == "equipment" &&
+                  x.Status == ApprovalStatus.Committed && x.ReviewerAccount != null &&
+                  x.ReviewedAt != null, cancellationToken) ||
+              await db.ApprovalAuditEvents.AsNoTracking().AnyAsync(x =>
+                  x.SubmissionId == apparatusFileId && x.SourceModuleCode == "equipment" &&
+                  x.Action == ApprovalAuditActions.ApprovalBypassed, cancellationToken)) ||
             !await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
-                x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
+                 x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                 x.SourceEntityId == apparatusFileId && x.DocumentId == apparatusFileId && x.Version == 1 &&
                 (x.Status == KmIntegrationStatus.Dispatching || x.Status == KmIntegrationStatus.Sent ||

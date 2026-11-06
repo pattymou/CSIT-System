@@ -30,8 +30,7 @@ public sealed class VendorApprovalUploadService(
             foreach (var file in files)
             {
                 var operationId = Guid.NewGuid();
-                if (decision.Kind == ApprovalUploadDecisionKind.ApprovalBypassed)
-                    await submissions.RecordBypassAsync(operationId, decision, uploader, cancellationToken);
+                await submissions.RecordBypassAsync(operationId, decision, uploader, cancellationToken);
                 await formal.ArchiveApprovedFileAsync(vendorId, file, ApprovalIdentity.Account(uploader),
                     operationId, ApprovalIdentity.Account(uploader), DateTime.UtcNow, cancellationToken);
                 ids.Add(operationId);

@@ -203,27 +203,42 @@ public sealed class VerificationAttachmentArchiveTests
     }
 
     [Fact]
-    public async Task PreparedAttachmentEvent_IsDurableButNeverUsesTestReportV1Dispatch()
+    public async Task PreparedAttachmentEvent_UsesV2DispatchAndNeverTestReportV1()
     {
         await using var fixture = await ArchiveFixture.CreateAsync();
-        var application = await fixture.AddAcceptedAsync("MODEL-KM-PREPARED", "prepared");
+        var application = await fixture.AddAcceptedAsync("MODEL-KM-PREPARED", "prepared",
+            "01_AI_KM_Phase規劃_v2.7.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
         await fixture.Processor.EnqueueApprovedApplicationAsync(application, DateTime.UtcNow, CancellationToken.None);
         await fixture.Processor.ProcessPendingAsync();
         var client = new CountingKmClient();
         var enabled = new KmIntegrationOptions
         {
-            Enabled = true, BaseUrl = "https://example.invalid", TimeoutSeconds = 2,
+            Enabled = true, BaseUrl = "https://example.invalid",
+            ServiceBaseUrl = "https://csit.invalid/", TimeoutSeconds = 2,
             MaxRetryCount = 3, RetryScheduleSeconds = [60], PollSeconds = 1, LeaseSeconds = 30
         };
 
         var processed = await new KmSyncWorker(
-            fixture.Factory, client, Options.Create(enabled), NullLogger<KmSyncWorker>.Instance)
+            fixture.Factory, client, Options.Create(enabled), NullLogger<KmSyncWorker>.Instance,
+            Options.Create(new DocumentStorageOptions { RootPath = fixture.LibraryRoot }))
             .ProcessBatchAsync();
 
-        Assert.Equal(0, processed);
+        Assert.Equal(1, processed);
         Assert.Equal(0, client.SubmitCount);
+        Assert.Equal(1, client.V2SubmitCount);
+        Assert.Equal(KmAnalysisSourceTypes.VerificationApplicationAttachment,
+            client.LastV2Request!.Source.Type);
+        Assert.Equal(application.Id, client.LastV2Request.Source.ApplicationId);
+        Assert.Equal(application.ModuleRecordId, client.LastV2Request.Source.RecordId);
+        Assert.Equal(application.Id, client.LastV2Request.Document.Approval.ReferenceId);
+        Assert.Equal(KmV2ApprovalModes.Approved,
+            client.LastV2Request.Document.Approval.Mode);
+        Assert.Equal("01_AI_KM_Phase規劃_v2.7.xlsx",
+            client.LastV2Request.Document.OriginalFileName);
+        Assert.NotEqual(client.LastV2Request.EventId, client.LastV2Request.CsitJobId);
         await using var db = fixture.Factory.CreateDbContext();
-        Assert.Equal(KmIntegrationStatus.Pending, Assert.Single(db.KmIntegrationOutbox).Status);
+        Assert.Equal(KmIntegrationStatus.Sent, Assert.Single(db.KmIntegrationOutbox).Status);
     }
 
     [Fact]
@@ -248,13 +263,14 @@ public sealed class VerificationAttachmentArchiveTests
         {
             Id = Guid.NewGuid(), VerificationApplicationId = application.Id,
             FileName = "attachment.txt", FileSize = 10, CreatedAt = DateTime.UtcNow,
+            Sha256 = new string('a', 64),
             DocumentLibraryFileId = Guid.NewGuid()
         };
         attachment.DocumentLibraryFile = new DocumentLibraryFile
         {
             Id = attachment.DocumentLibraryFileId.Value, FolderId = Guid.NewGuid(),
             OriginalFileName = "attachment.txt", StandardFileName = "attachment.txt",
-            FileSize = 10, StorageArea = DocumentStorageAreas.Library
+            FileSize = 10, Sha256 = new string('a', 64), StorageArea = DocumentStorageAreas.Library
         };
         var row = KmIntegrationOutbox.ForArchivedVerificationAttachment(application, attachment, DateTime.UtcNow);
         var lease = Guid.NewGuid();
@@ -440,6 +456,8 @@ public sealed class VerificationAttachmentArchiveTests
     private sealed class CountingKmClient : IKmIntegrationClient
     {
         public int SubmitCount { get; private set; }
+        public int V2SubmitCount { get; private set; }
+        public KmV2DocumentJobRequest? LastV2Request { get; private set; }
 
         public Task<KmDeliveryResult> SubmitAsync(
             KmIngestionRequest request,
@@ -447,6 +465,15 @@ public sealed class VerificationAttachmentArchiveTests
         {
             SubmitCount++;
             return Task.FromResult(KmDeliveryResult.Success("unexpected"));
+        }
+
+        public Task<KmDeliveryResult> SubmitDocumentJobAsync(
+            KmV2DocumentJobRequest request,
+            CancellationToken cancellationToken)
+        {
+            V2SubmitCount++;
+            LastV2Request = request;
+            return Task.FromResult(KmDeliveryResult.Success("verification-job-1"));
         }
     }
 
@@ -499,13 +526,15 @@ public sealed class VerificationAttachmentArchiveTests
             journal,
             NullLogger<VerificationAttachmentArchiveProcessor>.Instance);
 
-        public Task<VerificationApplication> AddAcceptedAsync(string model, string content) =>
-            AddAsync(model, content, accepted: true);
+        public Task<VerificationApplication> AddAcceptedAsync(string model, string content,
+            string fileName = "attachment.txt", string contentType = "text/plain") =>
+            AddAsync(model, content, accepted: true, fileName, contentType);
 
         public Task<VerificationApplication> AddSubmittedAsync(string model, string content) =>
-            AddAsync(model, content, accepted: false);
+            AddAsync(model, content, accepted: false, "attachment.txt", "text/plain");
 
-        private async Task<VerificationApplication> AddAsync(string model, string content, bool accepted)
+        private async Task<VerificationApplication> AddAsync(string model, string content, bool accepted,
+            string fileName, string contentType)
         {
             var now = DateTime.UtcNow;
             var departmentId = Guid.NewGuid();
@@ -527,7 +556,7 @@ public sealed class VerificationAttachmentArchiveTests
                 application.Accept(Guid.NewGuid(), DateOnly.FromDateTime(now.AddDays(7)), "leader", now);
             var bytes = System.Text.Encoding.UTF8.GetBytes(content);
             var attachmentId = Guid.NewGuid();
-            var standard = DocumentLibraryRules.CreateStandardFileName("attachment.txt", now, attachmentId);
+            var standard = DocumentLibraryRules.CreateStandardFileName(fileName, now, attachmentId);
             var relative = Path.Combine("verification-applications", application.Id.ToString("N"), standard);
             var path = Path.Combine(StagingRoot, relative);
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -536,9 +565,9 @@ public sealed class VerificationAttachmentArchiveTests
             {
                 Id = attachmentId,
                 VerificationApplicationId = application.Id,
-                FileName = "attachment.txt",
+                FileName = fileName,
                 FilePath = relative,
-                ContentType = "text/plain",
+                ContentType = contentType,
                 FileSize = bytes.Length,
                 Sha256 = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
                 UploadedBy = "owner",

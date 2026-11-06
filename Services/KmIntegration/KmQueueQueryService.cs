@@ -43,23 +43,18 @@ public sealed class KmQueueQueryService(
         var items = rows.Select((row, index) =>
         {
             sources.TryGetValue((row.SourceEntityType, row.SourceEntityId), out var source);
-            var unsupported = row.EventType ==
-                KmIntegrationEventTypes.VerificationApplicationAttachmentArchived;
-            var detail = unsupported
-                ? "目前的 KM Worker 不支援此事件，需人工處理。"
-                : Safe(row.LastErrorMessage);
             return new KmQueueItemDto(
                 offset + index + 1, row.Id, source?.FileName ?? row.FileName,
                 SourceModule(row.SourceEntityType), source?.Uploader ?? "未記錄",
                 source?.UploadedAt, row.CreatedAt, row.Status.ToString(),
                 IngestionStatusDisplay(row.Status), row.RetryCount, row.NextRetryAt,
-                IngestionRetryState(row, unsupported, now), row.LastErrorCode, detail);
+                IngestionRetryState(row, now), row.LastErrorCode, Safe(row.LastErrorMessage));
         }).ToList();
 
         return new(items, page, PageSize, total, stats, integrationOptions.Value.Enabled,
             integrationOptions.Value.Enabled
                 ? null
-                : "KM 寫入功能目前停用；佇列仍維持唯讀可見。");
+                : "KM 功能停用／等待派送；佇列仍維持唯讀可見。");
     }
 
     public async Task<KmQueuePageDto> GetDeletionAsync(
@@ -273,13 +268,15 @@ public sealed class KmQueueQueryService(
         return result;
     }
 
-    private string IngestionRetryState(KmIntegrationOutbox item, bool unsupported, DateTime now)
+    private string IngestionRetryState(KmIntegrationOutbox item, DateTime now)
     {
-        if (unsupported) return "不可自動重試／需要人工處理";
         if (item.Status == KmIntegrationStatus.Completed) return string.Empty;
+        if (!integrationOptions.Value.Enabled) return "KM 功能停用／等待派送";
+        if (!IsIngestionSourceEnabled(item.SourceEntityType)) return "來源派送功能停用／等待派送";
         if (item.KmJobId is not null || item.SentAt is not null)
-            return "不可自動重試／需要人工處理";
-        if (!IsIngestionSourceEnabled(item.SourceEntityType)) return "功能停用";
+            return item.Status == KmIntegrationStatus.Failed
+                ? "KM 已接收；依回報錯誤處理"
+                : "KM 已接收／等待回報";
         if (item.Status != KmIntegrationStatus.Failed) return string.Empty;
         if (item.RetryCount >= integrationOptions.Value.MaxRetryCount) return "已達重試上限";
         if (item.NextRetryAt > now) return "等待自動重試";

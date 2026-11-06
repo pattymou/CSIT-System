@@ -408,6 +408,9 @@ public sealed class KmAnalysisIntegrationTests
         var outbox = Sent(KmIntegrationOutbox.ForArchivedVendorFile(file, now), jobId, now);
         await using var db = await factory.CreateDbContextAsync();
         db.Vendors.Add(vendor); db.VendorFiles.Add(file); db.KmIntegrationOutbox.Add(outbox);
+        db.ApprovalAuditEvents.Add(ApprovalAuditEvent.Create(file.ApprovalOperationId!.Value,
+            "vendors", "vendor", ApprovalAuditActions.ApprovalBypassed,
+            "leader", now, null, null));
         await db.SaveChangesAsync();
         return outbox;
     }

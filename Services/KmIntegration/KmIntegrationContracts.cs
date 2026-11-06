@@ -26,25 +26,58 @@ public sealed record KmDeliveryResult(
         new(false, retryable, null, code, message);
 }
 
-public sealed record VendorKmReference(Guid Id, string Name);
-public sealed record VendorKmFile(
-    Guid Id, string OriginalFileName, string StoredFileName, string ContentType,
-    long SizeBytes, string Sha256, string DownloadUrl);
-public sealed record VendorFileIngestionRequest(
-    string SchemaVersion, Guid EventId, string EventType, string SourceSystem,
-    Guid DocumentId, int Version, DateTime CommittedAt,
-    VendorKmReference Vendor, VendorKmFile File);
+public static class KmV2ApprovalModes
+{
+    public const string Approved = "Approved";
+    public const string ApprovalBypassed = "ApprovalBypassed";
+}
 
-public sealed record EquipmentKmReference(
-    string Id, string? ProductsId, string Name, string Kind, string? Brand,
-    Guid? VendorId, string? VendorName, string? Model);
-public sealed record EquipmentKmFile(
-    Guid Id, string OriginalFileName, string StoredFileName, string ContentType,
-    long SizeBytes, string Sha256, string DownloadUrl, string DocumentKind);
-public sealed record EquipmentDocumentIngestionRequest(
-    string SchemaVersion, Guid EventId, string EventType, string SourceSystem,
-    Guid DocumentId, int Version, DateTime CommittedAt,
-    EquipmentKmReference Equipment, EquipmentKmFile File);
+public sealed record KmV2DocumentJobSource(
+    string Type,
+    Guid EntityId,
+    string ModuleCode,
+    Guid? ApplicationId,
+    Guid? RecordId,
+    Guid? VendorId,
+    string? EquipmentId);
+
+public sealed record KmV2DocumentApproval(
+    string Mode,
+    Guid ReferenceId,
+    DateTime ApprovedAt);
+
+public sealed record KmV2Document(
+    Guid Id,
+    int Version,
+    string OriginalFileName,
+    string ContentType,
+    long SizeBytes,
+    string Sha256,
+    string DownloadUrl,
+    DateTime ArchivedAt,
+    KmV2DocumentApproval Approval);
+
+public sealed record KmV2DocumentClassification(string? L1, string? L2, string? L3);
+
+public sealed record KmV2Supersedes(Guid OldDocumentId, int OldVersion, string OldSha256);
+
+public sealed record KmV2DocumentJobRequest(
+    string SchemaVersion,
+    Guid EventId,
+    Guid CsitJobId,
+    string EventType,
+    string SourceSystem,
+    KmV2DocumentJobSource Source,
+    KmV2Document Document,
+    KmV2DocumentClassification Classification,
+    KmV2Supersedes? Supersedes,
+    DateTime OccurredAt);
+
+public sealed record KmV2DocumentJobAcceptedResponse(
+    Guid EventId,
+    Guid CsitJobId,
+    string KmJobId,
+    string Status);
 
 public sealed record EquipmentMetadataEvidence(
     string SourceFileName, int? Page, string? Section, string? Excerpt);

@@ -317,15 +317,19 @@ public sealed class EquipmentVendorManagementTests
                 Assert.True(file.CanDelete);
             });
             Assert.Equal(2, detail.Files.Count(x => x.IsImage));
-            Assert.All(detail.Files.Where(x => x.IsImage), photo =>
-            {
-                Assert.False(photo.IsKmEligibleDocument);
-                Assert.False(photo.HasKmSchedule);
-                Assert.True(photo.CanDelete);
-                Assert.True(photo.IsFormalArchiveVerified);
-            });
             var legacyPhoto = Assert.Single(detail.Files, x => x.Id == legacyId);
             Assert.Null(legacyPhoto.ArchiveStatus);
+            Assert.False(legacyPhoto.IsKmEligibleDocument);
+            Assert.False(legacyPhoto.HasKmSchedule);
+            var managedPhoto = Assert.Single(detail.Files,
+                x => x.IsImage && x.Id != legacyId);
+            Assert.True(managedPhoto.IsKmEligibleDocument);
+            Assert.True(managedPhoto.HasKmSchedule);
+            Assert.Equal(1, managedPhoto.KmVersion);
+            Assert.Equal(KmIntegrationStatus.Pending.ToString(), managedPhoto.KmStatus);
+            Assert.False(managedPhoto.KmEnabled);
+            Assert.True(managedPhoto.CanDelete);
+            Assert.True(managedPhoto.IsFormalArchiveVerified);
             Assert.EndsWith($"/{legacyId}/image", legacyPhoto.ImageUrl);
             Assert.EndsWith($"/{legacyId}/content", legacyPhoto.DownloadUrl);
             var legacyContent = await apparatus.GetFileContentAsync(legacyId);

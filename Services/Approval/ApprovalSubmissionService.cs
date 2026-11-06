@@ -253,8 +253,9 @@ public sealed class ApprovalSubmissionService(
     public async Task RecordBypassAsync(Guid operationId, ApprovalUploadDecision decision,
         ClaimsPrincipal actor, CancellationToken cancellationToken = default)
     {
-        if (decision.Kind != ApprovalUploadDecisionKind.ApprovalBypassed || operationId == Guid.Empty)
-            throw new InvalidOperationException("Only supervisor bypass operations can be audited here.");
+        if (decision.Kind is not (ApprovalUploadDecisionKind.ApprovalBypassed or
+                ApprovalUploadDecisionKind.DirectCommit) || operationId == Guid.Empty)
+            throw new InvalidOperationException("Only legally exempt approval operations can be audited here.");
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         db.ApprovalAuditEvents.Add(ApprovalAuditEvent.Create(operationId, decision.MenuCode,
             decision.ModuleCode, ApprovalAuditActions.ApprovalBypassed,

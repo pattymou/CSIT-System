@@ -1,9 +1,11 @@
 using System.Data;
+using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Options;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
+using SIT.DepartmentSystem.Web.Models.Config;
 
 namespace SIT.DepartmentSystem.Web.Services.KmIntegration;
 
@@ -11,7 +13,8 @@ public sealed class KmSyncWorker(
     IDbContextFactory<AppDbContext> dbFactory,
     IKmIntegrationClient client,
     IOptions<KmIntegrationOptions> configured,
-    ILogger<KmSyncWorker> logger)
+    ILogger<KmSyncWorker> logger,
+    IOptions<DocumentStorageOptions>? documentStorage = null)
 {
     public async Task<int> ProcessBatchAsync(CancellationToken cancellationToken = default)
     {
@@ -90,11 +93,26 @@ public sealed class KmSyncWorker(
                               WHERE audit.submission_id = document_file.id
                                 AND audit.source_module_code = 'document-library'
                                 AND audit.action = 'ApprovalBypassed'))))
+                  OR (event_type = 'VerificationApplicationAttachmentArchived'
+                    AND source_entity_type = 'VerificationApplicationFile'
+                    AND NOT EXISTS (SELECT 1 FROM document_file_deletion_jobs AS attachment_deletion
+                      WHERE attachment_deletion.document_file_id = km_integration_outbox.document_id)
+                    AND NOT EXISTS (SELECT 1 FROM verification_case_deletion_jobs AS case_deletion
+                      JOIN verification_application_files AS attachment
+                        ON attachment.id = km_integration_outbox.source_entity_id
+                      JOIN verification_applications AS application
+                        ON application.id = attachment.verification_application_id
+                      WHERE case_deletion.record_id = application.module_record_id
+                        AND case_deletion.status IN ('WaitingForKm', 'KmVerified', 'LocalReady', 'LocalCleanup', 'Completed')))
                   OR (@vendor_enabled AND event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile')
-                  OR (@equipment_enabled AND event_type = 'EquipmentDocumentArchived' AND source_entity_type = 'ApparatusFile'
+                  OR (@equipment_enabled AND event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived')
+                    AND source_entity_type = 'ApparatusFile'
                     AND NOT EXISTS (SELECT 1 FROM equipment_file_deletion_jobs AS equipment_deletion
                       WHERE equipment_deletion.apparatus_file_id = km_integration_outbox.source_entity_id
-                        AND equipment_deletion.status <> 'Completed'))) AND
+                        AND equipment_deletion.status <> 'Completed'))
+                  OR event_type NOT IN ('TestReportCommitted', 'DocumentLibraryFileUploaded',
+                       'VerificationApplicationAttachmentArchived', 'VendorFileArchived',
+                       'EquipmentDocumentArchived', 'EquipmentAttachmentArchived')) AND
                   (status = 'Pending' OR retry_count < @max) AND
                   (status = 'Pending' OR
                    (status = 'Failed' AND next_retry_at <= @now) OR
@@ -157,15 +175,33 @@ public sealed class KmSyncWorker(
                             db.ApprovalAuditEvents.Any(audit => audit.SubmissionId == x.DocumentId &&
                                 audit.SourceModuleCode == "document-library" &&
                                 audit.Action == ApprovalAuditActions.ApprovalBypassed)))) ||
+                     (x.EventType == KmIntegrationEventTypes.VerificationApplicationAttachmentArchived &&
+                       x.SourceEntityType == KmIntegrationSourceEntityTypes.VerificationApplicationFile &&
+                       !db.DocumentLibraryFileDeletionJobs.Any(deletion =>
+                           deletion.DocumentFileId == x.DocumentId) &&
+                       !db.VerificationCaseDeletionJobs.Any(deletion =>
+                           db.VerificationApplicationFiles.Any(attachment =>
+                               attachment.Id == x.SourceEntityId &&
+                               attachment.VerificationApplication.ModuleRecordId == deletion.RecordId) &&
+                           (deletion.Status == "WaitingForKm" || deletion.Status == "KmVerified" ||
+                            deletion.Status == "LocalReady" || deletion.Status == "LocalCleanup" ||
+                            deletion.Status == "Completed"))) ||
                      (options.VendorEnabled &&
                       x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
                        x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile) ||
                       (options.EquipmentEnabled &&
-                       x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                       (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
+                        x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                        x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                        !db.EquipmentFileDeletionJobs.Any(deletion =>
                            deletion.ApparatusFileId == x.SourceEntityId &&
-                           deletion.Status != EquipmentFileDeletionStatuses.Completed))) &&
+                           deletion.Status != EquipmentFileDeletionStatuses.Completed)) ||
+                      (x.EventType != KmIntegrationEventTypes.TestReportCommitted &&
+                       x.EventType != KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
+                       x.EventType != KmIntegrationEventTypes.VerificationApplicationAttachmentArchived &&
+                       x.EventType != KmIntegrationEventTypes.VendorFileArchived &&
+                       x.EventType != KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                       x.EventType != KmIntegrationEventTypes.EquipmentAttachmentArchived)) &&
                     (x.Status == KmIntegrationStatus.Pending ||
                     x.RetryCount < options.MaxRetryCount) &&
                     (x.Status == KmIntegrationStatus.Pending ||
@@ -209,23 +245,40 @@ public sealed class KmSyncWorker(
                     result = request is null
                         ? KmDeliveryResult.Failure(false, "VENDOR_FILE_UNAVAILABLE",
                             "Approved formal Vendor file is unavailable.")
-                        : await client.SubmitVendorFileAsync(request, deadline.Token);
+                        : await client.SubmitDocumentJobAsync(request, deadline.Token);
                 }
-                else if (row.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                else if ((row.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
+                          row.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                     row.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile)
                 {
                     var request = await BuildEquipmentRequestAsync(db, row, options, deadline.Token);
                     result = request is null
-                        ? KmDeliveryResult.Failure(false, "EQUIPMENT_DOCUMENT_UNAVAILABLE",
-                            "Approved formal Equipment document is unavailable.")
-                        : await client.SubmitEquipmentDocumentAsync(request, deadline.Token);
+                        ? KmDeliveryResult.Failure(false, "EQUIPMENT_ATTACHMENT_UNAVAILABLE",
+                            "Approved formal Equipment attachment is unavailable.")
+                        : await client.SubmitDocumentJobAsync(request, deadline.Token);
                 }
-                else
+                else if (row.EventType == KmIntegrationEventTypes.VerificationApplicationAttachmentArchived &&
+                    row.SourceEntityType == KmIntegrationSourceEntityTypes.VerificationApplicationFile)
+                {
+                    var request = await BuildVerificationAttachmentRequestAsync(
+                        db, row, options, deadline.Token);
+                    result = request is null
+                        ? KmDeliveryResult.Failure(false, "VERIFICATION_ATTACHMENT_UNAVAILABLE",
+                            "Accepted and formally archived verification attachment is unavailable.")
+                        : await client.SubmitDocumentJobAsync(request, deadline.Token);
+                }
+                else if (row.EventType == KmIntegrationEventTypes.TestReportCommitted &&
+                    row.SourceEntityType == KmIntegrationSourceEntityTypes.TestReport)
                 {
                     var request = await BuildRequestAsync(db, row, deadline.Token);
                     result = request is null
                         ? KmDeliveryResult.Failure(false, "DOCUMENT_NOT_COMMITTED", "Formal test report is unavailable.")
                         : await client.SubmitAsync(request, deadline.Token);
+                }
+                else
+                {
+                    result = KmDeliveryResult.Failure(false, "UNSUPPORTED_EVENT",
+                        "The KM outbox event type is not supported by this worker.");
                 }
             }
         }
@@ -362,46 +415,113 @@ public sealed class KmSyncWorker(
                 new DocumentLibraryClassificationLevel(l3.Id, l3.Name)));
     }
 
-    private static async Task<VendorFileIngestionRequest?> BuildVendorRequestAsync(
+    private async Task<KmV2DocumentJobRequest?> BuildVerificationAttachmentRequestAsync(
         AppDbContext db,
         KmIntegrationOutbox row,
         KmIntegrationOptions options,
         CancellationToken cancellationToken)
     {
-        if (!options.VendorEnabled || row.EventId == Guid.Empty || row.DocumentId == Guid.Empty ||
+        if (row.Id == Guid.Empty || row.EventId == Guid.Empty || row.DocumentId == Guid.Empty ||
+            row.Version != 1 || !TryGetServiceBaseUri(options, out var serviceBase))
+            return null;
+        var attachment = await db.VerificationApplicationFiles.AsNoTracking()
+            .Include(x => x.VerificationApplication)
+            .Include(x => x.DocumentLibraryFile)
+            .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);
+        var application = attachment?.VerificationApplication;
+        var file = attachment?.DocumentLibraryFile;
+        if (attachment is null || application is null || file is null ||
+            application.Status != VerificationApplicationStatus.Accepted ||
+            application.AcceptedAt is null || application.ProcessedBy is null ||
+            attachment.DocumentLibraryFileId != row.DocumentId || file.Id != row.DocumentId ||
+            file.StorageArea != DocumentStorageAreas.Library ||
+            file.OriginalFileName != row.FileName || file.FileSize != row.SizeBytes ||
+            !ValidSha256(attachment.Sha256) || !ValidSha256(file.Sha256) ||
+            !string.Equals(attachment.Sha256, file.Sha256, StringComparison.OrdinalIgnoreCase) ||
+            await DocumentLibraryFileDeletionHold.ExistsAsync(db, row.DocumentId, cancellationToken) ||
+            application.ModuleRecordId is { } recordId &&
+            await VerificationCaseDeletionHold.IsActiveAsync(db, recordId, cancellationToken))
+            return null;
+        if (!TryResolveLibraryFile(file, out var fullPath) ||
+            !await FileMatchesAsync(fullPath, file.FileSize, file.Sha256, cancellationToken))
+            return null;
+
+        var downloadPath = $"api/integrations/km/v1/documents/{file.Id:D}/versions/1/content";
+        return CreateV2Request(row,
+            new KmV2DocumentJobSource(
+                KmAnalysisSourceTypes.VerificationApplicationAttachment,
+                attachment.Id,
+                "verification-applications",
+                application.Id,
+                application.ModuleRecordId,
+                null,
+                null),
+            file.OriginalFileName,
+            file.ContentType,
+            file.FileSize,
+            file.Sha256,
+            new Uri(serviceBase!, downloadPath).AbsoluteUri,
+            row.CommittedAt,
+            new KmV2DocumentApproval(
+                KmV2ApprovalModes.Approved,
+                application.Id,
+                Utc(application.AcceptedAt.Value)));
+    }
+
+    private static async Task<KmV2DocumentJobRequest?> BuildVendorRequestAsync(
+        AppDbContext db,
+        KmIntegrationOutbox row,
+        KmIntegrationOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (!options.VendorEnabled || row.Id == Guid.Empty || row.EventId == Guid.Empty || row.DocumentId == Guid.Empty ||
             row.EventId != row.SourceEntityId || row.DocumentId != row.SourceEntityId || row.Version != 1 ||
-            !Uri.TryCreate(options.ServiceBaseUrl, UriKind.Absolute, out var serviceBase) ||
-            serviceBase.Scheme != Uri.UriSchemeHttps || serviceBase.AbsolutePath != "/" ||
-            !string.IsNullOrEmpty(serviceBase.Query) || !string.IsNullOrEmpty(serviceBase.Fragment))
+            !TryGetServiceBaseUri(options, out var serviceBase))
             return null;
         var file = await db.VendorFiles.AsNoTracking().Include(x => x.Vendor)
             .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);
         if (file?.Vendor is null || file.ArchiveStatus != FileArchiveStatuses.Archived ||
             file.ApprovalOperationId is null || file.ApprovedAt is null ||
-            string.IsNullOrWhiteSpace(file.ApprovedBy) || file.Sha256 is null ||
-            file.Sha256.Length != 64 || file.FileSize != row.SizeBytes)
+            string.IsNullOrWhiteSpace(file.ApprovedBy) || !ValidSha256(file.Sha256) ||
+            file.OriginalFileName != row.FileName || file.FileSize != row.SizeBytes)
+            return null;
+        var approval = await FindApprovalEvidenceAsync(db, file.ApprovalOperationId.Value,
+            "vendor", cancellationToken);
+        if (approval is null) return null;
+        string fullPath;
+        try { fullPath = ManagedAssetFileStorage.FullPath(file.FolderPath, file.StoredFileName); }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        { return null; }
+        if (!await FileMatchesAsync(fullPath, file.FileSize, file.Sha256!, cancellationToken))
             return null;
         var downloadPath = $"api/integrations/km/v1/vendor-files/{file.Id:D}/content";
-        return new VendorFileIngestionRequest(
-            "1.0", row.EventId, KmIntegrationEventTypes.VendorFileArchived,
-            "CSIT", file.Id, 1, row.CommittedAt,
-            new VendorKmReference(file.Vendor.Id, file.Vendor.Name),
-            new VendorKmFile(file.Id, file.OriginalFileName, file.StoredFileName,
-                file.ContentType ?? "application/octet-stream", file.FileSize, file.Sha256,
-                new Uri(serviceBase, downloadPath).AbsoluteUri));
+        return CreateV2Request(row,
+            new KmV2DocumentJobSource(
+                KmAnalysisSourceTypes.VendorFile,
+                file.Id,
+                "vendor",
+                null,
+                null,
+                file.VendorId,
+                null),
+            file.OriginalFileName,
+            file.ContentType,
+            file.FileSize,
+            file.Sha256!,
+            new Uri(serviceBase!, downloadPath).AbsoluteUri,
+            file.ArchiveUpdatedAt,
+            approval);
     }
 
-    private static async Task<EquipmentDocumentIngestionRequest?> BuildEquipmentRequestAsync(
+    private static async Task<KmV2DocumentJobRequest?> BuildEquipmentRequestAsync(
         AppDbContext db,
         KmIntegrationOutbox row,
         KmIntegrationOptions options,
         CancellationToken cancellationToken)
     {
-        if (!options.EquipmentEnabled || row.EventId == Guid.Empty || row.DocumentId == Guid.Empty ||
+        if (!options.EquipmentEnabled || row.Id == Guid.Empty || row.EventId == Guid.Empty || row.DocumentId == Guid.Empty ||
             row.EventId != row.SourceEntityId || row.DocumentId != row.SourceEntityId || row.Version != 1 ||
-            !Uri.TryCreate(options.ServiceBaseUrl, UriKind.Absolute, out var serviceBase) ||
-            serviceBase.Scheme != Uri.UriSchemeHttps || serviceBase.AbsolutePath != "/" ||
-            !string.IsNullOrEmpty(serviceBase.Query) || !string.IsNullOrEmpty(serviceBase.Fragment))
+            !TryGetServiceBaseUri(options, out var serviceBase))
             return null;
         if (await db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
             x.ApparatusFileId == row.SourceEntityId &&
@@ -410,33 +530,169 @@ public sealed class KmSyncWorker(
         var file = await db.ApparatusFiles.AsNoTracking().Include(x => x.Apparatus).ThenInclude(x => x.Vendor)
             .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);
         var originalName = file?.OriginalFileName ?? file?.FileName;
+        var isImage = file is not null && ManagedAssetFileStorage.IsImage(file.ContentType,
+            originalName ?? string.Empty);
+        var expectedEventType = isImage
+            ? KmIntegrationEventTypes.EquipmentAttachmentArchived
+            : KmIntegrationEventTypes.EquipmentDocumentArchived;
         if (file?.Apparatus is null || file.Apparatus.ModuleCode != "equipment" ||
             file.ArchiveStatus != FileArchiveStatuses.Archived ||
-            ManagedAssetFileStorage.IsImage(file.ContentType, originalName ?? string.Empty) ||
-            file.Sha256 is null || file.Sha256.Length != 64 || file.FileSize != row.SizeBytes)
+            row.EventType != expectedEventType || originalName != row.FileName ||
+            !ValidSha256(file.Sha256) || file.FileSize != row.SizeBytes)
             return null;
+        var approval = await FindApprovalEvidenceAsync(db, file.Id, "equipment", cancellationToken);
+        if (approval is null || !TryResolveManagedFile(file.FilePath, file.FileName, out var fullPath) ||
+            !await FileMatchesAsync(fullPath, file.FileSize, file.Sha256!, cancellationToken)) return null;
         var downloadPath = $"api/integrations/km/v1/equipment-documents/{file.Id:D}/content";
-        return new EquipmentDocumentIngestionRequest(
-            "1.0", row.EventId, KmIntegrationEventTypes.EquipmentDocumentArchived,
-            "CSIT", file.Id, 1, row.CommittedAt,
-            new EquipmentKmReference(file.Apparatus.Id, file.Apparatus.ProductsId,
-                file.Apparatus.Name, file.Apparatus.Kind, file.Apparatus.Brand,
-                file.Apparatus.VendorId, file.Apparatus.Vendor?.Name, file.Apparatus.Model),
-            new EquipmentKmFile(file.Id, originalName!, file.FileName,
-                file.ContentType ?? "application/octet-stream", file.FileSize, file.Sha256,
-                new Uri(serviceBase, downloadPath).AbsoluteUri, EquipmentDocumentKind(originalName!)));
+        return CreateV2Request(row,
+            new KmV2DocumentJobSource(
+                KmAnalysisSourceTypes.EquipmentAttachment,
+                file.Id,
+                "equipment",
+                null,
+                null,
+                file.Apparatus.VendorId,
+                file.Apparatus.Id),
+            originalName!,
+            file.ContentType,
+            file.FileSize,
+            file.Sha256!,
+            new Uri(serviceBase!, downloadPath).AbsoluteUri,
+            file.ArchiveUpdatedAt ?? file.CreatedAt,
+            approval);
     }
 
-    private static string EquipmentDocumentKind(string fileName)
+    private static KmV2DocumentJobRequest CreateV2Request(
+        KmIntegrationOutbox row,
+        KmV2DocumentJobSource source,
+        string originalFileName,
+        string? contentType,
+        long sizeBytes,
+        string sha256,
+        string downloadUrl,
+        DateTime archivedAt,
+        KmV2DocumentApproval approval)
     {
-        var name = Path.GetFileNameWithoutExtension(fileName);
-        if (name.Contains("datasheet", StringComparison.OrdinalIgnoreCase) || name.Contains("spec", StringComparison.OrdinalIgnoreCase))
-            return "Datasheet";
-        if (name.Contains("sop", StringComparison.OrdinalIgnoreCase)) return "SOP";
-        if (name.Contains("manual", StringComparison.OrdinalIgnoreCase) || name.Contains("手冊", StringComparison.OrdinalIgnoreCase))
-            return "Manual";
-        return "EquipmentDocument";
+        return new KmV2DocumentJobRequest(
+            "2.0",
+            row.EventId,
+            row.Id,
+            row.EventType,
+            "CSIT",
+            source,
+            new KmV2Document(
+                row.DocumentId,
+                row.Version,
+                originalFileName,
+                string.IsNullOrWhiteSpace(contentType) ? "application/octet-stream" : contentType,
+                sizeBytes,
+                sha256.ToLowerInvariant(),
+                downloadUrl,
+                Utc(archivedAt),
+                approval),
+            new KmV2DocumentClassification(null, null, null),
+            null,
+            Utc(row.CreatedAt));
     }
+
+    private static async Task<KmV2DocumentApproval?> FindApprovalEvidenceAsync(
+        AppDbContext db,
+        Guid referenceId,
+        string moduleCode,
+        CancellationToken cancellationToken)
+    {
+        var approved = await db.PendingSubmissions.AsNoTracking()
+            .Where(x => x.Id == referenceId && x.SourceModuleCode == moduleCode &&
+                x.Status == ApprovalStatus.Committed && x.ReviewerAccount != null &&
+                x.ReviewedAt != null)
+            .Select(x => x.ReviewedAt)
+            .SingleOrDefaultAsync(cancellationToken);
+        if (approved.HasValue)
+            return new KmV2DocumentApproval(KmV2ApprovalModes.Approved,
+                referenceId, Utc(approved.Value));
+
+        var bypassed = await db.ApprovalAuditEvents.AsNoTracking()
+            .Where(x => x.SubmissionId == referenceId && x.SourceModuleCode == moduleCode &&
+                x.Action == ApprovalAuditActions.ApprovalBypassed)
+            .OrderByDescending(x => x.OccurredAt)
+            .Select(x => (DateTime?)x.OccurredAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        return bypassed.HasValue
+            ? new KmV2DocumentApproval(KmV2ApprovalModes.ApprovalBypassed,
+                referenceId, Utc(bypassed.Value))
+            : null;
+    }
+
+    private bool TryResolveLibraryFile(DocumentLibraryFile file, out string path)
+    {
+        path = string.Empty;
+        var root = documentStorage?.Value.RootPath?.Trim();
+        if (string.IsNullOrWhiteSpace(root)) return false;
+        try
+        {
+            var fullRoot = Path.GetFullPath(root)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                Path.DirectorySeparatorChar;
+            path = Path.GetFullPath(Path.Combine(fullRoot, file.RelativePath));
+            return path.StartsWith(fullRoot, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryResolveManagedFile(string folder, string storedName, out string path)
+    {
+        path = string.Empty;
+        try
+        {
+            var fullFolder = Path.GetFullPath(folder)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) +
+                Path.DirectorySeparatorChar;
+            path = Path.GetFullPath(Path.Combine(fullFolder, storedName));
+            return path.StartsWith(fullFolder, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+
+    private static async Task<bool> FileMatchesAsync(string path, long expectedSize,
+        string expectedSha256, CancellationToken cancellationToken)
+    {
+        if (!File.Exists(path) || new FileInfo(path).Length != expectedSize) return false;
+        try
+        {
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+                FileShare.Read, 81920, useAsync: true);
+            var digest = Convert.ToHexString(await SHA256.HashDataAsync(stream, cancellationToken));
+            return string.Equals(digest, expectedSha256, StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException or IOException)
+        {
+            return false;
+        }
+    }
+
+    private static bool ValidSha256(string? value) =>
+        value is { Length: 64 } && value.All(Uri.IsHexDigit);
+
+    private static bool TryGetServiceBaseUri(KmIntegrationOptions options, out Uri? serviceBase)
+    {
+        if (!Uri.TryCreate(options.ServiceBaseUrl, UriKind.Absolute, out serviceBase) ||
+            serviceBase.Scheme != Uri.UriSchemeHttps || serviceBase.AbsolutePath != "/" ||
+            !string.IsNullOrEmpty(serviceBase.Query) || !string.IsNullOrEmpty(serviceBase.Fragment))
+        {
+            serviceBase = null;
+            return false;
+        }
+        return true;
+    }
+
+    private static DateTime Utc(DateTime value) =>
+        value.Kind == DateTimeKind.Utc ? value : DateTime.SpecifyKind(value, DateTimeKind.Utc);
 
     private async Task EnsurePendingDocumentLibraryOutboxAsync(CancellationToken cancellationToken)
     {
