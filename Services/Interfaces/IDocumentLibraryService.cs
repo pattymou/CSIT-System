@@ -26,6 +26,9 @@ public interface IDocumentLibraryFormalUploadService
     Task<DocumentLibraryFileDto> StageApprovedAsync(Guid documentFileId, Guid folderId, IFormFile file,
         string uploadedBy, DocumentLibraryBypassAudit? bypassAudit = null, DateTime? receivedAt = null,
         CancellationToken cancellationToken = default);
+    Task<DocumentLibraryFileDto> StageApprovedVersionAsync(Guid documentFileId, Guid previousFileId,
+        IFormFile file, string uploadedBy, DocumentLibraryBypassAudit? bypassAudit = null,
+        DateTime? receivedAt = null, CancellationToken cancellationToken = default);
 }
 
 public sealed record DocumentDownload(Stream Stream, string OriginalFileName, string? ContentType);

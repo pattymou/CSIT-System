@@ -21,6 +21,57 @@ namespace ApprovalFramework.Tests;
 public sealed class DocumentLibraryKmIntegrationTests
 {
     [Fact]
+    public async Task ApprovedReplacement_IsImmutableV2JobWithExactSupersedes()
+    {
+        var roots = TemporaryRoots.Create();
+        try
+        {
+            var factory = new InMemoryFactory();
+            var folderId = await SeedFoldersAsync(factory);
+            var first = await UploadAsync(factory, roots, folderId, "guide-v1.pdf");
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                var old = await db.KmIntegrationOutbox.SingleAsync(x => x.EventId == first.CsitJobId);
+                var lease = Guid.NewGuid();
+                old.Claim(lease, DateTime.UtcNow, TimeSpan.FromMinutes(1));
+                old.Sent(lease, "old-job", DateTime.UtcNow);
+                old.CallbackCompleted(DateTime.UtcNow);
+                await db.SaveChangesAsync();
+            }
+
+            var bytes = Encoding.UTF8.GetBytes("new immutable version");
+            await using var stream = new MemoryStream(bytes);
+            var replacement = await Service(factory, roots).StageApprovedVersionAsync(
+                Guid.NewGuid(), first.Id,
+                new FormFile(stream, 0, bytes.Length, "file", "guide-v2.pdf")
+                { Headers = new HeaderDictionary(), ContentType = "application/pdf" },
+                "km-e2e", new SIT.DepartmentSystem.Web.Services.Interfaces.DocumentLibraryBypassAudit(
+                    "km-e2e", "TestAdministration"));
+            Assert.Equal(1, await ArchiveWorker(factory, roots, IntegrationOptions()).ProcessBatchAsync());
+
+            Assert.NotEqual(first.Id, replacement.Id);
+            Assert.Equal(first.DocumentId, replacement.DocumentId);
+            Assert.Equal(2, replacement.Version);
+            Assert.Equal(first.Id, replacement.SupersedesFileId);
+            await using var mockKm = await MockKmIngestionServer.StartAsync();
+            Assert.Equal(1, await Worker(factory, mockKm, IntegrationOptions(), roots).ProcessBatchAsync());
+            var request = Assert.IsType<KmV2DocumentJobRequest>(mockKm.LastV2Request);
+            Assert.Equal(replacement.Id, request.Source.EntityId);
+            Assert.Equal(first.DocumentId, request.Document.Id);
+            Assert.Equal(2, request.Document.Version);
+            Assert.Equal(first.DocumentId, request.Supersedes!.OldDocumentId);
+            Assert.Equal(1, request.Supersedes.OldVersion);
+            await using var verify = await factory.CreateDbContextAsync();
+            Assert.Equal(2, await verify.KmIntegrationOutbox.CountAsync());
+            Assert.Single(await verify.KmIntegrationOutbox.Where(x =>
+                x.DocumentId == first.DocumentId && x.Version == 2).ToListAsync());
+            Assert.True(File.Exists(Path.Combine(roots.Library,
+                (await verify.DocumentLibraryFiles.SingleAsync(x => x.Id == first.Id)).RelativePath)));
+        }
+        finally { roots.Dispose(); }
+    }
+
+    [Fact]
     public async Task LegacyOutboxWithoutApprovalEvidence_IsNotDispatchedOrMutated()
     {
         var roots = TemporaryRoots.Create();
@@ -298,7 +349,7 @@ public sealed class DocumentLibraryKmIntegrationTests
             {
                 var jobs = await db.DocumentProcessingJobs
                     .Where(x => files.Select(f => f.CsitJobId).Contains(x.Id)).ToListAsync();
-                Assert.Equal(2, jobs.Count(x => x.ArchiveStatus == DocumentArchiveStatuses.Completed));
+                Assert.Equal(3, jobs.Count(x => x.ArchiveStatus == DocumentArchiveStatuses.Completed));
                 Assert.Single(jobs, x => x.Status == DocumentProcessingStatuses.Failed &&
                     x.KmErrorCode == "PARSE_FAILED" && x.KmErrorRetryable == false);
                 Assert.Equal(5, await db.DocumentProcessingCallbacks.CountAsync(x =>
@@ -346,6 +397,17 @@ public sealed class DocumentLibraryKmIntegrationTests
             await dbConnection.OpenAsync();
             await using var command = dbConnection.CreateCommand();
             command.CommandText = """
+                INSERT INTO menu_sections
+                    (id,code,name,icon,sort_order,is_enabled,created_at,updated_at)
+                VALUES ('30000000-0000-4000-8000-000000000001','task-c-migration-test',
+                        'Task C migration test',NULL,1,TRUE,NOW(),NOW());
+                INSERT INTO menu_items
+                    (id,section_id,code,title,route_path,icon,sort_order,is_enabled,admin_only,
+                     requires_supervisor_approval,module_code,template_type,use_standard_template,
+                     created_at,updated_at)
+                VALUES ('30000000-0000-4000-8000-000000000002',
+                        '30000000-0000-4000-8000-000000000001','vendors','Vendors','/vendors',
+                        NULL,1,TRUE,FALSE,FALSE,NULL,NULL,FALSE,NOW(),NOW());
                 INSERT INTO document_folders (id,parent_id,level,name,description,sort_order,created_at,updated_at)
                 VALUES (@l1,NULL,1,'Legacy L1',NULL,1,NOW(),NOW()),
                        (@l2,@l1,2,'Legacy L2',NULL,1,NOW(),NOW()),
@@ -371,10 +433,16 @@ public sealed class DocumentLibraryKmIntegrationTests
         {
             await db.Database.MigrateAsync();
             var legacy = await db.DocumentProcessingJobs.AsNoTracking().SingleAsync(x => x.Id == job);
+            var legacyFile = await db.DocumentLibraryFiles.AsNoTracking().SingleAsync(x => x.Id == file);
             Assert.Equal(DocumentProcessingStatuses.Completed, legacy.Status);
             Assert.Equal(DocumentArchiveStatuses.NotStarted, legacy.ArchiveStatus);
             Assert.Null(legacy.MetadataJson);
+            Assert.Equal(file, legacyFile.DocumentId);
+            Assert.Equal(1, legacyFile.Version);
+            Assert.Null(legacyFile.SupersedesFileId);
             Assert.Contains("20261027061524_AddDocumentLibraryKmIntegrationV1",
+                await db.Database.GetAppliedMigrationsAsync());
+            Assert.Contains("20261106074818_AddKmTaskCIntegrationV141",
                 await db.Database.GetAppliedMigrationsAsync());
         }
 
@@ -436,9 +504,11 @@ public sealed class DocumentLibraryKmIntegrationTests
     private static KmSyncWorker Worker(
         IDbContextFactory<AppDbContext> factory,
         MockKmIngestionServer mock,
-        KmIntegrationOptions options) => new(factory,
+        KmIntegrationOptions options,
+        TemporaryRoots? roots = null) => new(factory,
         new KmIntegrationClient(mock.Client, Options.Create(options), new MockTokenProvider()),
-        Options.Create(options), NullLogger<KmSyncWorker>.Instance);
+        Options.Create(options), NullLogger<KmSyncWorker>.Instance,
+        roots is null ? null : Options.Create(new DocumentStorageOptions { RootPath = roots.Library }));
 
     private static DocumentLibraryArchiveWorker ArchiveWorker(
         IDbContextFactory<AppDbContext> factory,

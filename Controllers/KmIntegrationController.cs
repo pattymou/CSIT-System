@@ -132,7 +132,9 @@ public sealed class KmIntegrationController(
             !await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
                 x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
-                x.SourceEntityId == documentFileId && x.DocumentId == documentFileId &&
+                x.SourceEntityId == documentFileId &&
+                x.DocumentId == (file.DocumentId == Guid.Empty ? file.Id : file.DocumentId) &&
+                x.Version == (file.Version < 1 ? 1 : file.Version) &&
                 x.EventId == file.ProcessingJob.Id && x.KmJobId != null &&
                 (x.Status == KmIntegrationStatus.Sent || x.Status == KmIntegrationStatus.Processing ||
                  x.Status == KmIntegrationStatus.Completed || x.Status == KmIntegrationStatus.Failed),

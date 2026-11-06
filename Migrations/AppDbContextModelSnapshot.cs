@@ -489,6 +489,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("content_type");
 
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("document_id");
+
                     b.Property<long>("FileSize")
                         .HasColumnType("bigint")
                         .HasColumnName("file_size");
@@ -529,6 +533,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasDefaultValue("Library")
                         .HasColumnName("storage_area");
 
+                    b.Property<Guid?>("SupersedesFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("supersedes_file_id");
+
                     b.Property<DateTime>("UploadedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("uploaded_at");
@@ -539,9 +547,20 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("character varying(200)")
                         .HasColumnName("uploaded_by");
 
+                    b.Property<int>("Version")
+                        .HasColumnType("integer")
+                        .HasColumnName("version");
+
                     b.HasKey("Id");
 
                     b.HasIndex("StandardFileName")
+                        .IsUnique();
+
+                    b.HasIndex("SupersedesFileId")
+                        .IsUnique()
+                        .HasFilter("supersedes_file_id IS NOT NULL");
+
+                    b.HasIndex("DocumentId", "Version")
                         .IsUnique();
 
                     b.HasIndex("FolderId", "UploadedAt");
@@ -1796,9 +1815,218 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         {
                             t.HasCheckConstraint("ck_km_outbox_sent_job", "status NOT IN ('Sent', 'Processing', 'Completed') OR km_job_id IS NOT NULL");
 
-                            t.HasCheckConstraint("ck_km_outbox_supported_event", "source_system = 'CSIT' AND ((event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND project_id IS NOT NULL) OR (event_type = 'VerificationApplicationAttachmentArchived' AND source_entity_type = 'VerificationApplicationFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived') AND source_entity_type = 'ApparatusFile' AND source_entity_id = document_id AND event_id = source_entity_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL))");
+                            t.HasCheckConstraint("ck_km_outbox_supported_event", "source_system = 'CSIT' AND ((event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND project_id IS NOT NULL) OR (event_type = 'VerificationApplicationAttachmentArchived' AND source_entity_type = 'VerificationApplicationFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived') AND source_entity_type = 'ApparatusFile' AND source_entity_id = document_id AND event_id = source_entity_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL))");
 
                             t.HasCheckConstraint("ck_km_outbox_version_size", "version > 0 AND size_bytes > 0");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmMetadataChange", b =>
+                {
+                    b.Property<Guid>("ChangeId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("change_id");
+
+                    b.Property<Guid>("AnalysisResultId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("analysis_result_id");
+
+                    b.Property<string>("AttributesJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("attributes_json");
+
+                    b.Property<DateTime>("AuthorizedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("authorized_at");
+
+                    b.Property<string>("AuthorizedBy")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("authorized_by");
+
+                    b.Property<string>("ChangedFieldsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("changed_fields_json");
+
+                    b.Property<string>("ClassificationJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("classification_json");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("document_id");
+
+                    b.Property<string>("KmChangeJobId")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("km_change_job_id");
+
+                    b.Property<string>("LastErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("last_error_code");
+
+                    b.Property<string>("LastErrorMessage")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("last_error_message");
+
+                    b.Property<bool?>("LastErrorRetryable")
+                        .HasColumnType("boolean")
+                        .HasColumnName("last_error_retryable");
+
+                    b.Property<DateTime?>("LeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_expires_at");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uuid")
+                        .HasColumnName("lease_token");
+
+                    b.Property<DateTime?>("NextRetryAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("next_retry_at");
+
+                    b.Property<DateTime>("OccurredAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("occurred_at");
+
+                    b.Property<string>("PayloadSha256")
+                        .IsRequired()
+                        .HasColumnType("char(64)")
+                        .HasColumnName("payload_sha256");
+
+                    b.Property<int>("RetryCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("retry_count");
+
+                    b.Property<Guid>("ReviewRevisionId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("review_revision_id");
+
+                    b.Property<DateTime?>("SentAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("sent_at");
+
+                    b.Property<Guid>("SourceEntityId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("source_entity_id");
+
+                    b.Property<int>("SourceRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("source_revision");
+
+                    b.Property<string>("SourceSystem")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("source_system");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .HasColumnType("character varying(80)")
+                        .HasColumnName("source_type");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer")
+                        .HasColumnName("version");
+
+                    b.HasKey("ChangeId");
+
+                    b.HasIndex("AnalysisResultId");
+
+                    b.HasIndex("KmChangeJobId")
+                        .IsUnique()
+                        .HasFilter("km_change_job_id IS NOT NULL");
+
+                    b.HasIndex("ReviewRevisionId");
+
+                    b.HasIndex("Status", "LeaseExpiresAt");
+
+                    b.HasIndex("Status", "NextRetryAt");
+
+                    b.HasIndex("SourceType", "SourceEntityId", "DocumentId", "Version", "SourceRevision")
+                        .IsUnique();
+
+                    b.ToTable("km_metadata_changes", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_km_metadata_change_payload_sha", "length(payload_sha256) = 64");
+
+                            t.HasCheckConstraint("ck_km_metadata_change_sent_job", "status NOT IN ('Sent','Processing','Completed') OR km_change_job_id IS NOT NULL");
+
+                            t.HasCheckConstraint("ck_km_metadata_change_source", "source_system = 'CSIT' AND source_type IN ('TestReport','DocumentLibraryFile')");
+
+                            t.HasCheckConstraint("ck_km_metadata_change_status", "status IN ('Pending','Dispatching','Sent','Processing','Completed','Failed')");
+
+                            t.HasCheckConstraint("ck_km_metadata_change_version", "version >= 1 AND source_revision >= 2");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmMetadataChangeCallbackReceipt", b =>
+                {
+                    b.Property<Guid>("CallbackId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("callback_id");
+
+                    b.Property<int>("AppliedRevision")
+                        .HasColumnType("integer")
+                        .HasColumnName("applied_revision");
+
+                    b.Property<Guid>("ChangeId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("change_id");
+
+                    b.Property<string>("PayloadSha256")
+                        .IsRequired()
+                        .HasColumnType("char(64)")
+                        .HasColumnName("payload_sha256");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.HasKey("CallbackId");
+
+                    b.HasIndex("ChangeId");
+
+                    b.ToTable("km_metadata_change_callbacks", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_km_metadata_callback_revision", "applied_revision >= 0");
+
+                            t.HasCheckConstraint("ck_km_metadata_callback_sha", "length(payload_sha256) = 64");
+
+                            t.HasCheckConstraint("ck_km_metadata_callback_status", "status IN ('Processing','Completed','Failed')");
                         });
                 });
 
@@ -8868,6 +9096,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
 
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.DocumentLibraryFile", null)
+                        .WithMany()
+                        .HasForeignKey("SupersedesFileId")
+                        .OnDelete(DeleteBehavior.Restrict);
+
                     b.Navigation("Folder");
                 });
 
@@ -9005,6 +9238,36 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.Navigation("Outbox");
 
                     b.Navigation("SupersedesResult");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmMetadataChange", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.KmDocumentAnalysisResult", "AnalysisResult")
+                        .WithMany()
+                        .HasForeignKey("AnalysisResultId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.KmAnalysisReviewRevision", "ReviewRevision")
+                        .WithMany()
+                        .HasForeignKey("ReviewRevisionId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("AnalysisResult");
+
+                    b.Navigation("ReviewRevision");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmMetadataChangeCallbackReceipt", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.KmMetadataChange", "Change")
+                        .WithMany()
+                        .HasForeignKey("ChangeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.Navigation("Change");
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.MenuItem", b =>

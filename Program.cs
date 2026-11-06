@@ -292,7 +292,11 @@ builder.Services.AddScoped<KmSyncDiagnostics>();
 builder.Services.AddScoped<KmQueueQueryService>();
 builder.Services.AddScoped<KmAnalysisCallbackService>();
 builder.Services.AddScoped<KmAnalysisQueryService>();
+builder.Services.AddScoped<KmMetadataChangeQueueService>();
+builder.Services.AddScoped<KmMetadataChangeCallbackService>();
+builder.Services.AddScoped<KmMetadataChangeWorker>();
 builder.Services.AddHostedService<KmSyncBackgroundService>();
+builder.Services.AddHostedService<KmMetadataChangeBackgroundService>();
 builder.Services.AddScoped<DocumentLibraryArchiveWorker>();
 builder.Services.AddHostedService<DocumentLibraryArchiveBackgroundService>();
 

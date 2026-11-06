@@ -8,7 +8,9 @@ namespace SIT.DepartmentSystem.Web.Controllers;
 [ApiController]
 [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 [Route("api/administration/km-analysis/results")]
-public sealed class KmAnalysisAdministrationController(KmAnalysisQueryService service) : ControllerBase
+public sealed class KmAnalysisAdministrationController(
+    KmAnalysisQueryService service,
+    KmMetadataChangeQueueService metadataChanges) : ControllerBase
 {
     [HttpGet]
     public async Task<IActionResult> List([FromQuery] string? sourceType,
@@ -34,5 +36,20 @@ public sealed class KmAnalysisAdministrationController(KmAnalysisQueryService se
         try { return Ok(await service.ReviewAsync(User, resultId, request, cancellationToken)); }
         catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
         catch (KeyNotFoundException) { return NotFound(); }
+    }
+
+    [HttpPost("{resultId:guid}/metadata-changes")]
+    [BusinessWrite]
+    public async Task<IActionResult> QueueMetadataChange(Guid resultId,
+        [FromBody] KmMetadataChangeQueueRequest request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return Accepted(await metadataChanges.QueueAsync(User, resultId, request,
+                cancellationToken));
+        }
+        catch (ArgumentException ex) { return BadRequest(new { error = ex.Message }); }
+        catch (KeyNotFoundException) { return NotFound(); }
+        catch (InvalidOperationException ex) { return Conflict(new { error = ex.Message }); }
     }
 }

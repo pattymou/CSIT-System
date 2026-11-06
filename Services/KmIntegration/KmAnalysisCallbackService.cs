@@ -62,6 +62,28 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
         }
         catch (InvalidOperationException) { throw Conflict("invalid_transition"); }
 
+        if (callback.SourceType == KmAnalysisSourceTypes.DocumentLibraryFile)
+        {
+            var job = await db.DocumentProcessingJobs.SingleAsync(x =>
+                x.Id == outbox.EventId && x.DocumentFileId == outbox.SourceEntityId,
+                cancellationToken);
+            try
+            {
+                if (callback.Status == "Processing")
+                    job.CallbackProcessing(callback.Timestamps!.StartedAt!.Value.UtcDateTime, now);
+                else if (callback.Status == "Failed")
+                    job.CallbackFailed(callback.Timestamps!.StartedAt?.UtcDateTime,
+                        callback.Timestamps.FailedAt!.Value.UtcDateTime,
+                        callback.Error!.Code, callback.Error.Message,
+                        callback.Error.Retryable!.Value, now);
+                else
+                    job.CallbackCompleted(callback.Timestamps!.StartedAt?.UtcDateTime,
+                        callback.Timestamps.CompletedAt!.Value.UtcDateTime,
+                        metadata!.Json, now);
+            }
+            catch (InvalidOperationException) { throw Conflict("invalid_transition"); }
+        }
+
         db.KmAnalysisCallbackReceipts.Add(Receipt(callback.CallbackId, outbox,
             "document-jobs/status", callback.Status, hash, now));
         if (metadata is not null)
@@ -69,12 +91,19 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
             var previous = await LatestResultAsync(db, callback.SourceType,
                 callback.SourceEntityId, callback.Version, cancellationToken);
             if (previous is not null) throw Conflict("analysis_result_already_exists");
+            var supersedes = await db.KmDocumentAnalysisResults
+                .Where(x => x.SourceType == callback.SourceType &&
+                    x.DocumentId == callback.DocumentId && x.Version < callback.Version &&
+                    x.SupersededAt == null)
+                .OrderByDescending(x => x.Version).ThenByDescending(x => x.SourceRevision)
+                .FirstOrDefaultAsync(cancellationToken);
             db.KmDocumentAnalysisResults.Add(KmDocumentAnalysisResult.Create(
                 callback.CallbackId, callback.CallbackId, outbox, callback.SourceType,
                 callback.SourceEntityId, callback.DocumentId, callback.Version, callback.CsitJobId,
                 callback.KmJobId, callback.SourceSha256, metadata.MetadataSchemaVersion,
                 metadata.Json, callback.Timestamps!.CompletedAt!.Value.UtcDateTime,
-                metadata.IndexedAt, now, 1, hash));
+                metadata.IndexedAt, now, 1, hash, supersedes?.Id));
+            supersedes?.MarkSuperseded(now);
         }
         await SaveAsync(db, transaction, cancellationToken);
     }
@@ -158,7 +187,9 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
         if (existing) throw Conflict("analysis_result_already_exists");
         db.KmDocumentAnalysisResults.Add(KmDocumentAnalysisResult.Create(
             callback.CallbackId, callback.CallbackId, outbox,
-            KmAnalysisSourceTypes.DocumentLibraryFile, file.Id, file.Id, 1,
+            KmAnalysisSourceTypes.DocumentLibraryFile, file.Id,
+            file.DocumentId == Guid.Empty ? file.Id : file.DocumentId,
+            file.Version < 1 ? 1 : file.Version,
             callback.CsitJobId, callback.KmJobId, file.Sha256,
             callback.Result!.MetadataSchemaVersion, metadataJson!,
             callback.Timestamps!.CompletedAt!.Value.UtcDateTime,
@@ -170,7 +201,9 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
         if (callback is null || callback.SchemaVersion != "2.0" || callback.CallbackId == Guid.Empty ||
             callback.EventId == Guid.Empty || callback.CsitJobId == Guid.Empty ||
             string.IsNullOrWhiteSpace(callback.KmJobId) || callback.SourceSystem != "CSIT" ||
-            callback.SourceType is not (KmAnalysisSourceTypes.VerificationApplicationAttachment or
+            callback.SourceType is not (KmAnalysisSourceTypes.TestReport or
+                KmAnalysisSourceTypes.DocumentLibraryFile or
+                KmAnalysisSourceTypes.VerificationApplicationAttachment or
                 KmAnalysisSourceTypes.VendorFile or KmAnalysisSourceTypes.EquipmentAttachment) ||
             callback.SourceEntityId == Guid.Empty || callback.DocumentId == Guid.Empty || callback.Version < 1 ||
             !Sha256(callback.SourceSha256) || callback.Status is not ("Processing" or "Completed" or "Failed") ||
@@ -203,6 +236,14 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
             outbox.EventType is KmIntegrationEventTypes.EquipmentDocumentArchived or
                 KmIntegrationEventTypes.EquipmentAttachmentArchived &&
             outbox.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile,
+        KmAnalysisSourceTypes.TestReport =>
+            outbox.EventType == KmIntegrationEventTypes.TestReportCommitted &&
+            outbox.SourceEntityType == KmIntegrationSourceEntityTypes.TestReport &&
+            outbox.Version > 1,
+        KmAnalysisSourceTypes.DocumentLibraryFile =>
+            outbox.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
+            outbox.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
+            outbox.Version > 1,
         _ => false
     };
 
@@ -221,6 +262,23 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
                     file.ReviewStatus != TestReportReviewStatuses.Approved || !file.IsRawDataExported ||
                     string.IsNullOrWhiteSpace(file.Sha256)) throw Unprocessable("source_not_formal");
                 if (await VerificationCaseDeletionHold.IsActiveAsync(db, file.RecordId, cancellationToken))
+                    throw Unprocessable("deletion_in_progress");
+                return new(file.Sha256);
+            }
+            case KmAnalysisSourceTypes.DocumentLibraryFile:
+            {
+                var file = await db.DocumentLibraryFiles.AsNoTracking().Include(x => x.ProcessingJob)
+                    .SingleOrDefaultAsync(x => x.Id == outbox.SourceEntityId,
+                        cancellationToken);
+                if (file is null) throw Gone("source_deleted");
+                if (file.DocumentId != outbox.DocumentId || file.Version != outbox.Version ||
+                    file.StorageArea != DocumentStorageAreas.Library ||
+                    file.ProcessingJob?.Id != outbox.EventId ||
+                    file.ProcessingJob.ArchiveStatus != DocumentArchiveStatuses.Completed ||
+                    string.IsNullOrWhiteSpace(file.Sha256))
+                    throw Unprocessable("source_not_formal");
+                if (await DocumentLibraryFileDeletionHold.ExistsAsync(db, file.Id,
+                        cancellationToken))
                     throw Unprocessable("deletion_in_progress");
                 return new(file.Sha256);
             }

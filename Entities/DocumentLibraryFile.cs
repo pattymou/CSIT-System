@@ -3,6 +3,9 @@ namespace SIT.DepartmentSystem.Web.Entities;
 public sealed class DocumentLibraryFile
 {
     public Guid Id { get; set; }
+    public Guid DocumentId { get; set; }
+    public int Version { get; set; } = 1;
+    public Guid? SupersedesFileId { get; set; }
     public Guid FolderId { get; set; }
     public string OriginalFileName { get; set; } = string.Empty;
     public string StandardFileName { get; set; } = string.Empty;

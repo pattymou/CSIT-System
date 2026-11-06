@@ -17,6 +17,10 @@ public interface IKmIntegrationClient
         CancellationToken cancellationToken) =>
         Task.FromResult(KmDeliveryResult.Failure(false, "UNSUPPORTED",
             "KM v2 document delivery is unavailable."));
+    Task<KmMetadataChangeDeliveryResult> SubmitMetadataChangeAsync(
+        KmMetadataChangeRequest request, CancellationToken cancellationToken) =>
+        Task.FromResult(KmMetadataChangeDeliveryResult.Failure(false, "UNSUPPORTED",
+            "KM metadata change delivery is unavailable."));
 }
 
 public interface IKmIntegrationAccessTokenProvider
@@ -39,6 +43,7 @@ public sealed class KmIntegrationClient(
     public const string IngestionPath = "/api/integrations/csit/v1/ingestion-jobs";
     public const string DocumentLibraryIngestionPath = "/api/integrations/csit/v1/document-library/jobs";
     public const string DocumentJobV2Path = "/api/integrations/csit/v2/document-jobs";
+    public const string MetadataChangeV2Path = "/api/integrations/csit/v2/document-metadata-changes";
 
     public async Task<KmDeliveryResult> SubmitAsync(KmIngestionRequest request, CancellationToken cancellationToken)
     {
@@ -226,6 +231,68 @@ public sealed class KmIntegrationClient(
         catch (HttpRequestException)
         {
             return KmDeliveryResult.Failure(true, "CONNECTION", "KM document job connection failed.");
+        }
+    }
+
+    public async Task<KmMetadataChangeDeliveryResult> SubmitMetadataChangeAsync(
+        KmMetadataChangeRequest request, CancellationToken cancellationToken)
+    {
+        var options = configured.Value;
+        if (!options.Enabled)
+            return KmMetadataChangeDeliveryResult.Failure(false, "DISABLED", "KM integration is disabled.");
+        if (!TryGetBaseUri(options, out var baseUri))
+            return KmMetadataChangeDeliveryResult.Failure(false, "CONFIGURATION",
+                "KM integration configuration is incomplete.");
+        string accessToken;
+        try { accessToken = await tokens.GetAccessTokenAsync(cancellationToken); }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return KmMetadataChangeDeliveryResult.Failure(false, "AUTH_NOT_CONFIGURED",
+                "KM Client Credentials is unavailable.");
+        }
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return KmMetadataChangeDeliveryResult.Failure(false, "AUTH_NOT_CONFIGURED",
+                "KM Client Credentials is unavailable.");
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
+        using var message = new HttpRequestMessage(HttpMethod.Post,
+            new Uri(baseUri!, MetadataChangeV2Path)) { Content = JsonContent.Create(request) };
+        message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        message.Headers.Add("Idempotency-Key", request.ChangeId.ToString("D"));
+        try
+        {
+            using var response = await http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead,
+                timeout.Token);
+            if (response.StatusCode == HttpStatusCode.Accepted)
+            {
+                KmMetadataChangeAccepted? payload;
+                try { payload = await response.Content.ReadFromJsonAsync<KmMetadataChangeAccepted>(timeout.Token); }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    return KmMetadataChangeDeliveryResult.Failure(false, "INVALID_RESPONSE",
+                        "KM 202 response is invalid.");
+                }
+                if (payload is null || payload.ChangeId != request.ChangeId ||
+                    string.IsNullOrWhiteSpace(payload.KmChangeJobId) || payload.Status != "Accepted")
+                    return KmMetadataChangeDeliveryResult.Failure(false, "INVALID_RESPONSE",
+                        "KM 202 response does not match the metadata change.");
+                return KmMetadataChangeDeliveryResult.Success(payload.KmChangeJobId);
+            }
+            var retryable = (int)response.StatusCode >= 500 ||
+                response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.RequestTimeout;
+            return KmMetadataChangeDeliveryResult.Failure(retryable, "HTTP_" + (int)response.StatusCode,
+                retryable ? "KM is temporarily unavailable." : "KM rejected the metadata change.");
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return KmMetadataChangeDeliveryResult.Failure(true, "TIMEOUT",
+                "KM metadata change request timed out.");
+        }
+        catch (HttpRequestException)
+        {
+            return KmMetadataChangeDeliveryResult.Failure(true, "CONNECTION",
+                "KM metadata change connection failed.");
         }
     }
 

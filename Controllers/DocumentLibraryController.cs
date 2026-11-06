@@ -110,6 +110,33 @@ public sealed class DocumentLibraryController(
         return Ok(result);
     }
 
+    [HttpPost("files/{id:guid}/versions")]
+    [BusinessWrite]
+    [RequestSizeLimit(200_000_000)]
+    [RequestFormLimits(MultipartBodyLengthLimit = 200_000_000)]
+    public async Task<IActionResult> UploadVersion(Guid id, CancellationToken cancellationToken)
+    {
+        if (Request.Form.Files.Count != 1)
+            return BadRequest("Exactly one replacement file is required.");
+        try
+        {
+            var outcome = await approvalUploads.ReplaceAsync(
+                id, Request.Form.Files[0], User, cancellationToken);
+            return Ok(new DocumentUploadResultDto
+            {
+                OriginalFileName = Path.GetFileName(Request.Form.Files[0].FileName),
+                Success = true,
+                Message = outcome.Message,
+                SubmissionId = outcome.SubmissionId,
+                ApprovalResult = outcome.Kind.ToString(),
+                File = outcome.File
+            });
+        }
+        catch (KeyNotFoundException ex) { return NotFound(ex.Message); }
+        catch (Exception ex) when (ex is InvalidOperationException or IOException)
+        { return Conflict(new { error = "version_upload_blocked", message = ex.Message }); }
+    }
+
     [HttpPost("system-folders/product-information/files")]
     [BusinessWrite]
     [RequestSizeLimit(200_000_000)]

@@ -60,7 +60,7 @@ public sealed class KmSyncWorker(
                     last_error = 'RETRY_EXHAUSTED: KM delivery retry limit reached.',
                     updated_at = {now}
                 FROM km_integration_outbox AS outbox
-                WHERE outbox.event_id = job.id AND outbox.document_id = job.document_file_id
+                WHERE outbox.event_id = job.id AND outbox.source_entity_id = job.document_file_id
                   AND outbox.event_type = 'DocumentLibraryFileUploaded'
                   AND outbox.source_entity_type = 'DocumentLibraryFile'
                   AND outbox.status = 'Failed' AND outbox.last_error_code = 'RETRY_EXHAUSTED'
@@ -76,11 +76,13 @@ public sealed class KmSyncWorker(
                     AND deletion.status IN ('WaitingForKm', 'KmVerified', 'LocalReady', 'LocalCleanup', 'Completed')))
                   OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile'
                     AND NOT EXISTS (SELECT 1 FROM document_file_deletion_jobs AS document_deletion
-                      WHERE document_deletion.document_file_id = km_integration_outbox.document_id)
+                      WHERE document_deletion.document_file_id = km_integration_outbox.source_entity_id)
                     AND EXISTS (SELECT 1 FROM document_processing_jobs AS document_job
                       JOIN document_files AS document_file ON document_file.id = document_job.document_file_id
                       WHERE document_job.id = km_integration_outbox.event_id
-                        AND document_file.id = km_integration_outbox.document_id
+                        AND document_file.id = km_integration_outbox.source_entity_id
+                        AND document_file.document_id = km_integration_outbox.document_id
+                        AND document_file.version = km_integration_outbox.version
                         AND document_file.storage_area = 'Library'
                         AND document_job.archive_status = 'Completed'
                         AND (EXISTS (SELECT 1 FROM pending_submissions AS submission
@@ -145,7 +147,7 @@ public sealed class KmSyncWorker(
                     expired.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile)
                 {
                     var job = await db.DocumentProcessingJobs.SingleAsync(x => x.Id == expired.EventId &&
-                        x.DocumentFileId == expired.DocumentId, cancellationToken);
+                        x.DocumentFileId == expired.SourceEntityId, cancellationToken);
                     if (job.Status is DocumentProcessingStatuses.Pending or DocumentProcessingStatuses.Accepted)
                         job.DeliveryExhausted(now, "RETRY_EXHAUSTED", "KM delivery retry limit reached.");
                 }
@@ -163,16 +165,19 @@ public sealed class KmSyncWorker(
                      (x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
                        x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
                         !db.DocumentLibraryFileDeletionJobs.Any(deletion =>
-                            deletion.DocumentFileId == x.DocumentId) &&
+                            deletion.DocumentFileId == x.SourceEntityId) &&
                        db.DocumentProcessingJobs.Any(job => job.Id == x.EventId &&
-                           job.DocumentFileId == x.DocumentId &&
+                           job.DocumentFileId == x.SourceEntityId &&
+                           (job.DocumentFile.DocumentId == Guid.Empty
+                               ? job.DocumentFile.Id : job.DocumentFile.DocumentId) == x.DocumentId &&
+                           (job.DocumentFile.Version < 1 ? 1 : job.DocumentFile.Version) == x.Version &&
                            job.ArchiveStatus == DocumentArchiveStatuses.Completed &&
                            job.DocumentFile.StorageArea == DocumentStorageAreas.Library &&
-                           (db.PendingSubmissions.Any(submission => submission.Id == x.DocumentId &&
+                            (db.PendingSubmissions.Any(submission => submission.Id == x.SourceEntityId &&
                                 submission.SourceModuleCode == "document-library" &&
                                 submission.Status == ApprovalStatus.Committed &&
                                 submission.ReviewerAccount != null && submission.ReviewedAt != null) ||
-                            db.ApprovalAuditEvents.Any(audit => audit.SubmissionId == x.DocumentId &&
+                             db.ApprovalAuditEvents.Any(audit => audit.SubmissionId == x.SourceEntityId &&
                                 audit.SourceModuleCode == "document-library" &&
                                 audit.Action == ApprovalAuditActions.ApprovalBypassed)))) ||
                      (x.EventType == KmIntegrationEventTypes.VerificationApplicationAttachmentArchived &&
@@ -232,11 +237,24 @@ public sealed class KmSyncWorker(
                 if (row.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
                     row.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile)
                 {
-                    var request = await BuildDocumentLibraryRequestAsync(db, row, options, deadline.Token);
-                    result = request is null
-                        ? KmDeliveryResult.Failure(false, "DOCUMENT_UNAVAILABLE",
-                            "Formally archived document library file or classification is unavailable.")
-                        : await client.SubmitDocumentLibraryAsync(request, deadline.Token);
+                    if (row.Version > 1)
+                    {
+                        var request = await BuildDocumentLibraryV2RequestAsync(
+                            db, row, options, deadline.Token);
+                        result = request is null
+                            ? KmDeliveryResult.Failure(false, "DOCUMENT_UNAVAILABLE",
+                                "Formally archived document library version is unavailable.")
+                            : await client.SubmitDocumentJobAsync(request, deadline.Token);
+                    }
+                    else
+                    {
+                        var request = await BuildDocumentLibraryRequestAsync(
+                            db, row, options, deadline.Token);
+                        result = request is null
+                            ? KmDeliveryResult.Failure(false, "DOCUMENT_UNAVAILABLE",
+                                "Formally archived document library file or classification is unavailable.")
+                            : await client.SubmitDocumentLibraryAsync(request, deadline.Token);
+                    }
                 }
                 else if (row.EventType == KmIntegrationEventTypes.VendorFileArchived &&
                     row.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile)
@@ -270,10 +288,23 @@ public sealed class KmSyncWorker(
                 else if (row.EventType == KmIntegrationEventTypes.TestReportCommitted &&
                     row.SourceEntityType == KmIntegrationSourceEntityTypes.TestReport)
                 {
-                    var request = await BuildRequestAsync(db, row, deadline.Token);
-                    result = request is null
-                        ? KmDeliveryResult.Failure(false, "DOCUMENT_NOT_COMMITTED", "Formal test report is unavailable.")
-                        : await client.SubmitAsync(request, deadline.Token);
+                    if (row.Version > 1)
+                    {
+                        var request = await BuildTestReportV2RequestAsync(
+                            db, row, options, deadline.Token);
+                        result = request is null
+                            ? KmDeliveryResult.Failure(false, "DOCUMENT_NOT_COMMITTED",
+                                "Formal test report version is unavailable.")
+                            : await client.SubmitDocumentJobAsync(request, deadline.Token);
+                    }
+                    else
+                    {
+                        var request = await BuildRequestAsync(db, row, deadline.Token);
+                        result = request is null
+                            ? KmDeliveryResult.Failure(false, "DOCUMENT_NOT_COMMITTED",
+                                "Formal test report is unavailable.")
+                            : await client.SubmitAsync(request, deadline.Token);
+                    }
                 }
                 else
                 {
@@ -312,7 +343,7 @@ public sealed class KmSyncWorker(
             current.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile)
         {
             var job = await update.DocumentProcessingJobs.SingleAsync(x => x.Id == current.EventId &&
-                x.DocumentFileId == current.DocumentId, cancellationToken);
+                x.DocumentFileId == current.SourceEntityId, cancellationToken);
             job.DeliveryAttempted(current.RetryCount + 1, now,
                 result.Accepted ? null : result.ErrorMessage ?? "KM delivery failed.");
             if (result.Accepted)
@@ -377,14 +408,16 @@ public sealed class KmSyncWorker(
             !string.IsNullOrEmpty(serviceBase.Query) || !string.IsNullOrEmpty(serviceBase.Fragment))
             return null;
         var job = await db.DocumentProcessingJobs.AsNoTracking()
-            .SingleOrDefaultAsync(x => x.Id == row.EventId && x.DocumentFileId == row.DocumentId,
+            .SingleOrDefaultAsync(x => x.Id == row.EventId && x.DocumentFileId == row.SourceEntityId,
                 cancellationToken);
         var file = await db.DocumentLibraryFiles.AsNoTracking()
             .Include(x => x.Folder).ThenInclude(x => x.Parent).ThenInclude(x => x!.Parent)
-            .SingleOrDefaultAsync(x => x.Id == row.DocumentId, cancellationToken);
+            .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);
         if (job is null || file is null || file.StorageArea != DocumentStorageAreas.Library ||
+            (file.DocumentId == Guid.Empty ? file.Id : file.DocumentId) != row.DocumentId ||
+            (file.Version < 1 ? 1 : file.Version) != row.Version ||
             await db.DocumentLibraryFileDeletionJobs.AsNoTracking().AnyAsync(
-                x => x.DocumentFileId == row.DocumentId, cancellationToken) ||
+                x => x.DocumentFileId == row.SourceEntityId, cancellationToken) ||
             job.ArchiveStatus != DocumentArchiveStatuses.Completed || job.ArchivedAt is null ||
             file.FileSize != row.SizeBytes || file.Sha256.Length != 64 ||
             !file.Sha256.All(Uri.IsHexDigit) || file.Sha256.Any(char.IsUpper) ||
@@ -413,6 +446,108 @@ public sealed class KmSyncWorker(
                 new DocumentLibraryClassificationLevel(l1.Id, l1.Name),
                 new DocumentLibraryClassificationLevel(l2.Id, l2.Name),
                 new DocumentLibraryClassificationLevel(l3.Id, l3.Name)));
+    }
+
+    private async Task<KmV2DocumentJobRequest?> BuildDocumentLibraryV2RequestAsync(
+        AppDbContext db,
+        KmIntegrationOutbox row,
+        KmIntegrationOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (row.Version <= 1 || !TryGetServiceBaseUri(options, out var serviceBase)) return null;
+        var file = await db.DocumentLibraryFiles.AsNoTracking()
+            .Include(x => x.ProcessingJob)
+            .Include(x => x.Folder).ThenInclude(x => x.Parent).ThenInclude(x => x!.Parent)
+            .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);
+        if (file?.ProcessingJob is null || file.DocumentId != row.DocumentId ||
+            file.Version != row.Version || file.StorageArea != DocumentStorageAreas.Library ||
+            file.ProcessingJob.Id != row.EventId ||
+            file.ProcessingJob.ArchiveStatus != DocumentArchiveStatuses.Completed ||
+            file.ProcessingJob.ArchivedAt is null || file.Folder.Level != 3 ||
+            file.Folder.Parent?.Level != 2 || file.Folder.Parent.Parent?.Level != 1 ||
+            !ValidSha256(file.Sha256) || file.FileSize != row.SizeBytes ||
+            !file.SupersedesFileId.HasValue ||
+            await DocumentLibraryFileDeletionHold.ExistsAsync(db, file.Id, cancellationToken))
+            return null;
+        var prior = await db.DocumentLibraryFiles.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == file.SupersedesFileId.Value, cancellationToken);
+        if (prior is null || prior.DocumentId != file.DocumentId ||
+            prior.Version >= file.Version || !ValidSha256(prior.Sha256)) return null;
+        var approval = await FindApprovalEvidenceAsync(db, file.Id, "document-library",
+            cancellationToken);
+        if (approval is null || !TryResolveLibraryFile(file, out var fullPath) ||
+            !await FileMatchesAsync(fullPath, file.FileSize, file.Sha256, cancellationToken))
+            return null;
+        var l3 = file.Folder;
+        var l2 = l3.Parent!;
+        var l1 = l2.Parent!;
+        return CreateV2Request(row,
+            new KmV2DocumentJobSource(KmAnalysisSourceTypes.DocumentLibraryFile, file.Id,
+                "document-library", null, null, null, null),
+            file.OriginalFileName, file.ContentType, file.FileSize, file.Sha256,
+            new Uri(serviceBase!,
+                $"api/integrations/km/v1/document-library/files/{file.Id:D}/content").AbsoluteUri,
+            file.ProcessingJob.ArchivedAt.Value, approval,
+            new KmV2DocumentClassification(
+                new KmV2ClassificationLevel(l1.Id, l1.Name),
+                new KmV2ClassificationLevel(l2.Id, l2.Name),
+                new KmV2ClassificationLevel(l3.Id, l3.Name)),
+            new KmV2Supersedes(prior.DocumentId, prior.Version,
+                prior.Sha256.ToLowerInvariant()));
+    }
+
+    private async Task<KmV2DocumentJobRequest?> BuildTestReportV2RequestAsync(
+        AppDbContext db,
+        KmIntegrationOutbox row,
+        KmIntegrationOptions options,
+        CancellationToken cancellationToken)
+    {
+        if (row.Version <= 1 || !row.ProjectId.HasValue ||
+            !TryGetServiceBaseUri(options, out var serviceBase) ||
+            await VerificationCaseDeletionHold.IsActiveAsync(db, row.ProjectId.Value,
+                cancellationToken)) return null;
+        var file = await db.ModuleCaseFiles.AsNoTracking()
+            .Include(x => x.Record).ThenInclude(x => x.Module)
+            .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId &&
+                x.DocumentId == row.DocumentId && x.VersionNo == row.Version,
+                cancellationToken);
+        if (file is null || file.FileKind != ModuleCaseFileKinds.TestReport ||
+            file.ReviewStatus != TestReportReviewStatuses.Approved || !file.IsRawDataExported ||
+            !ValidSha256(file.Sha256) || file.FileSize != row.SizeBytes ||
+            await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
+                x.Id == file.Id && x.Status != ApprovalStatus.Committed, cancellationToken))
+            return null;
+        var prior = await db.ModuleCaseFiles.AsNoTracking()
+            .Where(x => x.DocumentId == file.DocumentId && x.VersionNo < file.VersionNo &&
+                x.FileKind == ModuleCaseFileKinds.TestReport &&
+                x.ReviewStatus == TestReportReviewStatuses.Approved && x.IsRawDataExported &&
+                x.Sha256 != null)
+            .OrderByDescending(x => x.VersionNo).FirstOrDefaultAsync(cancellationToken);
+        if (prior is null || !ValidSha256(prior.Sha256)) return null;
+        KmV2DocumentApproval? approval = null;
+        var bypassedAt = await db.ApprovalAuditEvents.AsNoTracking()
+            .Where(x => x.SubmissionId == file.Id &&
+                x.Action == ApprovalAuditActions.ApprovalBypassed)
+            .OrderByDescending(x => x.OccurredAt).Select(x => (DateTime?)x.OccurredAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        if (bypassedAt.HasValue)
+            approval = new(KmV2ApprovalModes.ApprovalBypassed, file.Id, Utc(bypassedAt.Value));
+        else if (file.ReviewedAt.HasValue && !string.IsNullOrWhiteSpace(file.ReviewedBy))
+            approval = new(KmV2ApprovalModes.Approved, file.Id, Utc(file.ReviewedAt.Value));
+        if (approval is null || !TryResolveManagedFile(file.FilePath, file.FileName, out var fullPath) ||
+            !await FileMatchesAsync(fullPath, file.FileSize, file.Sha256!, cancellationToken))
+            return null;
+        return CreateV2Request(row,
+            new KmV2DocumentJobSource(KmAnalysisSourceTypes.TestReport, file.Id,
+                file.Record.Module.Code, null, file.RecordId, null, null),
+            file.FileName, file.ContentType, file.FileSize, file.Sha256!,
+            new Uri(serviceBase!,
+                $"api/integrations/km/v1/documents/{file.DocumentId:D}/versions/{file.VersionNo}/content")
+                .AbsoluteUri,
+            file.UpdatedAt, approval,
+            new KmV2DocumentClassification(null, null, null),
+            new KmV2Supersedes(prior.DocumentId, prior.VersionNo,
+                prior.Sha256!.ToLowerInvariant()));
     }
 
     private async Task<KmV2DocumentJobRequest?> BuildVerificationAttachmentRequestAsync(
@@ -571,7 +706,9 @@ public sealed class KmSyncWorker(
         string sha256,
         string downloadUrl,
         DateTime archivedAt,
-        KmV2DocumentApproval approval)
+        KmV2DocumentApproval approval,
+        KmV2DocumentClassification? classification = null,
+        KmV2Supersedes? supersedes = null)
     {
         return new KmV2DocumentJobRequest(
             "2.0",
@@ -590,8 +727,8 @@ public sealed class KmSyncWorker(
                 downloadUrl,
                 Utc(archivedAt),
                 approval),
-            new KmV2DocumentClassification(null, null, null),
-            null,
+            classification ?? new KmV2DocumentClassification(null, null, null),
+            supersedes,
             Utc(row.CreatedAt));
     }
 
@@ -706,7 +843,7 @@ public sealed class KmSyncWorker(
                      document_id, version, project_id, case_id, task_id, file_name, content_type,
                      size_bytes, committed_at, status, retry_count, created_at, updated_at)
                 SELECT gen_random_uuid(), job.id, 'DocumentLibraryFileUploaded', 'CSIT',
-                    'DocumentLibraryFile', file.id, file.id, 1, NULL, NULL, NULL,
+                    'DocumentLibraryFile', file.id, file.document_id, file.version, NULL, NULL, NULL,
                     file.original_file_name, COALESCE(NULLIF(file.content_type, ''), 'application/octet-stream'),
                     file.file_size, job.archived_at, 'Pending', 0, {now}, {now}
                 FROM document_processing_jobs AS job

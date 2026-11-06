@@ -9,6 +9,7 @@ using SIT.DepartmentSystem.Web.Models;
 using SIT.DepartmentSystem.Web.Models.Api;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Services.Approval;
 
@@ -61,7 +62,9 @@ public sealed class DocumentLibraryApprovalUploadService(
                 "已建立合法免審紀錄，等待正式 NAS 入庫。", null, archived);
         }
 
-        var source = await ResolvePendingSourceAsync(uploader, account, context, cancellationToken);
+        var source = await ResolvePendingSourceAsync(uploader, account, context,
+            DocumentLibraryUploadApprovalCommitHandler.ContextType, context.Id.ToString("N"),
+            cancellationToken);
         var decision = new ApprovalUploadDecision(ApprovalUploadDecisionKind.Pending,
             menu.Code, ApprovalSourceMenuBinding.DocumentLibraryModule);
         StagedFileMetadata? staged = null;
@@ -89,6 +92,67 @@ public sealed class DocumentLibraryApprovalUploadService(
             "已送主管待審；核准前不會正式入庫或派送 KM。", operationId, null);
     }
 
+    public async Task<DocumentLibraryUploadOutcome> ReplaceAsync(
+        Guid previousFileId,
+        IFormFile file,
+        ClaimsPrincipal uploader,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(file);
+        if (!(await authorization.AuthorizeAsync(uploader,
+                SystemAuthorization.Policies.BusinessWrite)).Succeeded)
+            throw new UnauthorizedAccessException("This account has read-only data access.");
+        if (file.Length <= 0) throw new InvalidOperationException("Replacement file is empty.");
+        if (file.Length > storageOptions.Value.MaxFileSizeBytes)
+            throw new InvalidOperationException(
+                $"File size cannot exceed {storageOptions.Value.MaxFileSizeBytes / 1_000_000} MB.");
+
+        var context = await ResolveVersionContextAsync(previousFileId, cancellationToken);
+        var menu = await menus.ResolveAsync(ApprovalSourceMenuBinding.DocumentLibraryModule,
+            ApprovalSourceMenuBinding.DocumentLibraryMenu, cancellationToken);
+        handlers.Resolve(ApprovalSourceMenuBinding.DocumentLibraryModule);
+        var account = ApprovalIdentity.Account(uploader);
+        var bypassBasis = await ResolveBypassBasisAsync(uploader, account, cancellationToken);
+        var operationId = Guid.NewGuid();
+        if (bypassBasis is not null)
+        {
+            var archived = await formalUploads.StageApprovedVersionAsync(operationId,
+                previousFileId, file, account, new DocumentLibraryBypassAudit(account, bypassBasis),
+                cancellationToken: cancellationToken);
+            return new DocumentLibraryUploadOutcome(ApprovalUploadDecisionKind.ApprovalBypassed,
+                "A legally exempt replacement version was staged for formal NAS archiving.",
+                null, archived);
+        }
+
+        var source = await ResolvePendingSourceAsync(uploader, account, context,
+            DocumentLibraryUploadApprovalCommitHandler.VersionContextType,
+            previousFileId.ToString("N"), cancellationToken);
+        var decision = new ApprovalUploadDecision(ApprovalUploadDecisionKind.Pending,
+            menu.Code, ApprovalSourceMenuBinding.DocumentLibraryModule);
+        StagedFileMetadata? staged = null;
+        try
+        {
+            await using var content = file.OpenReadStream();
+            staged = await staging.StoreAsync(operationId, content, file.FileName,
+                string.IsNullOrWhiteSpace(file.ContentType) ? "application/octet-stream" : file.ContentType,
+                file.Length, cancellationToken);
+            await submissions.CreatePendingAsync(operationId, decision, source,
+                $"document-library-version:{previousFileId:N}:{operationId:N}", uploader, staged,
+                cancellationToken, forceSupervisorApproval: true);
+        }
+        catch
+        {
+            if (staged is not null)
+            {
+                try { await staging.DeleteAsync(operationId, staged.StorageKey, cancellationToken); }
+                catch { }
+            }
+            throw;
+        }
+        return new DocumentLibraryUploadOutcome(ApprovalUploadDecisionKind.Pending,
+            "The replacement version was submitted for supervisor approval.", operationId, null);
+    }
+
     private async Task<FolderContext> ResolveFolderContextAsync(Guid folderId,
         CancellationToken cancellationToken)
     {
@@ -102,6 +166,21 @@ public sealed class DocumentLibraryApprovalUploadService(
             throw new InvalidOperationException("文件只能上傳至完整的第三層資料夾。");
         return new FolderContext(folder.Id,
             $"{folder.Parent.Parent.Name} / {folder.Parent.Name} / {folder.Name}");
+    }
+
+    private async Task<FolderContext> ResolveVersionContextAsync(Guid previousFileId,
+        CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var file = await db.DocumentLibraryFiles.AsNoTracking().Include(x => x.ProcessingJob)
+            .SingleOrDefaultAsync(x => x.Id == previousFileId, cancellationToken)
+            ?? throw new KeyNotFoundException("The document version was not found.");
+        if (file.StorageArea != DocumentStorageAreas.Library ||
+            file.ProcessingJob?.ArchiveStatus != DocumentArchiveStatuses.Completed)
+            throw new InvalidOperationException("Only a formally archived document can be replaced.");
+        if (await DocumentLibraryFileDeletionHold.ExistsAsync(db, file.Id, cancellationToken))
+            throw new InvalidOperationException("The document is held for deletion.");
+        return await ResolveFolderContextAsync(file.FolderId, cancellationToken);
     }
 
     private async Task<string?> ResolveBypassBasisAsync(ClaimsPrincipal uploader, string account,
@@ -126,6 +205,8 @@ public sealed class DocumentLibraryApprovalUploadService(
         ClaimsPrincipal uploader,
         string account,
         FolderContext context,
+        string contextType,
+        string contextId,
         CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(uploader.FindFirstValue("identity_sub"), out var identityUserId))
@@ -180,7 +261,7 @@ public sealed class DocumentLibraryApprovalUploadService(
 
         var department = identityAccount.Department?.Trim() ?? string.Empty;
         return new ApprovalSourceIdentity(ApprovalSourceMenuBinding.DocumentLibraryModule,
-            DocumentLibraryUploadApprovalCommitHandler.ContextType, context.Id.ToString("N"),
+            contextType, contextId,
             context.Display, department, teams[0].Id, teams[0].Value);
     }
 
@@ -193,20 +274,30 @@ public sealed class DocumentLibraryUploadApprovalCommitHandler(
     IDocumentLibraryFormalUploadService formalUploads) : IApprovalCommitHandler
 {
     public const string ContextType = "DocumentLibraryFolder";
+    public const string VersionContextType = "DocumentLibraryFileVersion";
     public string ModuleCode => ApprovalSourceMenuBinding.DocumentLibraryModule;
 
     public async Task ValidateAsync(PendingSubmission submission, CancellationToken cancellationToken)
     {
-        if (submission.SourceModuleCode != ModuleCode || submission.ContextType != ContextType ||
-            !Guid.TryParseExact(submission.ContextId, "N", out var folderId) ||
+        if (submission.SourceModuleCode != ModuleCode ||
+            submission.ContextType is not (ContextType or VersionContextType) ||
+            !Guid.TryParseExact(submission.ContextId, "N", out var contextId) ||
             submission.ReviewerAccount is null || submission.ReviewedAt is null ||
             string.IsNullOrWhiteSpace(submission.StagingStorageKey) ||
             string.IsNullOrWhiteSpace(submission.OriginalFileName) ||
             submission.FileSize is null or <= 0 || string.IsNullOrWhiteSpace(submission.FileHash))
             throw new InvalidOperationException("Document Library approval evidence is incomplete.");
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        if (!await db.DocumentFolders.AsNoTracking().AnyAsync(
-                x => x.Id == folderId && x.Level == DocumentLibraryRules.MaximumLevel, cancellationToken))
+        var validContext = submission.ContextType == ContextType
+            ? await db.DocumentFolders.AsNoTracking().AnyAsync(
+                x => x.Id == contextId && x.Level == DocumentLibraryRules.MaximumLevel,
+                cancellationToken)
+            : await db.DocumentLibraryFiles.AsNoTracking().Include(x => x.ProcessingJob).AnyAsync(x =>
+                x.Id == contextId && x.StorageArea == DocumentStorageAreas.Library &&
+                x.ProcessingJob != null &&
+                x.ProcessingJob.ArchiveStatus == DocumentArchiveStatuses.Completed,
+                cancellationToken);
+        if (!validContext)
             throw new InvalidOperationException("The approved Document Library folder is unavailable.");
         await using var content = await staging.OpenReadAsync(
             submission.Id, submission.StagingStorageKey, cancellationToken);
@@ -228,7 +319,7 @@ public sealed class DocumentLibraryUploadApprovalCommitHandler(
             if (existing is not null) return new ApprovalCommitResult(existing.Id.ToString("N"));
         }
 
-        var folderId = Guid.ParseExact(submission.ContextId, "N");
+        var contextId = Guid.ParseExact(submission.ContextId, "N");
         await using var stream = await staging.OpenReadAsync(
             submission.Id, submission.StagingStorageKey!, cancellationToken);
         var formFile = new FormFile(stream, 0, submission.FileSize!.Value, "files",
@@ -237,9 +328,13 @@ public sealed class DocumentLibraryUploadApprovalCommitHandler(
             Headers = new HeaderDictionary(),
             ContentType = submission.ContentType ?? "application/octet-stream"
         };
-        var archived = await formalUploads.StageApprovedAsync(submission.Id, folderId, formFile,
-            submission.SubmittedByAccount, receivedAt: submission.SubmittedAt,
-            cancellationToken: cancellationToken);
+        var archived = submission.ContextType == ContextType
+            ? await formalUploads.StageApprovedAsync(submission.Id, contextId, formFile,
+                submission.SubmittedByAccount, receivedAt: submission.SubmittedAt,
+                cancellationToken: cancellationToken)
+            : await formalUploads.StageApprovedVersionAsync(submission.Id, contextId, formFile,
+                submission.SubmittedByAccount, receivedAt: submission.SubmittedAt,
+                cancellationToken: cancellationToken);
         return new ApprovalCommitResult(archived.Id.ToString("N"));
     }
 }

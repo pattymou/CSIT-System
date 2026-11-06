@@ -69,7 +69,7 @@ public sealed class CanonicalKmContractTests
         string status, KmIntegrationStatus expected)
     {
         var factory = new ContractDbFactory();
-        Seed(factory);
+        Seed(factory, version: 3);
         MarkSent(factory);
         var name = status.ToLowerInvariant();
         var json = File.ReadAllText(Path.Combine(ContractDirectory, "fixtures", $"callback-{name}.json"));
@@ -258,14 +258,14 @@ public sealed class CanonicalKmContractTests
         throw new DirectoryNotFoundException("Canonical KM contract directory is missing.");
     }
 
-    private static ModuleCaseFile Seed(ContractDbFactory factory)
+    private static ModuleCaseFile Seed(ContractDbFactory factory, int version = 1)
     {
         var projectId = Guid.NewGuid();
         var caseId = Guid.NewGuid();
         var taskId = Guid.NewGuid();
         var file = new ModuleCaseFile
         {
-            Id = Guid.NewGuid(), DocumentId = DocumentId, VersionNo = 3,
+            Id = Guid.NewGuid(), DocumentId = DocumentId, VersionNo = version,
             RecordId = projectId, CaseId = caseId, TaskId = taskId,
             FileKind = ModuleCaseFileKinds.TestReport,
             ReviewStatus = TestReportReviewStatuses.Approved,

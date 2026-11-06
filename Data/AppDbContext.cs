@@ -73,6 +73,8 @@ public class AppDbContext : DbContext
     public DbSet<KmDocumentAnalysisResult> KmDocumentAnalysisResults => Set<KmDocumentAnalysisResult>();
     public DbSet<KmAnalysisCallbackReceipt> KmAnalysisCallbackReceipts => Set<KmAnalysisCallbackReceipt>();
     public DbSet<KmAnalysisReviewRevision> KmAnalysisReviewRevisions => Set<KmAnalysisReviewRevision>();
+    public DbSet<KmMetadataChange> KmMetadataChanges => Set<KmMetadataChange>();
+    public DbSet<KmMetadataChangeCallbackReceipt> KmMetadataChangeCallbacks => Set<KmMetadataChangeCallbackReceipt>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -150,6 +152,7 @@ public class AppDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ConfigureKmAnalysis();
+        modelBuilder.ConfigureKmMetadataChanges();
         modelBuilder.ConfigureTestCatalog();
         modelBuilder.ConfigureVerificationApplicationRouting();
         modelBuilder.ConfigureSystemMasterData();
@@ -187,6 +190,9 @@ public class AppDbContext : DbContext
             entity.ToTable("document_files");
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Id).HasColumnName("id");
+            entity.Property(x => x.DocumentId).HasColumnName("document_id");
+            entity.Property(x => x.Version).HasColumnName("version");
+            entity.Property(x => x.SupersedesFileId).HasColumnName("supersedes_file_id");
             entity.Property(x => x.FolderId).HasColumnName("folder_id");
             entity.Property(x => x.OriginalFileName).HasColumnName("original_file_name").HasMaxLength(300).IsRequired();
             entity.Property(x => x.StandardFileName).HasColumnName("standard_file_name").HasMaxLength(350).IsRequired();
@@ -199,8 +205,13 @@ public class AppDbContext : DbContext
             entity.Property(x => x.StorageArea).HasColumnName("storage_area").HasMaxLength(30)
                 .HasDefaultValue(DocumentStorageAreas.Library).IsRequired();
             entity.HasIndex(x => x.StandardFileName).IsUnique();
+            entity.HasIndex(x => new { x.DocumentId, x.Version }).IsUnique();
+            entity.HasIndex(x => x.SupersedesFileId).IsUnique()
+                .HasFilter("supersedes_file_id IS NOT NULL");
             entity.HasIndex(x => new { x.FolderId, x.UploadedAt });
             entity.HasOne(x => x.Folder).WithMany(x => x.Files).HasForeignKey(x => x.FolderId)
+                .OnDelete(DeleteBehavior.Restrict);
+            entity.HasOne<DocumentLibraryFile>().WithMany().HasForeignKey(x => x.SupersedesFileId)
                 .OnDelete(DeleteBehavior.Restrict);
         });
 

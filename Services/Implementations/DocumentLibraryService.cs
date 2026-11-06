@@ -449,6 +449,29 @@ public sealed class DocumentLibraryService(
         DocumentLibraryBypassAudit? bypassAudit = null,
         DateTime? receivedAt = null,
         CancellationToken cancellationToken = default)
+        => await StageApprovedCoreAsync(documentFileId, folderId, null, file, uploadedBy,
+            bypassAudit, receivedAt, cancellationToken);
+
+    public async Task<DocumentLibraryFileDto> StageApprovedVersionAsync(
+        Guid documentFileId,
+        Guid previousFileId,
+        IFormFile file,
+        string uploadedBy,
+        DocumentLibraryBypassAudit? bypassAudit = null,
+        DateTime? receivedAt = null,
+        CancellationToken cancellationToken = default)
+        => await StageApprovedCoreAsync(documentFileId, null, previousFileId, file, uploadedBy,
+            bypassAudit, receivedAt, cancellationToken);
+
+    private async Task<DocumentLibraryFileDto> StageApprovedCoreAsync(
+        Guid documentFileId,
+        Guid? requestedFolderId,
+        Guid? previousFileId,
+        IFormFile file,
+        string uploadedBy,
+        DocumentLibraryBypassAudit? bypassAudit,
+        DateTime? receivedAt,
+        CancellationToken cancellationToken)
     {
         if (documentFileId == Guid.Empty) throw new InvalidOperationException("文件識別碼不可空白。");
         ArgumentNullException.ThrowIfNull(file);
@@ -459,6 +482,30 @@ public sealed class DocumentLibraryService(
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         if (await DocumentLibraryFileDeletionHold.ExistsAsync(db, documentFileId, cancellationToken))
             throw new InvalidOperationException("This document ID is permanently held by its deletion audit.");
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable,
+                cancellationToken) : null;
+        DocumentLibraryFile? previous = null;
+        if (previousFileId.HasValue)
+        {
+            previous = await db.DocumentLibraryFiles.Include(x => x.ProcessingJob)
+                .SingleOrDefaultAsync(x => x.Id == previousFileId.Value, cancellationToken)
+                ?? throw new KeyNotFoundException("The previous document version was not found.");
+            if (previous.StorageArea != DocumentStorageAreas.Library ||
+                previous.ProcessingJob?.ArchiveStatus != DocumentArchiveStatuses.Completed ||
+                await DocumentLibraryFileDeletionHold.ExistsAsync(db, previous.Id, cancellationToken))
+                throw new InvalidOperationException(
+                    "Only an available, formally archived document can be replaced.");
+            var logicalId = previous.DocumentId == Guid.Empty ? previous.Id : previous.DocumentId;
+            var latestId = await db.DocumentLibraryFiles.AsNoTracking()
+                .Where(x => (x.DocumentId == logicalId || x.Id == logicalId))
+                .OrderByDescending(x => x.Version).Select(x => x.Id)
+                .FirstOrDefaultAsync(cancellationToken);
+            if (latestId != previous.Id)
+                throw new InvalidOperationException("Only the latest document version can be replaced.");
+        }
+        var folderId = previous?.FolderId ?? requestedFolderId
+            ?? throw new InvalidOperationException("The document folder is missing.");
         var folder = await db.DocumentFolders.AsNoTracking()
             .SingleOrDefaultAsync(x => x.Id == folderId, cancellationToken)
             ?? throw new KeyNotFoundException("找不到資料夾。");
@@ -477,7 +524,14 @@ public sealed class DocumentLibraryService(
         if (existing is not null)
         {
             var expectedName = DocumentLibraryRules.NormalizeOriginalFileName(file.FileName);
-            if (existing.FolderId != folderId || existing.FileSize != file.Length ||
+            var expectedDocumentId = previous is null
+                ? documentFileId
+                : previous.DocumentId == Guid.Empty ? previous.Id : previous.DocumentId;
+            var expectedVersion = previous is null ? 1 : Math.Max(1, previous.Version) + 1;
+            if (existing.DocumentId != expectedDocumentId ||
+                existing.Version != expectedVersion ||
+                existing.SupersedesFileId != previous?.Id ||
+                existing.FolderId != folderId || existing.FileSize != file.Length ||
                 !string.Equals(existing.OriginalFileName, expectedName, StringComparison.Ordinal) ||
                 !string.Equals(existing.UploadedBy, uploadedBy.Trim(), StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(existing.Sha256, expectedSha256, StringComparison.Ordinal))
@@ -530,6 +584,11 @@ public sealed class DocumentLibraryService(
             var entity = new DocumentLibraryFile
             {
                 Id = id,
+                DocumentId = previous is null
+                    ? id
+                    : previous.DocumentId == Guid.Empty ? previous.Id : previous.DocumentId,
+                Version = previous is null ? 1 : Math.Max(1, previous.Version) + 1,
+                SupersedesFileId = previous?.Id,
                 FolderId = folderId,
                 OriginalFileName = originalName,
                 StandardFileName = standardName,
@@ -562,6 +621,7 @@ public sealed class DocumentLibraryService(
                     details: $"Basis={bypassAudit.Basis}"));
             }
             await db.SaveChangesAsync(cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             return ToDto(entity, job, null);
         }
         catch
@@ -875,6 +935,9 @@ public sealed class DocumentLibraryService(
         bool sourceAllowsDeletion = true) => new()
     {
         Id = entity.Id,
+        DocumentId = entity.DocumentId == Guid.Empty ? entity.Id : entity.DocumentId,
+        Version = Math.Max(1, entity.Version),
+        SupersedesFileId = entity.SupersedesFileId,
         CsitJobId = job?.Id,
         KmJobId = kmJobId,
         FolderId = entity.FolderId,

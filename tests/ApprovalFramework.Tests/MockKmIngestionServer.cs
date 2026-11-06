@@ -30,6 +30,8 @@ internal sealed class MockKmIngestionServer : IAsyncDisposable
     public HttpClient Client { get; private set; } = null!;
     public KmIngestionRequest? LastRequest { get; private set; }
     public DocumentLibraryIngestionRequest? LastDocumentLibraryRequest { get; private set; }
+    public KmV2DocumentJobRequest? LastV2Request { get; private set; }
+    public KmMetadataChangeRequest? LastMetadataChangeRequest { get; private set; }
     public string JobId { get; private set; } = "mock-job-unassigned";
 
     public void FailNext(HttpStatusCode status)
@@ -97,6 +99,34 @@ internal sealed class MockKmIngestionServer : IAsyncDisposable
             return Results.Json(new DocumentLibraryIngestionResponse(payload.CsitJobId, jobId, "Accepted"),
                 statusCode: (int)HttpStatusCode.Accepted);
         });
+        app.MapPost(KmIntegrationClient.DocumentJobV2Path,
+            (HttpRequest request, KmV2DocumentJobRequest payload) =>
+        {
+            if (!string.Equals(request.Headers.Authorization, "Bearer mock-csit-token", StringComparison.Ordinal))
+                return Results.Unauthorized();
+            if (!Guid.TryParse(request.Headers["Idempotency-Key"], out var key) || key != payload.EventId)
+                return Results.BadRequest(new { error = "invalid_idempotency_key" });
+            Interlocked.Increment(ref server.v2RequestCount);
+            server.LastV2Request = payload;
+            var jobId = "mock-v2-job-" + payload.EventId.ToString("N");
+            server.JobId = jobId;
+            return Results.Json(new KmV2DocumentJobAcceptedResponse(payload.EventId,
+                payload.CsitJobId, jobId, "Accepted"), statusCode: (int)HttpStatusCode.Accepted);
+        });
+        app.MapPost(KmIntegrationClient.MetadataChangeV2Path,
+            (HttpRequest request, KmMetadataChangeRequest payload) =>
+        {
+            if (!string.Equals(request.Headers.Authorization, "Bearer mock-csit-token", StringComparison.Ordinal))
+                return Results.Unauthorized();
+            if (!Guid.TryParse(request.Headers["Idempotency-Key"], out var key) || key != payload.ChangeId)
+                return Results.BadRequest(new { error = "invalid_idempotency_key" });
+            Interlocked.Increment(ref server.metadataChangeRequestCount);
+            server.LastMetadataChangeRequest = payload;
+            var jobId = "mock-change-job-" + payload.ChangeId.ToString("N");
+            server.JobId = jobId;
+            return Results.Json(new KmMetadataChangeAccepted(payload.ChangeId, jobId, "Accepted"),
+                statusCode: (int)HttpStatusCode.Accepted);
+        });
         await app.StartAsync();
         server.Client = app.GetTestClient();
         server.Client.BaseAddress = new Uri("https://mock-km.test/");
@@ -107,6 +137,10 @@ internal sealed class MockKmIngestionServer : IAsyncDisposable
     public int RequestCount => Volatile.Read(ref requestCount);
     private int documentRequestCount;
     public int DocumentRequestCount => Volatile.Read(ref documentRequestCount);
+    private int v2RequestCount;
+    public int V2RequestCount => Volatile.Read(ref v2RequestCount);
+    private int metadataChangeRequestCount;
+    public int MetadataChangeRequestCount => Volatile.Read(ref metadataChangeRequestCount);
 
     public async ValueTask DisposeAsync()
     {

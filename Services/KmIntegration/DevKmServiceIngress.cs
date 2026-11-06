@@ -39,7 +39,8 @@ public static partial class DevKmServiceIngress
                  path.Equals("/api/integrations/km/v1/document-library/ingestion-status", StringComparison.OrdinalIgnoreCase) ||
                  path.Equals("/api/integrations/km/v1/document-deletion-status", StringComparison.OrdinalIgnoreCase) ||
                  path.Equals("/api/integrations/km/v2/document-jobs/status", StringComparison.OrdinalIgnoreCase) ||
-                 path.Equals("/api/integrations/km/v2/analysis-results", StringComparison.OrdinalIgnoreCase))) ||
+                 path.Equals("/api/integrations/km/v2/analysis-results", StringComparison.OrdinalIgnoreCase) ||
+                 path.Equals("/api/integrations/km/v2/document-metadata-changes/status", StringComparison.OrdinalIgnoreCase))) ||
                (HttpMethods.IsGet(context.Request.Method) &&
                 (DocumentContentPath().IsMatch(path) || DocumentLibraryContentPath().IsMatch(path) ||
                  VendorFileContentPath().IsMatch(path) || EquipmentDocumentContentPath().IsMatch(path) ||

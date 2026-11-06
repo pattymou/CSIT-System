@@ -130,7 +130,7 @@ public sealed class KmDeletionDispatchService(
                 !db.KmIntegrationOutbox.Any(outbox =>
                     outbox.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
                     outbox.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
-                    outbox.DocumentId == job.DocumentFileId &&
+                    outbox.SourceEntityId == job.DocumentFileId &&
                     outbox.Status == KmIntegrationStatus.Dispatching &&
                     outbox.LeaseExpiresAt > now))
             .OrderBy(job => job.RequestedAt).ThenBy(job => job.Id)
@@ -168,13 +168,13 @@ public sealed class KmDeletionDispatchService(
                     SELECT * FROM km_integration_outbox
                     WHERE event_type = 'DocumentLibraryFileUploaded'
                       AND source_entity_type = 'DocumentLibraryFile'
-                      AND document_id = {job.DocumentFileId}
+                      AND source_entity_id = {job.DocumentFileId}
                     FOR UPDATE
                     """).SingleOrDefaultAsync(cancellationToken)
                 : await db.KmIntegrationOutbox.SingleOrDefaultAsync(outbox =>
                     outbox.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
                     outbox.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
-                    outbox.DocumentId == job.DocumentFileId, cancellationToken);
+                    outbox.SourceEntityId == job.DocumentFileId, cancellationToken);
             if (ingestion?.Status == KmIntegrationStatus.Dispatching)
             {
                 if (ingestion.LeaseExpiresAt > now) return false;

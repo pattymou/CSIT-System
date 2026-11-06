@@ -23,6 +23,9 @@ public sealed class DocumentFolderUpsertRequest
 public sealed class DocumentLibraryFileDto
 {
     public Guid Id { get; set; }
+    public Guid DocumentId { get; set; }
+    public int Version { get; set; }
+    public Guid? SupersedesFileId { get; set; }
     public Guid? CsitJobId { get; set; }
     public string? KmJobId { get; set; }
     public Guid FolderId { get; set; }

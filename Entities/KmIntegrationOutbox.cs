@@ -102,6 +102,8 @@ public sealed class KmIntegrationOutbox
         DocumentProcessingJob job,
         DateTime now)
     {
+        var documentId = document.DocumentId == Guid.Empty ? document.Id : document.DocumentId;
+        var version = Math.Max(1, document.Version);
         if (job.Id == Guid.Empty || document.Id == Guid.Empty || job.DocumentFileId != document.Id ||
             job.ArchiveStatus != DocumentArchiveStatuses.Completed || job.ArchivedAt is null ||
             document.StorageArea != DocumentStorageAreas.Library || document.FileSize <= 0 ||
@@ -117,7 +119,7 @@ public sealed class KmIntegrationOutbox
             EventType = KmIntegrationEventTypes.DocumentLibraryFileUploaded,
             SourceSystem = "CSIT",
             SourceEntityType = KmIntegrationSourceEntityTypes.DocumentLibraryFile,
-            SourceEntityId = document.Id, DocumentId = document.Id, Version = 1,
+            SourceEntityId = document.Id, DocumentId = documentId, Version = version,
             ProjectId = null, CaseId = null, TaskId = null,
             FileName = document.OriginalFileName,
             ContentType = string.IsNullOrWhiteSpace(document.ContentType)

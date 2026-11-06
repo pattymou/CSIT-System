@@ -203,7 +203,7 @@ public sealed class DocumentLibraryFileDeletionService(
                     var outboxes = await db.KmIntegrationOutbox.Where(x =>
                         x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
                         x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
-                        x.DocumentId == job.DocumentFileId).ToListAsync(cancellationToken);
+                        x.SourceEntityId == job.DocumentFileId).ToListAsync(cancellationToken);
                     db.KmIntegrationOutbox.RemoveRange(outboxes);
                     if (processing is not null) db.DocumentProcessingJobs.Remove(processing);
                     db.DocumentLibraryFiles.Remove(file);
@@ -488,11 +488,11 @@ public sealed class DocumentLibraryFileDeletionService(
             SELECT * FROM km_integration_outbox
             WHERE event_type = 'DocumentLibraryFileUploaded'
               AND source_entity_type = 'DocumentLibraryFile'
-              AND document_id = {fileId}
+              AND source_entity_id = {fileId}
             FOR UPDATE
             """).SingleOrDefaultAsync(cancellationToken)
         : db.KmIntegrationOutbox.SingleOrDefaultAsync(x =>
             x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
             x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
-            x.DocumentId == fileId, cancellationToken);
+            x.SourceEntityId == fileId, cancellationToken);
 }

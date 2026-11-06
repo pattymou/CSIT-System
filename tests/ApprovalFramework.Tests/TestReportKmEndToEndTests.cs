@@ -19,6 +19,55 @@ namespace ApprovalFramework.Tests;
 public sealed class TestReportKmEndToEndTests
 {
     [Fact]
+    public async Task VersionTwo_UsesOnlyV2CanonicalJobWithExactSupersedes()
+    {
+        var factory = new TestFactory();
+        var folder = Path.Combine(Path.GetTempPath(), "csit-report-v2-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(folder);
+        try
+        {
+            var now = DateTime.UtcNow;
+            var module = new ModuleEntity { Id = Guid.NewGuid(), Code = "verification", Name = "V",
+                DisplayName = "V", RoutePrefix = "v", IsEnabled = true, CreatedAt = now, UpdatedAt = now };
+            var record = new ModuleRecord { Id = Guid.NewGuid(), ModuleId = module.Id,
+                RecordNo = "R-V2", Name = "Version test", CreatedAt = now, UpdatedAt = now };
+            var documentId = Guid.NewGuid();
+            var firstBytes = System.Text.Encoding.UTF8.GetBytes("report version one");
+            var secondBytes = System.Text.Encoding.UTF8.GetBytes("report version two");
+            await File.WriteAllBytesAsync(Path.Combine(folder, "v1.pdf"), firstBytes);
+            await File.WriteAllBytesAsync(Path.Combine(folder, "v2.pdf"), secondBytes);
+            var first = Report(record.Id, documentId, 1, folder, "v1.pdf", firstBytes, now);
+            var second = Report(record.Id, documentId, 2, folder, "v2.pdf", secondBytes, now.AddMinutes(1));
+            await using (var db = await factory.CreateDbContextAsync())
+            {
+                db.AddRange(module, record, first, second);
+                var old = KmIntegrationOutbox.ForCommittedTestReport(first, now);
+                var lease = Guid.NewGuid();
+                old.Claim(lease, now, TimeSpan.FromMinutes(1));
+                old.Sent(lease, "old-v1-job", now);
+                old.CallbackCompleted(now);
+                db.AddRange(old, KmIntegrationOutbox.ForCommittedTestReport(second, now.AddMinutes(1)));
+                await db.SaveChangesAsync();
+            }
+            await using var mock = await MockKmIngestionServer.StartAsync();
+            var options = OptionsFor(2, 8);
+            Assert.Equal(1, await new KmSyncWorker(factory,
+                new KmIntegrationClient(mock.Client, Options.Create(options), new MockTokenProvider()),
+                Options.Create(options), NullLogger<KmSyncWorker>.Instance).ProcessBatchAsync());
+            Assert.Equal(0, mock.RequestCount);
+            Assert.Equal(1, mock.V2RequestCount);
+            var request = Assert.IsType<KmV2DocumentJobRequest>(mock.LastV2Request);
+            Assert.Equal(second.Id, request.Source.EntityId);
+            Assert.Equal(documentId, request.Document.Id);
+            Assert.Equal(2, request.Document.Version);
+            Assert.Equal(documentId, request.Supersedes!.OldDocumentId);
+            Assert.Equal(1, request.Supersedes.OldVersion);
+            Assert.Equal(first.Sha256, request.Supersedes.OldSha256, ignoreCase: true);
+        }
+        finally { Directory.Delete(folder, recursive: true); }
+    }
+
+    [Fact]
     [Trait("Category", "PostgreSqlIntegration")]
     public async Task FormalReportsFlowThroughMockKmAndPersistAllStatesInIsolatedPostgreSql()
     {
@@ -62,7 +111,8 @@ public sealed class TestReportKmEndToEndTests
             var secondWorker = Worker(factory, mockKm, options);
             var concurrent = await Task.WhenAll(firstWorker.ProcessBatchAsync(), secondWorker.ProcessBatchAsync());
             Assert.Equal(2, concurrent.Sum());
-            Assert.Equal(2, mockKm.RequestCount);
+            Assert.Equal(1, mockKm.RequestCount);
+            Assert.Equal(1, mockKm.V2RequestCount);
 
             KmIntegrationOutbox v1Outbox;
             KmIntegrationOutbox v2Outbox;
@@ -361,8 +411,21 @@ public sealed class TestReportKmEndToEndTests
     private static KmIntegrationOptions OptionsFor(int timeoutSeconds, int leaseSeconds) => new()
     {
         Enabled = true, BaseUrl = "https://mock-km.test/", PollSeconds = 1,
+        ServiceBaseUrl = "https://mock-csit.test/",
         TimeoutSeconds = timeoutSeconds, LeaseSeconds = leaseSeconds, MaxRetryCount = 3,
         RetryScheduleSeconds = [1]
+    };
+
+    private static ModuleCaseFile Report(Guid recordId, Guid documentId, int version,
+        string folder, string name, byte[] bytes, DateTime now) => new()
+    {
+        Id = Guid.NewGuid(), RecordId = recordId, FileName = name, FilePath = folder,
+        ContentType = "application/pdf", FileSize = bytes.Length, DocumentId = documentId,
+        VersionNo = version, FileKind = ModuleCaseFileKinds.TestReport,
+        ReviewStatus = TestReportReviewStatuses.Approved, ReviewedAt = now,
+        ReviewedBy = "supervisor", IsRawDataExported = true,
+        Sha256 = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)),
+        CreatedAt = now, UpdatedAt = now
     };
 
     private static KmSyncWorker Worker(PostgreSqlFactory factory, MockKmIngestionServer mock,

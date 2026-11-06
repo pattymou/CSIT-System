@@ -57,7 +57,11 @@ public sealed record KmV2Document(
     DateTime ArchivedAt,
     KmV2DocumentApproval Approval);
 
-public sealed record KmV2DocumentClassification(string? L1, string? L2, string? L3);
+public sealed record KmV2ClassificationLevel(Guid Id, string Name);
+public sealed record KmV2DocumentClassification(
+    KmV2ClassificationLevel? L1,
+    KmV2ClassificationLevel? L2,
+    KmV2ClassificationLevel? L3);
 
 public sealed record KmV2Supersedes(Guid OldDocumentId, int OldVersion, string OldSha256);
 
