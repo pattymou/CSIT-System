@@ -260,6 +260,60 @@ public sealed class KmIntegrationTests
         Assert.False(await Allowed("engineer", false, false));
     }
 
+    [Theory]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    public async Task AdministrationRequiresEnabledTeamAndRouting(
+        bool teamEnabled, bool routingEnabled, bool expected)
+    {
+        var factory = Factory();
+        var teamId = Guid.NewGuid();
+        using (var db = factory.CreateDbContext())
+        {
+            db.SystemOptions.Add(new SystemOption
+            {
+                Id = teamId,
+                Category = SystemOptionCategories.Team,
+                Name = "TEAM-A",
+                Value = "TEAM-A",
+                IsEnabled = teamEnabled
+            });
+            db.TeamRoutings.Add(new TeamRouting
+            {
+                Id = Guid.NewGuid(),
+                TeamOptionId = teamId,
+                LeaderAccount = "leader",
+                IsEnabled = routingEnabled
+            });
+            db.SaveChanges();
+        }
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+        [
+            new Claim("account", "leader"),
+            new Claim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.CsitStaff)
+        ], "Cookies"));
+        var requirement = new AdministrationAccessRequirement();
+        var context = new AuthorizationHandlerContext([requirement], principal, null);
+
+        await new AdministrationAccessHandler(factory).HandleAsync(context);
+
+        Assert.Equal(expected, context.HasSucceeded);
+    }
+
+    [Fact]
+    public async Task AdministrationAlwaysAllowsAdminWithoutTeamRouting()
+    {
+        var principal = new ClaimsPrincipal(new ClaimsIdentity(
+            [new Claim(ClaimTypes.Role, "Admin")], "Cookies"));
+        var requirement = new AdministrationAccessRequirement();
+        var context = new AuthorizationHandlerContext([requirement], principal, null);
+
+        await new AdministrationAccessHandler(Factory()).HandleAsync(context);
+
+        Assert.True(context.HasSucceeded);
+    }
+
     [Fact]
     public void ManualRetryAuditIsAppendOnly()
     {

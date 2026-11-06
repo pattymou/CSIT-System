@@ -21,8 +21,6 @@ public sealed class ApprovalPolicyResolver(
         if (!(await authorization.AuthorizeAsync(uploader, SystemAuthorization.Policies.BusinessWrite)).Succeeded)
             throw new UnauthorizedAccessException("This account has read-only data access.");
         var menu = await menus.ResolveAsync(source.ModuleCode, sourceMenuCode, cancellationToken);
-        if (!menu.RequiresSupervisorApproval)
-            return new ApprovalUploadDecision(ApprovalUploadDecisionKind.DirectCommit, menu.Code, source.ModuleCode);
         handlers.Resolve(source.ModuleCode);
         var supervisor = (await authorization.AuthorizeAsync(uploader,
             SystemAuthorization.Policies.Administration)).Succeeded;

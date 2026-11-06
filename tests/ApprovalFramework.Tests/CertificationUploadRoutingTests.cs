@@ -77,14 +77,14 @@ public sealed class CertificationUploadRoutingTests
     }
 
     [Fact]
-    public async Task CertificationFlagFalseUsesDirectFormalPath()
+    public async Task CertificationFlagFalseStillRequiresApprovalForEngineer()
     {
         using var env = new EnvironmentFixture(false);
         var result = await env.Upload.UploadAsync(env.CaseTarget, [File()], User("engineer"), "engineer", false);
-        Assert.Equal(ApprovalUploadDecisionKind.DirectCommit, result.Decision);
-        Assert.Single(env.Formal.Calls);
+        Assert.Equal(ApprovalUploadDecisionKind.Pending, result.Decision);
+        Assert.Empty(env.Formal.Calls);
         using var db = env.Factory.CreateDbContext();
-        Assert.Empty(db.PendingSubmissions);
+        Assert.Equal(ApprovalStatus.Pending, Assert.Single(db.PendingSubmissions).Status);
     }
 
     [Fact]
@@ -149,15 +149,15 @@ public sealed class CertificationUploadRoutingTests
     }
 
     [Fact]
-    public async Task VerificationFlagFalseUsesDirectPathWhenCertificationApprovalEnabled()
+    public async Task VerificationFlagFalseStillRequiresApprovalForEngineer()
     {
         using var env = new EnvironmentFixture(true);
         var result = await env.Upload.UploadAsync(env.VerificationTarget, [File()],
             User("engineer"), "engineer", false);
-        Assert.Equal(ApprovalUploadDecisionKind.DirectCommit, result.Decision);
-        Assert.Single(env.Formal.Calls);
+        Assert.Equal(ApprovalUploadDecisionKind.Pending, result.Decision);
+        Assert.Empty(env.Formal.Calls);
         using var db = env.Factory.CreateDbContext();
-        Assert.Empty(db.PendingSubmissions);
+        Assert.Equal(ApprovalStatus.Pending, Assert.Single(db.PendingSubmissions).Status);
     }
 
     [Fact]
@@ -224,12 +224,12 @@ public sealed class CertificationUploadRoutingTests
         var result = await controller.UploadTaskReports(env.VerificationReportTarget.Id);
         await result.ExecuteResultAsync(new ActionContext(http, new RouteData(), new ActionDescriptor()));
 
-        Assert.Equal(StatusCodes.Status200OK, http.Response.StatusCode);
-        Assert.Contains("測試報告上傳成功",
+        Assert.Equal(StatusCodes.Status202Accepted, http.Response.StatusCode);
+        Assert.Contains("已送主管審核，核准後才會建立正式測試報告。",
             Encoding.UTF8.GetString(((MemoryStream)http.Response.Body).ToArray()));
-        Assert.Single(env.Formal.Calls);
+        Assert.Empty(env.Formal.Calls);
         using var verify = env.Factory.CreateDbContext();
-        Assert.Empty(verify.PendingSubmissions);
+        Assert.Equal(ApprovalStatus.Pending, Assert.Single(verify.PendingSubmissions).Status);
     }
 
     [Fact]

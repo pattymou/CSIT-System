@@ -20,9 +20,11 @@ public sealed class ApprovalContextUploads(IDbContextFactory<AppDbContext> dbFac
         var isAdmin = user.IsInRole("Admin");
         Guid[] leaderTeamIds = isAdmin
             ? []
-            : await db.TeamRoutings.AsNoTracking()
-                .Where(x => x.IsEnabled && x.LeaderAccount.ToLower() == account)
-                .Select(x => x.TeamOptionId).Distinct().ToArrayAsync(cancellationToken);
+            : await (from routing in db.TeamRoutings.AsNoTracking()
+                join team in db.SystemOptions.AsNoTracking() on routing.TeamOptionId equals team.Id
+                where routing.IsEnabled && team.IsEnabled && team.Category == SystemOptionCategories.Team
+                    && routing.LeaderAccount.ToLower() == account
+                select routing.TeamOptionId).Distinct().ToArrayAsync(cancellationToken);
         return await db.PendingSubmissions.AsNoTracking()
             .Where(x => (x.SubmittedByAccount == account || isAdmin ||
                          leaderTeamIds.Contains(x.SubmittedTeamOptionId)) &&

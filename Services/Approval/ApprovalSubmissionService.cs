@@ -52,8 +52,7 @@ public sealed class ApprovalSubmissionService(
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var menus = await db.MenuItems.AsNoTracking()
-            .Where(x => x.IsEnabled && (x.RequiresSupervisorApproval ||
-                x.Code == ApprovalSourceMenuBinding.DocumentLibraryMenu))
+            .Where(x => x.IsEnabled)
             .OrderBy(x => x.SortOrder).ThenBy(x => x.Title).ThenBy(x => x.Code)
             .Select(x => new { x.Code, x.Title, x.SortOrder, x.ModuleCode })
             .ToListAsync(cancellationToken);
@@ -208,8 +207,7 @@ public sealed class ApprovalSubmissionService(
         var menu = await db.MenuItems.AsNoTracking().Where(x => x.Code == decision.MenuCode)
             .Take(2).ToListAsync(cancellationToken);
         if (menu.Count != 1 || !menu[0].IsEnabled ||
-            (!menu[0].RequiresSupervisorApproval && !forceSupervisorApproval)
-            || !ApprovalSourceMenuBinding.Matches(menu[0].Code, menu[0].ModuleCode, source.ModuleCode))
+            !ApprovalSourceMenuBinding.Matches(menu[0].Code, menu[0].ModuleCode, source.ModuleCode))
             throw new InvalidOperationException("Approval source configuration changed; submission was stopped.");
         var reportTarget = source.ContextType is nameof(ThreeLevelUploadKind.TestReport)
             or nameof(ThreeLevelUploadKind.TestReportByTaskNo)
@@ -253,8 +251,7 @@ public sealed class ApprovalSubmissionService(
     public async Task RecordBypassAsync(Guid operationId, ApprovalUploadDecision decision,
         ClaimsPrincipal actor, CancellationToken cancellationToken = default)
     {
-        if (decision.Kind is not (ApprovalUploadDecisionKind.ApprovalBypassed or
-                ApprovalUploadDecisionKind.DirectCommit) || operationId == Guid.Empty)
+        if (decision.Kind != ApprovalUploadDecisionKind.ApprovalBypassed || operationId == Guid.Empty)
             throw new InvalidOperationException("Only legally exempt approval operations can be audited here.");
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         db.ApprovalAuditEvents.Add(ApprovalAuditEvent.Create(operationId, decision.MenuCode,

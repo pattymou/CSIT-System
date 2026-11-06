@@ -109,6 +109,57 @@ public sealed class VerificationDraftSaveAndGuidanceTests
         Assert.Equal(3, factory.ContextIds.Distinct().Count());
     }
 
+    [Theory]
+    [InlineData("leader", true, true, false, true)]
+    [InlineData("leader", false, true, false, false)]
+    [InlineData("leader", true, false, false, false)]
+    [InlineData("employee", true, true, false, false)]
+    [InlineData("admin", false, false, true, true)]
+    public async Task DirectApprovalRequiresAdminOrLeaderOfEnabledTeamAndRouting(
+        string account, bool teamEnabled, bool routingEnabled, bool admin, bool expected)
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N"))
+            .Options;
+        var factory = new TrackingDbContextFactory(options);
+        await using (var seed = await factory.CreateDbContextAsync())
+        {
+            var teamId = Guid.NewGuid();
+            seed.SystemOptions.Add(new SystemOption
+            {
+                Id = teamId,
+                Category = SystemOptionCategories.Team,
+                Name = "TEAM-A",
+                Value = "TEAM-A",
+                IsEnabled = teamEnabled
+            });
+            seed.TeamRoutings.Add(new TeamRouting
+            {
+                Id = Guid.NewGuid(),
+                TeamOptionId = teamId,
+                LeaderAccount = "leader",
+                IsEnabled = routingEnabled
+            });
+            await seed.SaveChangesAsync();
+        }
+        await using var serviceDb = await factory.CreateDbContextAsync();
+        var applications = new VerificationApplicationService(
+            serviceDb,
+            null!,
+            null!,
+            null!,
+            null!,
+            Options.Create(new SIT.DepartmentSystem.Web.Models.Config.DocumentStagingOptions()),
+            factory,
+            null!,
+            null!);
+        var claims = new List<Claim> { new("account", account) };
+        if (admin) claims.Add(new Claim(ClaimTypes.Role, "Admin"));
+        var user = new ClaimsPrincipal(new ClaimsIdentity(claims, "test"));
+
+        Assert.Equal(expected, await applications.IsDirectApprovalApplicantAsync(user));
+    }
+
     [Fact]
     public void EditorKeepsFormVisibleAndTargetsExpectedEndDateWhileLoggingTechnicalFailures()
     {

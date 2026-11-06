@@ -62,8 +62,13 @@ public sealed class AdministrationAccessHandler(IDbContextFactory<AppDbContext> 
 
         var normalizedAccount = account.Trim().ToLowerInvariant();
         await using var db = await dbFactory.CreateDbContextAsync();
-        if (await db.TeamRoutings.AsNoTracking().AnyAsync(x =>
-                x.IsEnabled && x.LeaderAccount.ToLower() == normalizedAccount))
+        if (await (from routing in db.TeamRoutings.AsNoTracking()
+                   join team in db.SystemOptions.AsNoTracking()
+                       on routing.TeamOptionId equals team.Id
+                   where routing.IsEnabled && team.IsEnabled &&
+                         team.Category == SystemOptionCategories.Team &&
+                         routing.LeaderAccount.ToLower() == normalizedAccount
+                   select routing.Id).AnyAsync())
             context.Succeed(requirement);
     }
 }

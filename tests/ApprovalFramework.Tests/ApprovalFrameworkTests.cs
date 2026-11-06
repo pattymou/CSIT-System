@@ -16,28 +16,67 @@ public sealed class ApprovalFrameworkTests
 {
     private static readonly DateTime Now = new(2026, 10, 1, 0, 0, 0, DateTimeKind.Utc);
 
-    [Fact]
-    public async Task DisabledFlagDirectsToFormalFlow()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task MenuFlagNeverLetsOrdinaryEmployeeBypassApproval(bool requiresSupervisorApproval)
     {
-        var env = new TestEnvironment(false);
-        Assert.Equal(ApprovalUploadDecisionKind.DirectCommit,
-            (await env.Policy.ResolveAsync(Source(env.TeamId), User("engineer", true))).Kind);
-    }
-
-    [Fact]
-    public async Task EnabledFlagCreatesPendingDecisionForEngineer()
-    {
-        var env = new TestEnvironment(true);
+        var env = new TestEnvironment(requiresSupervisorApproval);
         Assert.Equal(ApprovalUploadDecisionKind.Pending,
             (await env.Policy.ResolveAsync(Source(env.TeamId), User("engineer", true))).Kind);
     }
 
     [Fact]
-    public async Task AdministrationBypassesApproval()
+    public async Task MenuFlagFalseSourceRemainsVisibleToApprovalQueue()
+    {
+        var env = new TestEnvironment(false);
+
+        var source = Assert.Single(await env.Submissions.ListActiveSourcesAsync());
+
+        Assert.Equal("verification", source.Code);
+    }
+
+    [Theory]
+    [InlineData(true, 1)]
+    [InlineData(false, 0)]
+    public async Task VendorPendingVisibilityRequiresEnabledLeaderTeam(bool teamEnabled, int expectedCount)
     {
         var env = new TestEnvironment(true);
+        var vendorId = Guid.NewGuid();
+        using (var db = env.Factory.CreateDbContext())
+        {
+            db.SystemOptions.Single(x => x.Id == env.TeamId).IsEnabled = teamEnabled;
+            db.PendingSubmissions.Add(PendingSubmission.Create(Guid.NewGuid(), Guid.NewGuid().ToString("N"),
+                VendorApprovalSourceResolver.MenuCode, VendorApprovalSourceResolver.ModuleCode,
+                "engineer", "R&D", env.TeamId, "A", VendorApprovalSourceResolver.ContextType,
+                vendorId.ToString("N"), "Vendor", null, Now));
+            db.SaveChanges();
+        }
+
+        var uploads = await new ApprovalContextUploads(env.Factory)
+            .ForVendorAsync(User("leader", true), vendorId);
+
+        Assert.Equal(expectedCount, uploads.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AdministrationBypassesApprovalForEitherMenuFlag(bool requiresSupervisorApproval)
+    {
+        var env = new TestEnvironment(requiresSupervisorApproval);
         Assert.Equal(ApprovalUploadDecisionKind.ApprovalBypassed,
             (await env.Policy.ResolveAsync(Source(env.TeamId), User("leader", true, true))).Kind);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AdminBypassesApprovalForEitherMenuFlag(bool requiresSupervisorApproval)
+    {
+        var env = new TestEnvironment(requiresSupervisorApproval);
+        Assert.Equal(ApprovalUploadDecisionKind.ApprovalBypassed,
+            (await env.Policy.ResolveAsync(Source(env.TeamId), User("admin", true, admin: true))).Kind);
     }
 
     [Fact]
@@ -540,6 +579,20 @@ public sealed class ApprovalFrameworkTests
     }
 
     [Fact]
+    public async Task DirectCommitCannotBeRecordedAsApprovalBypassed()
+    {
+        var env = new TestEnvironment(false);
+        var decision = new ApprovalUploadDecision(
+            ApprovalUploadDecisionKind.DirectCommit, "verification", "verification");
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => env.Submissions.RecordBypassAsync(
+            Guid.NewGuid(), decision, User("engineer", true)));
+
+        using var db = env.Factory.CreateDbContext();
+        Assert.Empty(db.ApprovalAuditEvents);
+    }
+
+    [Fact]
     public void AuditEventsAreAppendOnlyThroughDbContext()
     {
         var env = new TestEnvironment(false);
@@ -710,7 +763,8 @@ public sealed class ApprovalFrameworkTests
             Task.FromResult(AuthorizationResult.Failed());
         public Task<AuthorizationResult> AuthorizeAsync(ClaimsPrincipal user, object? resource, string policyName) =>
             Task.FromResult((policyName == SystemAuthorization.Policies.BusinessWrite && user.HasClaim("test_can_write", "true"))
-                || (policyName == SystemAuthorization.Policies.Administration && user.HasClaim("test_supervisor", "true"))
+                || (policyName == SystemAuthorization.Policies.Administration &&
+                    (user.IsInRole("Admin") || user.HasClaim("test_supervisor", "true")))
                 ? AuthorizationResult.Success() : AuthorizationResult.Failed());
     }
 

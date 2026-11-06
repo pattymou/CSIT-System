@@ -25,7 +25,7 @@ public sealed class AssetDevIntegrationTests
     [InlineData("equipment")]
     [InlineData("goods")]
     [Trait("Category", "DevIntegration")]
-    public async Task DevAssetDirectPendingCommitRejectBypassAndRetry(string moduleCode)
+    public async Task DevAssetPendingCommitRejectBypassAndRetryForBothMenuFlags(string moduleCode)
     {
         var connection = Environment.GetEnvironmentVariable("CSIT_DEV_APPROVAL_TEST_CONNECTION");
         if (string.IsNullOrWhiteSpace(connection)) return;
@@ -48,7 +48,6 @@ public sealed class AssetDevIntegrationTests
             var dot = name.LastIndexOf('.');
             return $"{name[..dot]}-{tag[^6..]}{name[dot..]}";
         }
-        var directFileName = DemoFile("result-01.txt");
         var bypassFileName = DemoFile("result-05.txt");
         var missingTeamId = tag + "-NT";
         var teamId = Guid.NewGuid();
@@ -105,18 +104,16 @@ public sealed class AssetDevIntegrationTests
         var otherLeader = User("dev-other-leader", supervisor: true);
         var admin = User("dev-asset-admin", supervisor: true, admin: true);
 
-        // Both Asset menus remain off in DEV; the existing direct upload behavior is preserved.
-        Assert.Equal(ApprovalUploadDecisionKind.DirectCommit,
+        // A false menu flag must not let an ordinary employee bypass supervisor approval.
+        Assert.Equal(ApprovalUploadDecisionKind.Pending,
             await upload.UploadAsync(moduleCode, tag, [UploadFile(DemoFile("result-01.txt"))], engineer));
-        await using (var db = await factory.CreateDbContextAsync())
-        {
-            var direct = await db.ApparatusFiles.SingleAsync(x => x.ApparatusId == tag
-                && x.FileName == directFileName);
-            Assert.True(File.Exists(Path.Combine(direct.FilePath, direct.FileName)));
-            Assert.StartsWith(Path.GetFullPath(formalRoot), Path.GetFullPath(direct.FilePath),
-                StringComparison.OrdinalIgnoreCase);
-        }
-        Assert.DoesNotContain(await submissions.ListActiveSourcesAsync(), x => x.Code == moduleCode);
+        var flagFalsePending = await LatestAsync(factory, moduleCode, tag);
+        await AssertNoFormalAsync(factory, flagFalsePending.Id, formalRoot, rawRoot, tag);
+        await submissions.ApproveAsync(flagFalsePending.Id, leader);
+        await worker.ProcessAsync(flagFalsePending.Id);
+        Assert.Equal(ApprovalStatus.Committed, await StatusAsync(factory, flagFalsePending.Id));
+        await AssertFormalOnceAsync(factory, flagFalsePending, formalRoot, rawRoot);
+        Assert.Contains(await submissions.ListActiveSourcesAsync(), x => x.Code == moduleCode);
         Assert.True(handlers.HasHandler("equipment") && handlers.HasHandler("goods"));
         await new ApprovalEnableGuard(handlers, stagingRootResolver, factory, rawSettings)
             .DemandReadyAsync(moduleCode);
@@ -243,7 +240,7 @@ public sealed class AssetDevIntegrationTests
         {
             await SetFlagAsync(factory, moduleCode, false);
         }
-        Assert.DoesNotContain(await submissions.ListActiveSourcesAsync(), x => x.Code == moduleCode);
+        Assert.Contains(await submissions.ListActiveSourcesAsync(), x => x.Code == moduleCode);
         await using (var db = await factory.CreateDbContextAsync())
             Assert.False(await db.MenuItems.Where(x => x.Code == moduleCode)
                 .Select(x => x.RequiresSupervisorApproval).SingleAsync());

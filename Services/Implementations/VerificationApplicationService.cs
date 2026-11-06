@@ -165,8 +165,11 @@ public sealed class VerificationApplicationService : IVerificationApplicationSer
     {
         var account = VerificationApplicationSecurity.GetAccount(user);
         await using var db = await _dbFactory.CreateDbContextAsync(cancellationToken);
-        var isActiveTeamLeader = await db.TeamRoutings.AsNoTracking().AnyAsync(x =>
-            x.IsEnabled && x.LeaderAccount.ToLower() == account, cancellationToken);
+        var isActiveTeamLeader = await (from routing in db.TeamRoutings.AsNoTracking()
+            join team in db.SystemOptions.AsNoTracking() on routing.TeamOptionId equals team.Id
+            where routing.IsEnabled && team.IsEnabled && team.Category == SystemOptionCategories.Team
+                && routing.LeaderAccount.ToLower() == account
+            select routing.Id).AnyAsync(cancellationToken);
         return VerificationApplicationSecurity.CanBypassReview(user, isActiveTeamLeader);
     }
 
