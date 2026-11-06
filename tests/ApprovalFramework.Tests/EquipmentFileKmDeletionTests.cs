@@ -1,5 +1,6 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Services.KmIntegration;
@@ -9,6 +10,72 @@ namespace ApprovalFramework.Tests;
 public sealed class EquipmentFileKmDeletionTests
 {
     [Fact]
+    [Trait("Category", "PostgreSqlIntegration")]
+    public async Task ImageDeletionSafetyPaths_RunAgainstIsolatedPostgreSql()
+    {
+        var connection = Environment.GetEnvironmentVariable(
+            "CSIT_EQUIPMENT_DELETION_POSTGRES_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connection)) return;
+        var info = new NpgsqlConnectionStringBuilder(connection);
+        Assert.Equal("127.0.0.1", info.Host);
+        Assert.Equal(55434, info.Port);
+        Assert.StartsWith("csit_equipment_deletion_", info.Database,
+            StringComparison.Ordinal);
+
+        var factory = new Factory(connection);
+        await using (var migrate = factory.CreateDbContext())
+            await migrate.Database.MigrateAsync();
+        var root = NewRoot();
+        try
+        {
+            var pristine = await SeedFileAsync(factory, root, "pristine.png", "image/png",
+                true, "EQ-PG-PRISTINE");
+            await using (var db = factory.CreateDbContext())
+            {
+                var result = await new EquipmentFileDeletionService(db)
+                    .RequestAsync(pristine, "pg-test");
+                Assert.True(result!.CompletedLocally);
+                Assert.False(await db.ApparatusFiles.AnyAsync(x => x.Id == pristine));
+                Assert.False(await db.KmIntegrationOutbox.AnyAsync(x =>
+                    x.SourceEntityId == pristine));
+            }
+
+            var leased = await SeedFileAsync(factory, root, "leased.jpg", "image/jpeg",
+                true, "EQ-PG-LEASED");
+            await using (var db = factory.CreateDbContext())
+            {
+                var outbox = await db.KmIntegrationOutbox.SingleAsync(x =>
+                    x.SourceEntityId == leased);
+                outbox.Claim(Guid.NewGuid(), DateTime.UtcNow, TimeSpan.FromMinutes(5));
+                await db.SaveChangesAsync();
+                var result = await new EquipmentFileDeletionService(db)
+                    .RequestAsync(leased, "pg-test");
+                Assert.False(result!.CompletedLocally);
+            }
+            var adapter = new MockEquipmentDeletionApi();
+            Assert.Equal(0, await Dispatcher(factory, adapter).ProcessBatchAsync());
+
+            await using (var db = factory.CreateDbContext())
+            {
+                var outbox = await db.KmIntegrationOutbox.SingleAsync(x =>
+                    x.SourceEntityId == leased);
+                await db.Database.ExecuteSqlInterpolatedAsync($"""
+                    UPDATE km_integration_outbox
+                    SET lease_expires_at = {DateTime.UtcNow.AddMinutes(-1)}
+                    WHERE id = {outbox.Id}
+                    """);
+            }
+            Assert.Equal(1, await Dispatcher(factory, adapter).ProcessBatchAsync());
+            Assert.Single(adapter.Requests);
+            await using var verify = factory.CreateDbContext();
+            Assert.Equal("CANCELLED_BY_DELETION",
+                (await verify.KmIntegrationOutbox.SingleAsync(x =>
+                    x.SourceEntityId == leased)).LastErrorCode);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public async Task PhotoAndLegacyFileWithoutOutboxAreDeletedLocallyWithPersistedAudit()
     {
         var factory = new Factory();
@@ -16,32 +83,42 @@ public sealed class EquipmentFileKmDeletionTests
         try
         {
             var photo = await SeedFileAsync(factory, root, "photo.jpg", "image/jpeg", false);
+            var diagram = await SeedFileAsync(factory, root, "diagram.png", "image/png", false,
+                "EQ-PNG");
             var legacy = await SeedFileAsync(factory, root, "legacy.pdf", "application/pdf", false,
                 "EQ-LEGACY");
             await using (var db = factory.CreateDbContext())
             {
                 var service = new EquipmentFileDeletionService(db);
                 Assert.True((await service.RequestAsync(photo, "writer"))!.CompletedLocally);
+                Assert.True((await service.RequestAsync(diagram, "writer"))!.CompletedLocally);
                 Assert.True((await service.RequestAsync(legacy, "writer"))!.CompletedLocally);
             }
             await using var verify = factory.CreateDbContext();
-            Assert.False(await verify.ApparatusFiles.AnyAsync(x => x.Id == photo || x.Id == legacy));
-            Assert.Equal(2, await verify.EquipmentFileDeletionJobs.CountAsync(x =>
+            Assert.False(await verify.ApparatusFiles.AnyAsync(x =>
+                x.Id == photo || x.Id == diagram || x.Id == legacy));
+            Assert.Equal(3, await verify.EquipmentFileDeletionJobs.CountAsync(x =>
                 x.Status == EquipmentFileDeletionStatuses.Completed && x.RequestedBy == "writer"));
             Assert.Empty(Directory.GetFiles(root));
         }
         finally { Directory.Delete(root, true); }
     }
 
-    [Fact]
-    public async Task PristinePendingOutboxIsCancelledAtomicallyBeforeLocalDeletion()
+    [Theory]
+    [InlineData("manual.pdf", "application/pdf", KmIntegrationEventTypes.EquipmentDocumentArchived)]
+    [InlineData("front.png", "image/png", KmIntegrationEventTypes.EquipmentAttachmentArchived)]
+    [InlineData("photo.jpg", "image/jpeg", KmIntegrationEventTypes.EquipmentAttachmentArchived)]
+    public async Task PristinePendingOutboxIsCancelledAtomicallyBeforeLocalDeletion(
+        string fileName, string contentType, string expectedEventType)
     {
         var factory = new Factory();
         var root = NewRoot();
         try
         {
-            var fileId = await SeedFileAsync(factory, root, "manual.pdf", "application/pdf", true);
+            var fileId = await SeedFileAsync(factory, root, fileName, contentType, true);
             await using var db = factory.CreateDbContext();
+            Assert.Equal(expectedEventType,
+                (await db.KmIntegrationOutbox.SingleAsync(x => x.SourceEntityId == fileId)).EventType);
             var result = await new EquipmentFileDeletionService(db).RequestAsync(fileId, "writer");
             Assert.True(result!.CompletedLocally);
             Assert.False(await db.ApparatusFiles.AnyAsync(x => x.Id == fileId));
@@ -52,14 +129,18 @@ public sealed class EquipmentFileKmDeletionTests
         finally { Directory.Delete(root, true); }
     }
 
-    [Fact]
-    public async Task ActiveIngestionLeaseCannotBeMistakenForNeverDelivered()
+    [Theory]
+    [InlineData("leased.pdf", "application/pdf")]
+    [InlineData("leased.png", "image/png")]
+    [InlineData("leased.jpg", "image/jpeg")]
+    public async Task ActiveIngestionLeaseCannotBeMistakenForNeverDelivered(
+        string fileName, string contentType)
     {
         var factory = new Factory();
         var root = NewRoot();
         try
         {
-            var fileId = await SeedFileAsync(factory, root, "leased.pdf", "application/pdf", true);
+            var fileId = await SeedFileAsync(factory, root, fileName, contentType, true);
             Guid ingestionLease;
             await using (var db = factory.CreateDbContext())
             {
@@ -92,20 +173,105 @@ public sealed class EquipmentFileKmDeletionTests
         finally { Directory.Delete(root, true); }
     }
 
-    [Fact]
-    public async Task MockAcceptedCompletedCallbackDeletesOnlyCorrelatedFileAndIsIdempotent()
+    [Theory]
+    [InlineData("sent.pdf", "application/pdf", KmIntegrationStatus.Sent)]
+    [InlineData("processing.png", "image/png", KmIntegrationStatus.Processing)]
+    [InlineData("completed.jpg", "image/jpeg", KmIntegrationStatus.Completed)]
+    [InlineData("failed.jpg", "image/jpeg", KmIntegrationStatus.Failed)]
+    public async Task DeliveryEvidenceAlwaysRequiresKmDeletion(
+        string fileName, string contentType, KmIntegrationStatus status)
     {
         var factory = new Factory();
         var root = NewRoot();
         try
         {
-            var targetId = await SeedSentFileAsync(factory, root, "target.pdf", "EQ-TARGET");
+            var fileId = await SeedFileAsync(factory, root, fileName, contentType, true);
+            await using (var db = factory.CreateDbContext())
+            {
+                var outbox = await db.KmIntegrationOutbox.SingleAsync(x => x.SourceEntityId == fileId);
+                var lease = Guid.NewGuid();
+                var now = DateTime.UtcNow;
+                outbox.Claim(lease, now, TimeSpan.FromMinutes(5));
+                if (status == KmIntegrationStatus.Failed)
+                    outbox.DeliveryFailed(lease, "HTTP_503", "Attempted delivery.", now.AddMinutes(1), now);
+                else
+                {
+                    outbox.Sent(lease, "INGEST-" + fileId.ToString("N"), now);
+                    if (status is KmIntegrationStatus.Processing or KmIntegrationStatus.Completed)
+                        outbox.CallbackProcessing(now);
+                    if (status == KmIntegrationStatus.Completed)
+                        outbox.CallbackCompleted(now);
+                }
+                await db.SaveChangesAsync();
+            }
+
+            await using var requestDb = factory.CreateDbContext();
+            var result = await new EquipmentFileDeletionService(requestDb)
+                .RequestAsync(fileId, "writer");
+
+            Assert.NotNull(result);
+            Assert.False(result.CompletedLocally);
+            Assert.Equal(EquipmentFileDeletionStatuses.Pending, result.Status);
+            Assert.True(await requestDb.ApparatusFiles.AnyAsync(x => x.Id == fileId));
+            Assert.True(await requestDb.KmIntegrationOutbox.AnyAsync(x => x.SourceEntityId == fileId));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task ExpiredImageIngestionLeaseIsSafelyTakenOverByDeletionDispatch()
+    {
+        var factory = new Factory();
+        var root = NewRoot();
+        try
+        {
+            var fileId = await SeedFileAsync(factory, root, "expired.png", "image/png", true);
+            await using (var db = factory.CreateDbContext())
+            {
+                var outbox = await db.KmIntegrationOutbox.SingleAsync(x => x.SourceEntityId == fileId);
+                outbox.Claim(Guid.NewGuid(), DateTime.UtcNow.AddMinutes(-10), TimeSpan.FromMinutes(1));
+                await db.SaveChangesAsync();
+            }
+            await using (var db = factory.CreateDbContext())
+                await new EquipmentFileDeletionService(db).RequestAsync(fileId, "writer");
+
+            var adapter = new MockEquipmentDeletionApi();
+            Assert.Equal(1, await Dispatcher(factory, adapter).ProcessBatchAsync());
+            Assert.Single(adapter.Requests);
+
+            await using var verify = factory.CreateDbContext();
+            var storedOutbox = await verify.KmIntegrationOutbox.SingleAsync(x => x.SourceEntityId == fileId);
+            Assert.Equal(KmIntegrationStatus.Failed, storedOutbox.Status);
+            Assert.Equal("CANCELLED_BY_DELETION", storedOutbox.LastErrorCode);
+            Assert.Equal(EquipmentFileDeletionStatuses.Accepted,
+                (await verify.EquipmentFileDeletionJobs.SingleAsync()).Status);
+            Assert.True(await verify.ApparatusFiles.AnyAsync(x => x.Id == fileId));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData("target.pdf", "application/pdf")]
+    [InlineData("target.png", "image/png")]
+    [InlineData("target.jpg", "image/jpeg")]
+    public async Task MockAcceptedCompletedCallbackDeletesOnlyCorrelatedFileAndIsIdempotent(
+        string fileName, string contentType)
+    {
+        var factory = new Factory();
+        var root = NewRoot();
+        try
+        {
+            var targetId = await SeedSentFileAsync(factory, root, fileName, contentType, "EQ-TARGET");
             var otherId = await SeedSentFileAsync(factory, root, "other.pdf", "EQ-OTHER");
             EquipmentFileDeletionRequestResult requested;
             await using (var db = factory.CreateDbContext())
                 requested = (await new EquipmentFileDeletionService(db)
                     .RequestAsync(targetId, "writer"))!;
             Assert.False(requested.CompletedLocally);
+            await using (var duplicateDb = factory.CreateDbContext())
+                Assert.Equal(requested.RequestId,
+                    (await new EquipmentFileDeletionService(duplicateDb)
+                        .RequestAsync(targetId, "writer"))!.RequestId);
 
             var adapter = new MockEquipmentDeletionApi();
             Assert.Equal(1, await Dispatcher(factory, adapter).ProcessBatchAsync());
@@ -116,7 +282,7 @@ public sealed class EquipmentFileKmDeletionTests
             await using (var before = factory.CreateDbContext())
             {
                 Assert.True(await before.ApparatusFiles.AnyAsync(x => x.Id == targetId));
-                Assert.True(File.Exists(Path.Combine(root, "target.pdf")));
+                Assert.True(File.Exists(Path.Combine(root, fileName)));
             }
 
             var callback = Completed(accepted, adapter.JobId(accepted.DeletionRequestId));
@@ -129,7 +295,7 @@ public sealed class EquipmentFileKmDeletionTests
             await using var verify = factory.CreateDbContext();
             Assert.False(await verify.ApparatusFiles.AnyAsync(x => x.Id == targetId));
             Assert.True(await verify.ApparatusFiles.AnyAsync(x => x.Id == otherId));
-            Assert.False(File.Exists(Path.Combine(root, "target.pdf")));
+            Assert.False(File.Exists(Path.Combine(root, fileName)));
             Assert.True(File.Exists(Path.Combine(root, "other.pdf")));
             var job = await verify.EquipmentFileDeletionJobs.SingleAsync(x =>
                 x.ApparatusFileId == targetId);
@@ -148,7 +314,7 @@ public sealed class EquipmentFileKmDeletionTests
         var root = NewRoot();
         try
         {
-            var fileId = await SeedSentFileAsync(factory, root, "retry.pdf", "EQ-RETRY");
+            var fileId = await SeedSentFileAsync(factory, root, "retry.jpg", "image/jpeg", "EQ-RETRY");
             await using (var db = factory.CreateDbContext())
                 await new EquipmentFileDeletionService(db).RequestAsync(fileId, "writer");
             var adapter = new MockEquipmentDeletionApi(
@@ -211,10 +377,13 @@ public sealed class EquipmentFileKmDeletionTests
             new KmDeletionError("KM_TEMPORARY", "Synthetic retryable failure.", true));
     }
 
+    private static Task<Guid> SeedSentFileAsync(Factory factory, string root, string name,
+        string equipmentId) => SeedSentFileAsync(factory, root, name, "application/pdf", equipmentId);
+
     private static async Task<Guid> SeedSentFileAsync(Factory factory, string root, string name,
-        string equipmentId)
+        string contentType, string equipmentId)
     {
-        var id = await SeedFileAsync(factory, root, name, "application/pdf", true, equipmentId);
+        var id = await SeedFileAsync(factory, root, name, contentType, true, equipmentId);
         await using var db = factory.CreateDbContext();
         var outbox = await db.KmIntegrationOutbox.SingleAsync(x => x.SourceEntityId == id);
         var lease = Guid.NewGuid();
@@ -295,9 +464,20 @@ public sealed class EquipmentFileKmDeletionTests
 
     private sealed class Factory : IDbContextFactory<AppDbContext>
     {
-        private readonly DbContextOptions<AppDbContext> options =
-            new DbContextOptionsBuilder<AppDbContext>()
+        private readonly DbContextOptions<AppDbContext> options;
+
+        public Factory()
+        {
+            options = new DbContextOptionsBuilder<AppDbContext>()
                 .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options;
+        }
+
+        public Factory(string connection)
+        {
+            options = new DbContextOptionsBuilder<AppDbContext>()
+                .UseNpgsql(connection).Options;
+        }
+
         public AppDbContext CreateDbContext() => new(options);
     }
 }

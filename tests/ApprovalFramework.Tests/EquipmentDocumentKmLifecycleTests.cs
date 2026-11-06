@@ -56,11 +56,15 @@ public sealed class EquipmentDocumentKmLifecycleTests
         Assert.Null(row.NextRetryAt);
     }
 
-    [Fact]
-    public async Task EquipmentOutbox_WaitsWhenDisabled_ThenDispatchesAndStoresCallbackSuggestions()
+    [Theory]
+    [InlineData("manual.pdf", "application/pdf")]
+    [InlineData("front.png", "image/png")]
+    [InlineData("photo.jpg", "image/jpeg")]
+    public async Task EquipmentOutbox_WaitsWhenDisabled_ThenDispatchesAndStoresCallbackSuggestions(
+        string fileName, string contentType)
     {
         var factory = new TestDbFactory(Guid.NewGuid().ToString("N"));
-        var file = SeedDocument(factory);
+        var file = SeedDocument(factory, fileName, contentType);
         var mock = new EquipmentMockKmClient();
 
         Assert.Equal(0, await Worker(factory, mock, enabled: false).ProcessBatchAsync());

@@ -373,7 +373,9 @@ public sealed class KmIntegrationController(
                 .SingleOrDefaultAsync(cancellationToken)
             : await db.KmIntegrationOutbox.SingleOrDefaultAsync(x => x.KmJobId == callback.JobId,
                 cancellationToken);
-        if (row is null || row.EventType != KmIntegrationEventTypes.EquipmentDocumentArchived ||
+        if (row is null ||
+            row.EventType is not (KmIntegrationEventTypes.EquipmentDocumentArchived or
+                KmIntegrationEventTypes.EquipmentAttachmentArchived) ||
             row.SourceEntityType != KmIntegrationSourceEntityTypes.ApparatusFile ||
             row.SourceSystem != callback.SourceSystem || row.DocumentId != callback.DocumentId ||
             row.SourceEntityId != callback.DocumentId || row.Version != callback.Version)

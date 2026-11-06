@@ -145,7 +145,7 @@ public sealed class EquipmentSafeDeletionTests
         try
         {
             await SeedStorageAsync(factory, root);
-            await SeedEquipmentFileAsync(factory, root, "EQ-KM", "photo.jpg", false, false);
+            var photoId = await SeedEquipmentFileAsync(factory, root, "EQ-KM", "photo.jpg", true, true);
             var sentId = await SeedEquipmentFileAsync(factory, root, "EQ-KM", "formal.pdf", true, true);
 
             await using (var db = factory.CreateDbContext())
@@ -157,15 +157,20 @@ public sealed class EquipmentSafeDeletionTests
             await using (var waiting = factory.CreateDbContext())
             {
                 Assert.True(await waiting.Apparatuses.AnyAsync(x => x.Id == "EQ-KM"));
+                Assert.True(await waiting.ApparatusFiles.AnyAsync(x => x.Id == photoId));
                 Assert.True(await waiting.ApparatusFiles.AnyAsync(x => x.Id == sentId));
             }
 
             var adapter = new MockEquipmentDeletionApi();
-            Assert.Equal(1, await Dispatcher(factory, adapter).ProcessBatchAsync());
-            var request = Assert.Single(adapter.Requests);
-            var callback = Completed(request, adapter.JobId(request.DeletionRequestId));
-            Assert.Equal(KmDeletionCallbackOutcome.Accepted,
-                await new EquipmentFileDeletionCallbackService(factory).ApplyAsync(callback));
+            Assert.Equal(2, await Dispatcher(factory, adapter).ProcessBatchAsync());
+            Assert.Equal(2, adapter.Requests.Count);
+            var callbacks = new EquipmentFileDeletionCallbackService(factory);
+            foreach (var request in adapter.Requests)
+            {
+                var callback = Completed(request, adapter.JobId(request.DeletionRequestId));
+                Assert.Equal(KmDeletionCallbackOutcome.Accepted,
+                    await callbacks.ApplyAsync(callback));
+            }
 
             await using var verify = factory.CreateDbContext();
             Assert.False(await verify.Apparatuses.AnyAsync(x => x.Id == "EQ-KM"));
@@ -347,8 +352,8 @@ public sealed class EquipmentSafeDeletionTests
         try
         {
             await SeedStorageAsync(factory, root);
-            var blockedId = await SeedEquipmentFileAsync(factory, root, "EQ-PARTIAL", "blocked.pdf", false, false);
-            var completedId = await SeedEquipmentFileAsync(factory, root, "EQ-PARTIAL", "completed.pdf", false, false);
+            var blockedId = await SeedEquipmentFileAsync(factory, root, "EQ-PARTIAL", "blocked.png", false, false);
+            var completedId = await SeedEquipmentFileAsync(factory, root, "EQ-PARTIAL", "completed.jpg", false, false);
             var otherId = await SeedEquipmentFileAsync(factory, root, "EQ-OTHER", "keep.pdf", false, false);
             string blockedPath;
             await using (var db = factory.CreateDbContext())
@@ -792,7 +797,12 @@ public sealed class EquipmentSafeDeletionTests
         {
             Id = id, ApparatusId = equipment.Id, Apparatus = equipment,
             FileName = name, OriginalFileName = name, FilePath = folder,
-            ContentType = name.EndsWith(".jpg") ? "image/jpeg" : "application/pdf",
+            ContentType = Path.GetExtension(name).ToLowerInvariant() switch
+            {
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".png" => "image/png",
+                _ => "application/pdf"
+            },
             FileSize = new FileInfo(Path.Combine(folder, name)).Length,
             Sha256 = new string('a', 64), ArchiveStatus = FileArchiveStatuses.Archived,
             ArchiveUpdatedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow

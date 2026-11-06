@@ -236,7 +236,8 @@ public sealed class KmDeletionDispatchService(
                      job.Status == EquipmentFileDeletionStatuses.Dispatching &&
                         job.LeaseExpiresAt <= now) &&
                     !db.KmIntegrationOutbox.Any(outbox =>
-                        outbox.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                        (outbox.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
+                         outbox.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                         outbox.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                         outbox.SourceEntityId == job.ApparatusFileId &&
                         outbox.Status == KmIntegrationStatus.Dispatching &&
@@ -274,13 +275,14 @@ public sealed class KmDeletionDispatchService(
             var ingestion = db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true
                 ? await db.KmIntegrationOutbox.FromSqlInterpolated($"""
                     SELECT * FROM km_integration_outbox
-                    WHERE event_type = 'EquipmentDocumentArchived'
+                    WHERE event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived')
                       AND source_entity_type = 'ApparatusFile'
                       AND source_entity_id = {job.ApparatusFileId}
                     FOR UPDATE
                     """).SingleOrDefaultAsync(cancellationToken)
                 : await db.KmIntegrationOutbox.SingleOrDefaultAsync(outbox =>
-                    outbox.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                    (outbox.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
+                     outbox.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                     outbox.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                     outbox.SourceEntityId == job.ApparatusFileId, cancellationToken);
             if (ingestion?.Status == KmIntegrationStatus.Dispatching)

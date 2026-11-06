@@ -48,13 +48,14 @@ public sealed class EquipmentFileDeletionService(
         var outbox = IsPostgres(db)
             ? await db.KmIntegrationOutbox.FromSqlInterpolated($"""
                 SELECT * FROM km_integration_outbox
-                WHERE event_type = 'EquipmentDocumentArchived'
+                WHERE event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived')
                   AND source_entity_type = 'ApparatusFile'
                   AND source_entity_id = {fileId}
                 FOR UPDATE
                 """).SingleOrDefaultAsync(cancellationToken)
             : await db.KmIntegrationOutbox.SingleOrDefaultAsync(x =>
-                x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
+                 x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                 x.SourceEntityId == fileId, cancellationToken);
 
@@ -125,7 +126,8 @@ public sealed class EquipmentFileDeletionService(
 
             operation = "PersistLocalCleanup";
             var outboxes = await db.KmIntegrationOutbox.Where(x =>
-                x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived &&
+                (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
+                 x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                 x.SourceEntityId == file.Id).ToListAsync(cancellationToken);
             db.KmIntegrationOutbox.RemoveRange(outboxes);
