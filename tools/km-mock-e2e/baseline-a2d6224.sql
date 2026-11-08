@@ -1,4 +1,4 @@
-﻿CREATE TABLE apparatus (
+CREATE TABLE apparatus (
     "Id" character varying(30) NOT NULL,
     "ModuleCode" character varying(100) NOT NULL,
     "ProductsId" character varying(100),
