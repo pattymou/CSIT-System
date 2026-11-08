@@ -12,7 +12,8 @@ namespace SIT.DepartmentSystem.Web.Services.Implementations;
 public sealed class VendorService(
     AppDbContext db,
     ManagedAssetFileStorage storage,
-    IOptions<KmIntegrationOptions>? kmOptions = null) : IVendorService, IVendorFormalUploadService
+    IOptions<KmIntegrationOptions>? kmOptions = null,
+    VendorFileDeletionService? fileDeletion = null) : IVendorService, IVendorFormalUploadService
 {
     private static readonly HashSet<string> AllowedTypes = new(StringComparer.Ordinal)
         { "Manufacturer", "Agent", "Supplier", "MaintenanceProvider" };
@@ -59,7 +60,10 @@ public sealed class VendorService(
             .Where(x => fileIds.Contains(x.Id) && x.Status == ApprovalStatus.Committed &&
                         x.ReviewerAccount != null && x.ReviewedAt != null)
             .Select(x => x.Id).ToListAsync(cancellationToken)).ToHashSet();
-        return ToDetail(vendor, outboxes, approvedFileIds,
+        var deletions = await db.VendorFileDeletionJobs.AsNoTracking()
+            .Where(x => fileIds.Contains(x.VendorFileId))
+            .ToDictionaryAsync(x => x.VendorFileId, cancellationToken);
+        return ToDetail(vendor, outboxes, approvedFileIds, deletions,
             kmOptions?.Value is { Enabled: true, VendorEnabled: true });
     }
 
@@ -127,6 +131,11 @@ public sealed class VendorService(
         Guid approvalOperationId, string approvedBy, DateTime approvedAt,
         CancellationToken cancellationToken = default)
     {
+        if (approvalOperationId != Guid.Empty &&
+            await db.VendorFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+                x.VendorFileId == approvalOperationId, cancellationToken))
+            throw new InvalidOperationException(
+                "This Vendor attachment version has a durable deletion hold and cannot be recreated.");
         var vendor = await db.Vendors.SingleOrDefaultAsync(x => x.Id == id, cancellationToken)
             ?? throw new KeyNotFoundException("找不到廠商。");
         if (approvalOperationId == Guid.Empty || string.IsNullOrWhiteSpace(approvedBy))
@@ -208,7 +217,9 @@ public sealed class VendorService(
     {
         var file = await db.VendorFiles.AsNoTracking().SingleOrDefaultAsync(x => x.Id == fileId, cancellationToken)
             ?? throw new FileNotFoundException("找不到廠商附件。");
-        if (file.ArchiveStatus != FileArchiveStatuses.Archived)
+        if (file.ArchiveStatus != FileArchiveStatuses.Archived ||
+            await db.VendorFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+                x.VendorFileId == fileId, cancellationToken))
             throw new FileNotFoundException("附件尚未完成正式歸檔。");
         var path = ManagedAssetFileStorage.FullPath(file.FolderPath, file.StoredFileName);
         if (!File.Exists(path)) throw new FileNotFoundException("正式歸檔檔案不存在。");
@@ -216,23 +227,10 @@ public sealed class VendorService(
             file.ContentType ?? "application/octet-stream");
     }
 
-    public async Task<bool> DeleteFileAsync(Guid fileId, CancellationToken cancellationToken = default)
-    {
-        var file = await db.VendorFiles.SingleOrDefaultAsync(x => x.Id == fileId, cancellationToken);
-        if (file is null) return false;
-        if (file.ApprovalOperationId.HasValue || await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
-                x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
-                x.SourceEntityId == file.Id, cancellationToken))
-            throw new InvalidOperationException(
-                "此附件已進入主管審核及 KM 追蹤流程；正式 Vendor 刪除契約尚未核准，目前禁止直接刪除。");
-        db.VendorFiles.Remove(file);
-        await db.SaveChangesAsync(cancellationToken);
-        var path = ManagedAssetFileStorage.FullPath(file.FolderPath, file.StoredFileName);
-        if (File.Exists(path)) File.Delete(path);
-        var pendingPath = path + ".pending";
-        if (File.Exists(pendingPath)) File.Delete(pendingPath);
-        return true;
-    }
+    public Task<VendorFileDeletionRequestResult?> DeleteFileAsync(Guid fileId, string actor,
+        CancellationToken cancellationToken = default) =>
+        (fileDeletion ?? new VendorFileDeletionService(db)).RequestAsync(fileId, actor,
+            cancellationToken);
 
     public async Task<List<ManufacturerMatchReportItemDto>> ManufacturerMatchReportAsync(
         CancellationToken cancellationToken = default)
@@ -252,6 +250,9 @@ public sealed class VendorService(
 
     private async Task EnsureVendorOutboxAsync(VendorFile file, CancellationToken cancellationToken)
     {
+        if (await db.VendorFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+            x.VendorFileId == file.Id, cancellationToken))
+            throw new InvalidOperationException("Vendor attachment deletion hold is active.");
         if (await db.KmIntegrationOutbox.AnyAsync(x =>
                 x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
                 x.SourceEntityId == file.Id, cancellationToken)) return;
@@ -262,6 +263,7 @@ public sealed class VendorService(
     private static VendorDetailDto ToDetail(Vendor x,
         IReadOnlyDictionary<Guid, KmIntegrationOutbox> outboxes,
         IReadOnlySet<Guid> approvedFileIds,
+        IReadOnlyDictionary<Guid, VendorFileDeletionJob> deletions,
         bool vendorKmEnabled) => new()
     {
         Id = x.Id, Name = x.Name, Aliases = x.Aliases, Types = x.Types, Website = x.Website,
@@ -272,6 +274,7 @@ public sealed class VendorService(
         Files = x.Files.OrderByDescending(f => f.UploadedAt).Select(f =>
         {
             outboxes.TryGetValue(f.Id, out var outbox);
+            deletions.TryGetValue(f.Id, out var deletion);
             return new VendorFileDto
             {
                 Id = f.Id, VendorId = f.VendorId, FileName = f.OriginalFileName,
@@ -286,7 +289,11 @@ public sealed class VendorService(
                 KmEnabled = vendorKmEnabled,
                 KmStatus = outbox?.Status.ToString(),
                 KmError = outbox?.LastErrorMessage,
-                CanDelete = f.ApprovalOperationId is null && outbox is null
+                DeletionRequestId = deletion?.Id,
+                DeletionStatus = deletion?.Status,
+                DeletionError = deletion?.LastErrorMessage,
+                CanDelete = deletion is null ||
+                    deletion.Status == VendorFileDeletionStatuses.CleanupFailed
             };
         }).ToList()
     };

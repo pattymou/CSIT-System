@@ -9,8 +9,73 @@ public sealed class KmDeletionOptions
 {
     public const string SectionName = "KmDeletion";
     public bool Enabled { get; set; }
+    public bool VendorEnabled { get; set; }
     public bool EquipmentEnabled { get; set; }
     public string? Scope { get; set; }
+}
+
+public sealed class KmDocumentDeletionV2Client(
+    HttpClient http,
+    IOptions<KmIntegrationOptions> integration,
+    IOptions<KmDeletionOptions> configured,
+    IKmDeletionAccessTokenProvider tokens) : IKmDocumentDeletionV2Client
+{
+    public const string Path = "/api/integrations/csit/v2/document-deletions";
+
+    public async Task<KmDeletionDeliveryResult> SubmitAsync(KmDocumentDeletionV2Request request,
+        CancellationToken cancellationToken = default)
+    {
+        if (!request.IsValid()) return KmDeletionDeliveryResult.Failure(false, "INVALID_REQUEST");
+        if (!configured.Value.Enabled || string.IsNullOrWhiteSpace(configured.Value.Scope))
+            return KmDeletionDeliveryResult.Failure(false, "DISABLED");
+        var options = integration.Value;
+        if (!Uri.TryCreate(options.BaseUrl, UriKind.Absolute, out var baseUri) ||
+            baseUri.Scheme != Uri.UriSchemeHttps || baseUri.AbsolutePath != "/" ||
+            !string.IsNullOrEmpty(baseUri.Query) || !string.IsNullOrEmpty(baseUri.Fragment) ||
+            options.TimeoutSeconds < 1)
+            return KmDeletionDeliveryResult.Failure(false, "CONFIGURATION");
+
+        string token;
+        try { token = await tokens.GetAccessTokenAsync(cancellationToken); }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        { return KmDeletionDeliveryResult.Failure(true, "AUTH_UNAVAILABLE"); }
+        if (string.IsNullOrWhiteSpace(token))
+            return KmDeletionDeliveryResult.Failure(false, "AUTH_UNAVAILABLE");
+
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
+        using var message = new HttpRequestMessage(HttpMethod.Post, new Uri(baseUri, Path))
+        {
+            Content = JsonContent.Create(request)
+        };
+        message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        message.Headers.Add("Idempotency-Key", request.DeletionRequestId.ToString("D"));
+        try
+        {
+            using var response = await http.SendAsync(message,
+                HttpCompletionOption.ResponseHeadersRead, deadline.Token);
+            if (response.StatusCode == HttpStatusCode.Accepted)
+            {
+                KmDeletionAccepted? accepted;
+                try { accepted = await response.Content.ReadFromJsonAsync<KmDeletionAccepted>(deadline.Token); }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                { return KmDeletionDeliveryResult.Failure(false, "INVALID_RESPONSE"); }
+                return accepted is not null &&
+                    accepted.DeletionRequestId == request.DeletionRequestId &&
+                    accepted.Status == "Accepted" && accepted.KmDeletionJobId is
+                        { Length: > 0 and <= 150 }
+                    ? KmDeletionDeliveryResult.Success(accepted.KmDeletionJobId)
+                    : KmDeletionDeliveryResult.Failure(false, "INVALID_RESPONSE");
+            }
+            var retryable = (int)response.StatusCode >= 500 ||
+                response.StatusCode is HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests;
+            return KmDeletionDeliveryResult.Failure(retryable, "HTTP_" + (int)response.StatusCode);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        { return KmDeletionDeliveryResult.Failure(true, "TIMEOUT"); }
+        catch (HttpRequestException)
+        { return KmDeletionDeliveryResult.Failure(true, "CONNECTION"); }
+    }
 }
 
 public interface IKmDeletionAccessTokenProvider

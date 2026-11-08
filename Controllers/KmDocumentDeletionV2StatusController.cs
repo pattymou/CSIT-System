@@ -6,12 +6,12 @@ namespace SIT.DepartmentSystem.Web.Controllers;
 
 [ApiController]
 [Authorize(Policy = KmIntegrationAuthorization.DeletionStatusWritePolicy)]
-[Route("api/integrations/km/drafts/equipment-document-deletion-status")]
-public sealed class EquipmentFileDeletionStatusController(
-    EquipmentFileDeletionCallbackService callbacks) : ControllerBase
+[Route("api/integrations/km/v2/document-deletions/status")]
+public sealed class KmDocumentDeletionV2StatusController(
+    KmDocumentDeletionV2CallbackService callbacks) : ControllerBase
 {
     [HttpPost]
-    public async Task<IActionResult> Post([FromBody] EquipmentDocumentDeletionCallback callback,
+    public async Task<IActionResult> Post([FromBody] KmDocumentDeletionV2Callback callback,
         CancellationToken cancellationToken) =>
         await callbacks.ApplyAsync(callback, cancellationToken) switch
         {

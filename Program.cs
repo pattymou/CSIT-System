@@ -227,7 +227,7 @@ builder.Services.AddAuthorization(options =>
         policy.AddAuthenticationSchemes(KmIntegrationAuthorization.Scheme)
             .RequireAuthenticatedUser().AddRequirements(
                 new KmServicePrincipalRequirement(
-                    builder.Configuration["KmIntegrationAuth:DeletionStatusScope"] ?? "__not_configured__")));
+                    KmIntegrationAuthorization.DeletionStatusWriteScope)));
     options.AddPolicy(SystemAuthorization.Policies.RdApplicant, policy =>
         policy.RequireAuthenticatedUser()
             .RequireClaim(SystemAuthorization.AccessScopeClaim, SystemAuthorization.AccessScopes.RdApplicant));
@@ -273,11 +273,11 @@ else
 builder.Services.AddHttpClient<IKmIntegrationClient, KmIntegrationClient>();
 builder.Services.AddSingleton<IKmDeletionAccessTokenProvider, KmDeletionAccessTokenProvider>();
 builder.Services.AddHttpClient<IKmDeletionClient, KmDeletionClient>();
-builder.Services.AddSingleton<IEquipmentDocumentDeletionAdapter,
-    UnavailableEquipmentDocumentDeletionAdapter>();
+builder.Services.AddHttpClient<IKmDocumentDeletionV2Client, KmDocumentDeletionV2Client>();
 builder.Services.AddScoped<KmDeletionCallbackService>();
-builder.Services.AddScoped<EquipmentFileDeletionCallbackService>();
+builder.Services.AddScoped<KmDocumentDeletionV2CallbackService>();
 builder.Services.AddScoped<EquipmentFileDeletionService>();
+builder.Services.AddScoped<VendorFileDeletionService>();
 builder.Services.AddScoped<EquipmentDeletionService>();
 builder.Services.AddScoped<DocumentLibraryDeletionAuthorizationService>();
 builder.Services.AddScoped<DocumentLibraryFileDeletionService>();

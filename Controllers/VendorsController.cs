@@ -96,7 +96,16 @@ public sealed class VendorsController(
     [BusinessWrite]
     public async Task<IActionResult> DeleteFile(Guid fileId, CancellationToken cancellationToken)
     {
-        try { return await service.DeleteFileAsync(fileId, cancellationToken) ? NoContent() : NotFound(); }
+        try
+        {
+            var result = await service.DeleteFileAsync(fileId, Actor(), cancellationToken);
+            return result is null ? NotFound() : Accepted(new
+            {
+                deletionRequestId = result.RequestId,
+                status = result.Status,
+                completedLocally = result.CompletedLocally
+            });
+        }
         catch (InvalidOperationException ex) { return Conflict(ex.Message); }
     }
 

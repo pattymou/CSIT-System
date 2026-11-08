@@ -20,19 +20,13 @@ public sealed class EquipmentFileDeletionService(
         await using var transaction = db.Database.IsRelational()
             ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
 
-        var file = IsPostgres(db)
-            ? await db.ApparatusFiles.FromSqlInterpolated($"""
-                SELECT * FROM apparatus_files WHERE "Id" = {fileId} FOR UPDATE
+        var existing = IsPostgres(db)
+            ? await db.EquipmentFileDeletionJobs.FromSqlInterpolated($"""
+                SELECT * FROM equipment_file_deletion_jobs
+                WHERE apparatus_file_id = {fileId} FOR UPDATE
                 """).SingleOrDefaultAsync(cancellationToken)
-            : await db.ApparatusFiles.SingleOrDefaultAsync(x => x.Id == fileId, cancellationToken);
-        if (file is null) return null;
-        var apparatus = await db.Apparatuses.AsNoTracking()
-            .SingleOrDefaultAsync(x => x.Id == file.ApparatusId, cancellationToken);
-        if (apparatus?.ModuleCode != "equipment")
-            throw new InvalidOperationException("Equipment deletion lifecycle only accepts Equipment attachments.");
-
-        var existing = await db.EquipmentFileDeletionJobs
-            .SingleOrDefaultAsync(x => x.ApparatusFileId == fileId, cancellationToken);
+            : await db.EquipmentFileDeletionJobs.SingleOrDefaultAsync(
+                x => x.ApparatusFileId == fileId, cancellationToken);
         if (existing is not null)
         {
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
@@ -44,6 +38,17 @@ public sealed class EquipmentFileDeletionService(
             return new(current.Id, current.Status,
                 current.Status == EquipmentFileDeletionStatuses.Completed);
         }
+
+        var file = IsPostgres(db)
+            ? await db.ApparatusFiles.FromSqlInterpolated($"""
+                SELECT * FROM apparatus_files WHERE "Id" = {fileId} FOR UPDATE
+                """).SingleOrDefaultAsync(cancellationToken)
+            : await db.ApparatusFiles.SingleOrDefaultAsync(x => x.Id == fileId, cancellationToken);
+        if (file is null) return null;
+        var apparatus = await db.Apparatuses.AsNoTracking()
+            .SingleOrDefaultAsync(x => x.Id == file.ApparatusId, cancellationToken);
+        if (apparatus?.ModuleCode != "equipment")
+            throw new InvalidOperationException("Equipment deletion lifecycle only accepts Equipment attachments.");
 
         var outbox = IsPostgres(db)
             ? await db.KmIntegrationOutbox.FromSqlInterpolated($"""
@@ -61,7 +66,8 @@ public sealed class EquipmentFileDeletionService(
 
         var requiresKmDeletion = outbox is not null && !CanProveNeverDispatched(outbox);
         var now = DateTime.UtcNow;
-        var job = EquipmentFileDeletionJob.Create(file, actor, requiresKmDeletion, now);
+        var job = EquipmentFileDeletionJob.Create(file, actor, requiresKmDeletion, now,
+            requiresKmDeletion ? outbox!.EventId : null);
         db.EquipmentFileDeletionJobs.Add(job);
         if (!requiresKmDeletion && outbox is not null)
             db.KmIntegrationOutbox.Remove(outbox);

@@ -70,6 +70,9 @@ public sealed class VendorFileDto
     public bool KmEnabled { get; set; }
     public string? KmStatus { get; set; }
     public string? KmError { get; set; }
+    public Guid? DeletionRequestId { get; set; }
+    public string? DeletionStatus { get; set; }
+    public string? DeletionError { get; set; }
     public bool CanDelete { get; set; }
 }
 

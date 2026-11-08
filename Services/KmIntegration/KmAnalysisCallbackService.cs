@@ -318,6 +318,9 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
                     file.ApprovedAt is null || string.IsNullOrWhiteSpace(file.ApprovedBy) ||
                     string.IsNullOrWhiteSpace(file.Sha256) || !approved)
                     throw Unprocessable("source_not_formal");
+                if (await db.VendorFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+                    x.VendorFileId == file.Id, cancellationToken))
+                    throw Unprocessable("deletion_in_progress");
                 return new(file.Sha256);
             }
             case KmAnalysisSourceTypes.EquipmentAttachment:
@@ -337,7 +340,7 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
                     string.IsNullOrWhiteSpace(file.Sha256) || !approved)
                     throw Unprocessable("source_not_formal");
                 if (await db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
-                    x.ApparatusFileId == file.Id && x.Status != EquipmentFileDeletionStatuses.Completed,
+                    x.ApparatusFileId == file.Id,
                     cancellationToken)) throw Unprocessable("deletion_in_progress");
                 return new(file.Sha256);
             }

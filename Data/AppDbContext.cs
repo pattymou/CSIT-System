@@ -50,6 +50,8 @@ public class AppDbContext : DbContext
     public DbSet<VerificationCaseDeletionCallbackReceipt> VerificationCaseDeletionCallbacks => Set<VerificationCaseDeletionCallbackReceipt>();
     public DbSet<EquipmentFileDeletionJob> EquipmentFileDeletionJobs => Set<EquipmentFileDeletionJob>();
     public DbSet<EquipmentFileDeletionCallbackReceipt> EquipmentFileDeletionCallbacks => Set<EquipmentFileDeletionCallbackReceipt>();
+    public DbSet<VendorFileDeletionJob> VendorFileDeletionJobs => Set<VendorFileDeletionJob>();
+    public DbSet<KmDocumentDeletionV2CallbackReceipt> KmDocumentDeletionV2Callbacks => Set<KmDocumentDeletionV2CallbackReceipt>();
     public DbSet<DocumentLibraryFileDeletionJob> DocumentLibraryFileDeletionJobs => Set<DocumentLibraryFileDeletionJob>();
     public DbSet<DocumentLibraryFileDeletionCallbackReceipt> DocumentLibraryFileDeletionCallbacks => Set<DocumentLibraryFileDeletionCallbackReceipt>();
     public DbSet<EquipmentDeletionJob> EquipmentDeletionJobs => Set<EquipmentDeletionJob>();
@@ -134,6 +136,8 @@ public class AppDbContext : DbContext
             throw new InvalidOperationException("KM manual retry audits are append-only.");
         if (ChangeTracker.Entries<KmAnalysisCallbackReceipt>().Any(x =>
                 x.State is EntityState.Modified or EntityState.Deleted) ||
+            ChangeTracker.Entries<KmDocumentDeletionV2CallbackReceipt>().Any(x =>
+                x.State is EntityState.Modified or EntityState.Deleted) ||
             ChangeTracker.Entries<KmAnalysisReviewRevision>().Any(x =>
                 x.State is EntityState.Modified or EntityState.Deleted) ||
             ChangeTracker.Entries<KmDocumentAnalysisResult>().Any(x => x.State == EntityState.Deleted))
@@ -162,6 +166,7 @@ public class AppDbContext : DbContext
         modelBuilder.ConfigureKmIntegration();
         modelBuilder.ConfigureVerificationCaseDeletion();
         modelBuilder.ConfigureEquipmentFileDeletion();
+        modelBuilder.ConfigureKmDocumentDeletionV2();
         modelBuilder.ConfigureDocumentLibraryFileDeletion();
         modelBuilder.ConfigureEquipmentDeletion();
         modelBuilder.ConfigureValidationRequests();

@@ -65,9 +65,11 @@ public sealed class KmQueueQueryService(
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var verification = await LoadVerificationRowsAsync(db, filter, page, cancellationToken);
         var documents = await LoadDocumentRowsAsync(db, filter, page, cancellationToken);
+        var vendors = await LoadVendorRowsAsync(db, filter, page, cancellationToken);
         var equipment = await LoadEquipmentRowsAsync(db, filter, page, cancellationToken);
-        var counts = verification.Counts + documents.Counts + equipment.Counts;
-        var combined = verification.Rows.Concat(documents.Rows).Concat(equipment.Rows);
+        var counts = verification.Counts + documents.Counts + vendors.Counts + equipment.Counts;
+        var combined = verification.Rows.Concat(documents.Rows).Concat(vendors.Rows)
+            .Concat(equipment.Rows);
         combined = filter == KmQueueFilters.Completed
             ? combined.OrderByDescending(x => x.CompletedAt).ThenByDescending(x => x.Id)
             : combined.OrderBy(x => x.Priority).ThenBy(x => x.QueuedAt).ThenBy(x => x.Id);
@@ -194,6 +196,38 @@ public sealed class KmQueueQueryService(
             x.Status is not (DocumentLibraryFileDeletionStatuses.LocalCleanup or
                 DocumentLibraryFileDeletionStatuses.CleanupFailed or
                 DocumentLibraryFileDeletionStatuses.Completed))).ToList(), counts);
+    }
+
+    private async Task<DeletionResult> LoadVendorRowsAsync(
+        AppDbContext db, string filter, int page, CancellationToken cancellationToken)
+    {
+        var all = db.VendorFileDeletionJobs.AsNoTracking();
+        var counts = new QueueCounts(
+            await all.CountAsync(x => x.Status != VendorFileDeletionStatuses.Completed, cancellationToken),
+            await all.CountAsync(x => x.Status == VendorFileDeletionStatuses.Pending, cancellationToken),
+            await all.CountAsync(x => x.Status == VendorFileDeletionStatuses.Dispatching || x.Status == VendorFileDeletionStatuses.Accepted || x.Status == VendorFileDeletionStatuses.Processing || x.Status == VendorFileDeletionStatuses.KmVerified || x.Status == VendorFileDeletionStatuses.LocalCleanup, cancellationToken),
+            await all.CountAsync(x => x.Status == VendorFileDeletionStatuses.Failed || x.Status == VendorFileDeletionStatuses.CleanupFailed, cancellationToken),
+            await all.CountAsync(x => x.Status == VendorFileDeletionStatuses.Completed, cancellationToken));
+        var filtered = filter switch
+        {
+            KmQueueFilters.Waiting => all.Where(x => x.Status == VendorFileDeletionStatuses.Pending),
+            KmQueueFilters.Processing => all.Where(x => x.Status == VendorFileDeletionStatuses.Dispatching || x.Status == VendorFileDeletionStatuses.Accepted || x.Status == VendorFileDeletionStatuses.Processing || x.Status == VendorFileDeletionStatuses.KmVerified || x.Status == VendorFileDeletionStatuses.LocalCleanup),
+            KmQueueFilters.Failed => all.Where(x => x.Status == VendorFileDeletionStatuses.Failed || x.Status == VendorFileDeletionStatuses.CleanupFailed),
+            KmQueueFilters.Completed => all.Where(x => x.Status == VendorFileDeletionStatuses.Completed),
+            _ => all.Where(x => x.Status != VendorFileDeletionStatuses.Completed)
+        };
+        var ordered = filter == KmQueueFilters.Completed
+            ? filtered.OrderByDescending(x => x.CompletedAt).ThenByDescending(x => x.Id)
+            : filtered.OrderBy(x => x.RequestedAt).ThenBy(x => x.Id);
+        var rows = await ordered.Take(CheckedTake(page)).ToListAsync(cancellationToken);
+        return new(rows.Select(x => new DeletionRow(
+            x.Id, x.FileName, "Vendor attachment", KmIntegrationSourceEntityTypes.VendorFile,
+            x.VendorFileId, x.RequestedAt, x.Status, x.AttemptCount, x.LastErrorCode,
+            x.LastErrorMessage, x.LastErrorRetryable, x.CompletedAt, 3,
+            x.KmDeletionJobId is not null ||
+            x.Status is not (VendorFileDeletionStatuses.LocalCleanup or
+                VendorFileDeletionStatuses.CleanupFailed or
+                VendorFileDeletionStatuses.Completed))).ToList(), counts);
     }
 
     private async Task<DeletionResult> LoadEquipmentRowsAsync(

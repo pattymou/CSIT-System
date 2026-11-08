@@ -52,13 +52,17 @@ else
                         </td>
                         <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Km(file.HasKmSchedule, file.KmEnabled, file.KmStatus)" Title="@file.KmError" />
                             @if (!string.IsNullOrWhiteSpace(file.KmError)) { <small class="error-text">@file.KmError</small> }
+                            @if (!string.IsNullOrWhiteSpace(file.DeletionStatus))
+                            { <small>刪除：@file.DeletionStatus</small> }
+                            @if (!string.IsNullOrWhiteSpace(file.DeletionError))
+                            { <small class="error-text">@file.DeletionError</small> }
                         </td>
                         <td class="action-cell">
                             <a class="table-link-btn" href="@file.DownloadUrl" target="_blank" rel="noopener">檢視</a>
                             @if (OnDelete.HasDelegate)
                             {
                                 <button type="button" class="table-chip-btn danger" disabled="@(!file.CanDelete)"
-                                        title="@(file.CanDelete ? null : "已進入審核／KM 追蹤流程，禁止直接刪除")"
+                                        title="@(file.CanDelete ? "提出正式版本刪除申請" : "附件版本刪除作業進行中")"
                                         @onclick="() => OnDelete.InvokeAsync(file.Id)">刪除</button>
                             }
                         </td>

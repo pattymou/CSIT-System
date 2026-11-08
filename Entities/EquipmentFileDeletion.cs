@@ -22,9 +22,11 @@ public sealed class EquipmentFileDeletionJob
     public Guid DocumentId { get; private set; }
     public int Version { get; private set; } = 1;
     public string EquipmentId { get; private set; } = string.Empty;
-    public string SourceEntityType { get; private set; } = "ApparatusFile";
+    public string SourceEntityType { get; private set; } = KmDocumentDeletionV2SourceTypes.EquipmentAttachment;
     public string FileName { get; private set; } = string.Empty;
     public string? Sha256 { get; private set; }
+    public string ReasonCode { get; private set; } = KmDocumentDeletionReasonCodes.SourceDeleted;
+    public Guid? CanonicalIngestionEventId { get; private set; }
     public string RequestedBy { get; private set; } = string.Empty;
     public DateTime RequestedAt { get; private set; }
     public string Status { get; private set; } = EquipmentFileDeletionStatuses.Pending;
@@ -41,33 +43,42 @@ public sealed class EquipmentFileDeletionJob
     public DateTime? CompletedAt { get; private set; }
     public DateTime UpdatedAt { get; private set; }
 
-    public EquipmentDocumentDeletionResource Resource => new(
-        SourceEntityType, EquipmentId, ApparatusFileId, DocumentId, Version);
+    public KmDocumentDeletionV2Resource Resource => new(
+        SourceEntityType, ApparatusFileId, DocumentId, Version, Sha256 ?? string.Empty,
+        null, null, null, EquipmentId, CanonicalIngestionEventId ?? Guid.Empty,
+        "DocumentVersion");
 
     private EquipmentFileDeletionJob() { }
 
     public static EquipmentFileDeletionJob Create(ApparatusFile file, string requestedBy,
-        bool requiresKmDeletion, DateTime now)
+        bool requiresKmDeletion, DateTime now, Guid? canonicalIngestionEventId = null,
+        string reasonCode = KmDocumentDeletionReasonCodes.SourceDeleted)
     {
         if (file.Id == Guid.Empty || string.IsNullOrWhiteSpace(file.ApparatusId) ||
             file.ApparatusId.Length > 30 || string.IsNullOrWhiteSpace(file.FileName) ||
-            string.IsNullOrWhiteSpace(requestedBy) || requestedBy.Trim().Length > 100)
+            string.IsNullOrWhiteSpace(requestedBy) || requestedBy.Trim().Length > 100 ||
+            !KmDocumentDeletionReasonCodes.IsValid(reasonCode) ||
+            requiresKmDeletion && (canonicalIngestionEventId is null ||
+                canonicalIngestionEventId == Guid.Empty || file.Sha256 is not { Length: 64 } ||
+                !file.Sha256.All(Uri.IsHexDigit)))
             throw new InvalidOperationException("Invalid Equipment file deletion request.");
         return new()
         {
             Id = Guid.NewGuid(), ApparatusFileId = file.Id, DocumentId = file.Id,
             EquipmentId = file.ApparatusId, FileName = file.OriginalFileName ?? file.FileName,
-            Sha256 = file.Sha256, RequestedBy = requestedBy.Trim(), RequestedAt = now,
+            Sha256 = file.Sha256, ReasonCode = reasonCode,
+            CanonicalIngestionEventId = canonicalIngestionEventId,
+            RequestedBy = requestedBy.Trim(), RequestedAt = now,
             Status = requiresKmDeletion ? EquipmentFileDeletionStatuses.Pending
                 : EquipmentFileDeletionStatuses.LocalCleanup,
             UpdatedAt = now
         };
     }
 
-    public EquipmentDocumentDeletionRequest ToRequest() => new(
-        "CSIT.EquipmentDocumentDeletion", "draft-1", "CSIT", Id,
+    public KmDocumentDeletionV2Request ToRequest() => new(
+        "2.0", "CSIT", "DocumentDeletionRequested", Id,
         new DateTimeOffset(DateTime.SpecifyKind(RequestedAt, DateTimeKind.Utc)),
-        "EquipmentAttachmentDeleted", Resource);
+        ReasonCode, Resource);
 
     public Guid ClaimDispatch(DateTime now, TimeSpan leaseDuration)
     {
@@ -110,7 +121,7 @@ public sealed class EquipmentFileDeletionJob
         ClearLease(now);
     }
 
-    public void ApplyCallback(EquipmentDocumentDeletionCallback callback, DateTime now)
+    public void ApplyCallback(KmDocumentDeletionV2Callback callback, DateTime now)
     {
         if (callback.DeletionRequestId != Id || callback.Resource != Resource ||
             KmDeletionJobId != callback.KmDeletionJobId || !callback.IsValid())

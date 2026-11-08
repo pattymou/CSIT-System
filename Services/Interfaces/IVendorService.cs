@@ -1,4 +1,5 @@
 using SIT.DepartmentSystem.Web.Models.Api;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace SIT.DepartmentSystem.Web.Services.Interfaces;
 
@@ -11,6 +12,7 @@ public interface IVendorService
     Task<bool> UpdateAsync(Guid id, VendorUpsertRequest request, string actor, CancellationToken cancellationToken = default);
     Task<bool> DeleteAsync(Guid id, CancellationToken cancellationToken = default);
     Task<(byte[] Content, string FileName, string ContentType)> DownloadAsync(Guid fileId, CancellationToken cancellationToken = default);
-    Task<bool> DeleteFileAsync(Guid fileId, CancellationToken cancellationToken = default);
+    Task<VendorFileDeletionRequestResult?> DeleteFileAsync(Guid fileId, string actor,
+        CancellationToken cancellationToken = default);
     Task<List<ManufacturerMatchReportItemDto>> ManufacturerMatchReportAsync(CancellationToken cancellationToken = default);
 }

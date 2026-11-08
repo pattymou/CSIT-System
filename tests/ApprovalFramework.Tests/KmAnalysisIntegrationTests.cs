@@ -120,7 +120,8 @@ public sealed class KmAnalysisIntegrationTests
         await using (var db = await factory.CreateDbContextAsync())
         {
             var file = await db.ApparatusFiles.SingleAsync();
-            db.EquipmentFileDeletionJobs.Add(EquipmentFileDeletionJob.Create(file, "admin", true, DateTime.UtcNow));
+            db.EquipmentFileDeletionJobs.Add(EquipmentFileDeletionJob.Create(file, "admin", true,
+                DateTime.UtcNow, file.Id));
             await db.SaveChangesAsync();
         }
         var held = await Assert.ThrowsAsync<KmAnalysisCallbackException>(() =>

@@ -16,6 +16,52 @@ namespace ApprovalFramework.Tests;
 
 public sealed class VendorAttachmentLifecycleTests
 {
+    [Fact]
+    [Trait("Category", "PostgreSqlIntegration")]
+    public async Task TaskDVendorDeletionRunsAgainstIsolatedPostgreSql()
+    {
+        var connection = Environment.GetEnvironmentVariable("CSIT_TASK_D_POSTGRES_CONNECTION");
+        if (string.IsNullOrWhiteSpace(connection)) return;
+        var info = new Npgsql.NpgsqlConnectionStringBuilder(connection);
+        Assert.Equal("127.0.0.1", info.Host);
+        Assert.Equal(55435, info.Port);
+        Assert.StartsWith("csit_task_d_", info.Database, StringComparison.Ordinal);
+        var factory = new PostgreSqlFactory(connection);
+        await using (var db = factory.CreateDbContext())
+            Assert.Contains("20261108070415_AddKmTaskDDocumentDeletionV141",
+                await db.Database.GetAppliedMigrationsAsync());
+        var file = Seed(factory, "task-d-vendor.pdf", "application/pdf");
+        await using (var db = factory.CreateDbContext())
+        {
+            var outbox = await db.KmIntegrationOutbox.SingleAsync(x =>
+                x.SourceEntityId == file.Id);
+            var lease = Guid.NewGuid();
+            outbox.Claim(lease, DateTime.UtcNow, TimeSpan.FromMinutes(1));
+            outbox.Sent(lease, "KM-PG-INGEST-1", DateTime.UtcNow);
+            await db.SaveChangesAsync();
+            Assert.Equal(VendorFileDeletionStatuses.Pending,
+                (await new VendorFileDeletionService(db)
+                    .RequestAsync(file.Id, "pg-test"))!.Status);
+        }
+        var api = new VendorDeletionApi();
+        Assert.Equal(1, await DeletionDispatcher(factory, api).ProcessBatchAsync());
+        var request = Assert.Single(api.Requests);
+        var now = DateTimeOffset.UtcNow;
+        var callback = new KmDocumentDeletionV2Callback("2.0", Guid.NewGuid(), "CSIT",
+            request.DeletionRequestId, api.JobId, request.Resource, "Completed",
+            new KmDeletionTimestamps(now, now.AddSeconds(2), null),
+            new KmDeletionResult(true, now.AddSeconds(1), new KmDeletionCleanup(
+                "Deleted", "Deleted", "NotPresent", "Deleted", "Deleted", "Deleted",
+                "Deleted")), null);
+        Assert.Equal(KmDeletionCallbackOutcome.Accepted,
+            await new KmDocumentDeletionV2CallbackService(factory).ApplyAsync(callback));
+        await using var verify = factory.CreateDbContext();
+        Assert.False(await verify.VendorFiles.AnyAsync(x => x.Id == file.Id));
+        Assert.Equal(VendorFileDeletionStatuses.Completed,
+            (await verify.VendorFileDeletionJobs.SingleAsync(x =>
+                x.VendorFileId == file.Id)).Status);
+    }
+
     [Theory]
     [InlineData("notes.txt", "text/plain")]
     [InlineData("label.png", "image/png")]
@@ -153,7 +199,87 @@ public sealed class VendorAttachmentLifecycleTests
         Assert.Empty(check.VendorFiles);
     }
 
-    private static VendorFile Seed(TestDbFactory factory,
+    [Fact]
+    public async Task SentVendorDeletionUsesV2HoldCallbackIdempotencyAndLocalCleanup()
+    {
+        var factory = new TestDbFactory(Guid.NewGuid().ToString("N"));
+        var file = Seed(factory);
+        var ingestion = new VendorMockKmClient();
+        Assert.Equal(1, await Worker(factory, ingestion, OptionsForVendor(true)).ProcessBatchAsync());
+
+        VendorFileDeletionRequestResult requested;
+        await using (var db = factory.CreateDbContext())
+        {
+            requested = Assert.IsType<VendorFileDeletionRequestResult>(
+                await new VendorFileDeletionService(db).RequestAsync(file.Id, "writer"));
+            Assert.Equal(VendorFileDeletionStatuses.Pending, requested.Status);
+            await Assert.ThrowsAsync<FileNotFoundException>(() =>
+                new SIT.DepartmentSystem.Web.Services.Implementations.VendorService(
+                    db, new ManagedAssetFileStorage(db)).DownloadAsync(file.Id));
+        }
+
+        var deletionApi = new VendorDeletionApi();
+        var dispatcher = DeletionDispatcher(factory, deletionApi);
+        Assert.Equal(1, await dispatcher.ProcessBatchAsync());
+        var request = Assert.Single(deletionApi.Requests);
+        Assert.Equal("2.0", request.SchemaVersion);
+        Assert.Equal(KmDocumentDeletionV2SourceTypes.VendorFile, request.Resource.SourceType);
+        Assert.Equal(file.Id, request.Resource.CanonicalIngestionEventId);
+        Assert.Equal(file.VendorId, request.Resource.VendorId);
+        Assert.Equal("DocumentVersion", request.Resource.Scope);
+
+        var now = DateTimeOffset.UtcNow;
+        var callbackId = Guid.NewGuid();
+        var completed = new KmDocumentDeletionV2Callback("2.0", callbackId, "CSIT",
+            request.DeletionRequestId, deletionApi.JobId, request.Resource, "Completed",
+            new KmDeletionTimestamps(now, now.AddSeconds(2), null),
+            new KmDeletionResult(true, now.AddSeconds(1), new KmDeletionCleanup(
+                "Deleted", "Deleted", "Deleted", "Deleted", "Deleted", "NotPresent",
+                "Deleted")), null);
+        var callbacks = new KmDocumentDeletionV2CallbackService(factory);
+        Assert.Equal(KmDeletionCallbackOutcome.Accepted, await callbacks.ApplyAsync(completed));
+        Assert.Equal(KmDeletionCallbackOutcome.Accepted, await callbacks.ApplyAsync(completed));
+        Assert.Equal(KmDeletionCallbackOutcome.Conflict,
+            await callbacks.ApplyAsync(completed with { Status = "Processing", Result = null,
+                Timestamps = new KmDeletionTimestamps(now, null, null) }));
+
+        await using var check = factory.CreateDbContext();
+        Assert.False(await check.VendorFiles.AnyAsync(x => x.Id == file.Id));
+        Assert.False(await check.KmIntegrationOutbox.AnyAsync(x => x.SourceEntityId == file.Id));
+        Assert.Equal(VendorFileDeletionStatuses.Completed,
+            (await check.VendorFileDeletionJobs.SingleAsync()).Status);
+        Assert.Single(await check.KmDocumentDeletionV2Callbacks.ToListAsync());
+    }
+
+    [Fact]
+    public async Task VendorDeletionFailedCallbackRetriesWithSameRequestAndJobIdentity()
+    {
+        var factory = new TestDbFactory(Guid.NewGuid().ToString("N"));
+        var file = Seed(factory);
+        Assert.Equal(1, await Worker(factory, new VendorMockKmClient(),
+            OptionsForVendor(true)).ProcessBatchAsync());
+        await using (var db = factory.CreateDbContext())
+            await new VendorFileDeletionService(db).RequestAsync(file.Id, "writer");
+        var api = new VendorDeletionApi();
+        var dispatcher = DeletionDispatcher(factory, api);
+        Assert.Equal(1, await dispatcher.ProcessBatchAsync());
+        var request = Assert.Single(api.Requests);
+        var now = DateTimeOffset.UtcNow;
+        var failed = new KmDocumentDeletionV2Callback("2.0", Guid.NewGuid(), "CSIT",
+            request.DeletionRequestId, api.JobId, request.Resource, "Failed",
+            new KmDeletionTimestamps(now, null, now.AddSeconds(1)), null,
+            new KmDeletionError("KM_BUSY", "retry", true));
+        Assert.Equal(KmDeletionCallbackOutcome.Accepted,
+            await new KmDocumentDeletionV2CallbackService(factory).ApplyAsync(failed));
+        Assert.Equal(1, await dispatcher.ProcessBatchAsync());
+        Assert.Equal(2, api.Requests.Count);
+        Assert.All(api.Requests, x => Assert.Equal(request.DeletionRequestId,
+            x.DeletionRequestId));
+        await using var check = factory.CreateDbContext();
+        Assert.Equal(api.JobId, (await check.VendorFileDeletionJobs.SingleAsync()).KmDeletionJobId);
+    }
+
+    private static VendorFile Seed(IDbContextFactory<AppDbContext> factory,
         string originalFileName = "manual.pdf", string contentType = "application/pdf")
     {
         using var db = factory.CreateDbContext();
@@ -196,9 +322,20 @@ public sealed class VendorAttachmentLifecycleTests
         RetryScheduleSeconds = [1], PollSeconds = 1
     };
 
-    private static KmSyncWorker Worker(TestDbFactory factory, IKmIntegrationClient client,
+    private static KmSyncWorker Worker(IDbContextFactory<AppDbContext> factory, IKmIntegrationClient client,
         KmIntegrationOptions options) => new(factory, client, Options.Create(options),
         NullLogger<KmSyncWorker>.Instance);
+
+    private static KmDeletionDispatchService DeletionDispatcher(IDbContextFactory<AppDbContext> factory,
+        IKmDocumentDeletionV2Client client) => new(factory, new NoopDeletionClient(),
+        Options.Create(new KmDeletionOptions
+        {
+            Enabled = true, VendorEnabled = true, Scope = "csit.document.delete"
+        }), Options.Create(new KmIntegrationOptions
+        {
+            BaseUrl = "https://km.invalid/", TimeoutSeconds = 2, LeaseSeconds = 30,
+            MaxRetryCount = 4
+        }), client);
 
     private sealed class VendorMockKmClient : IKmIntegrationClient
     {
@@ -216,6 +353,25 @@ public sealed class VendorAttachmentLifecycleTests
             return Task.FromResult(KmDeliveryResult.Success(
                 "vendor-job-" + request.CsitJobId.ToString("N")));
         }
+    }
+
+    private sealed class VendorDeletionApi : IKmDocumentDeletionV2Client
+    {
+        public string JobId { get; } = "KM-VENDOR-DELETE-1";
+        public List<KmDocumentDeletionV2Request> Requests { get; } = [];
+        public Task<KmDeletionDeliveryResult> SubmitAsync(KmDocumentDeletionV2Request request,
+            CancellationToken cancellationToken = default)
+        {
+            Requests.Add(request);
+            return Task.FromResult(KmDeletionDeliveryResult.Success(JobId));
+        }
+    }
+
+    private sealed class NoopDeletionClient : IKmDeletionClient
+    {
+        public Task<KmDeletionDeliveryResult> SubmitAsync(KmDeletionRequest request,
+            CancellationToken cancellationToken = default) => Task.FromResult(
+                KmDeletionDeliveryResult.Failure(false, "UNEXPECTED_V1"));
     }
 
     private static ClaimsPrincipal User(string account, bool write = false,
@@ -272,6 +428,16 @@ public sealed class VendorAttachmentLifecycleTests
             new DbContextOptionsBuilder<AppDbContext>().UseInMemoryDatabase(database).Options;
         public AppDbContext CreateDbContext() => new(_options);
         public Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult(CreateDbContext());
+    }
+
+    private sealed class PostgreSqlFactory(string connection) : IDbContextFactory<AppDbContext>
+    {
+        private readonly DbContextOptions<AppDbContext> options =
+            new DbContextOptionsBuilder<AppDbContext>().UseNpgsql(connection).Options;
+        public AppDbContext CreateDbContext() => new(options);
+        public Task<AppDbContext> CreateDbContextAsync(
+            CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
     }
 }

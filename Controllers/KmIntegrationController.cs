@@ -205,6 +205,13 @@ public sealed class KmIntegrationController(
                 callback.JobId, callback.DocumentId, callback.Version);
             return Conflict(new { error = "callback_mismatch" });
         }
+        if (row.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile &&
+            await db.VendorFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+                x.VendorFileId == row.SourceEntityId, cancellationToken) ||
+            row.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
+            await db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+                x.ApparatusFileId == row.SourceEntityId, cancellationToken))
+            return Conflict(new { error = "deletion_in_progress" });
         if (row.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile)
         {
             var formallyArchived = await db.DocumentProcessingJobs.AsNoTracking().AnyAsync(x =>
@@ -265,6 +272,8 @@ public sealed class KmIntegrationController(
         if (file is null || file.ArchiveStatus != FileArchiveStatuses.Archived ||
             file.ApprovalOperationId is null || file.ApprovedAt is null ||
             string.IsNullOrWhiteSpace(file.ApprovedBy) || string.IsNullOrWhiteSpace(file.Sha256) ||
+            await db.VendorFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+                x.VendorFileId == vendorFileId, cancellationToken) ||
             !(await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
                   x.Id == file.ApprovalOperationId && x.SourceModuleCode == "vendor" &&
                   x.Status == ApprovalStatus.Committed && x.ReviewerAccount != null &&
@@ -319,8 +328,7 @@ public sealed class KmIntegrationController(
             file.ArchiveStatus != FileArchiveStatuses.Archived ||
             string.IsNullOrWhiteSpace(file.Sha256) ||
             await db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
-                x.ApparatusFileId == apparatusFileId &&
-                x.Status != EquipmentFileDeletionStatuses.Completed, cancellationToken) ||
+                x.ApparatusFileId == apparatusFileId, cancellationToken) ||
             !(await db.PendingSubmissions.AsNoTracking().AnyAsync(x =>
                   x.Id == apparatusFileId && x.SourceModuleCode == "equipment" &&
                   x.Status == ApprovalStatus.Committed && x.ReviewerAccount != null &&
@@ -384,8 +392,7 @@ public sealed class KmIntegrationController(
             return Conflict(new { error = "callback_mismatch" });
 
         if (await db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
-            x.ApparatusFileId == row.SourceEntityId &&
-            x.Status != EquipmentFileDeletionStatuses.Completed, cancellationToken))
+            x.ApparatusFileId == row.SourceEntityId, cancellationToken))
             return Conflict(new { error = "equipment_document_deletion_pending" });
 
         var file = await db.ApparatusFiles.Include(x => x.Apparatus)

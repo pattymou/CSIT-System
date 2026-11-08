@@ -106,12 +106,13 @@ public sealed class KmSyncWorker(
                         ON application.id = attachment.verification_application_id
                       WHERE case_deletion.record_id = application.module_record_id
                         AND case_deletion.status IN ('WaitingForKm', 'KmVerified', 'LocalReady', 'LocalCleanup', 'Completed')))
-                  OR (@vendor_enabled AND event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile')
+                  OR (@vendor_enabled AND event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile'
+                    AND NOT EXISTS (SELECT 1 FROM vendor_file_deletion_jobs AS vendor_deletion
+                      WHERE vendor_deletion.vendor_file_id = km_integration_outbox.source_entity_id))
                   OR (@equipment_enabled AND event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived')
                     AND source_entity_type = 'ApparatusFile'
                     AND NOT EXISTS (SELECT 1 FROM equipment_file_deletion_jobs AS equipment_deletion
-                      WHERE equipment_deletion.apparatus_file_id = km_integration_outbox.source_entity_id
-                        AND equipment_deletion.status <> 'Completed'))
+                      WHERE equipment_deletion.apparatus_file_id = km_integration_outbox.source_entity_id))
                   OR event_type NOT IN ('TestReportCommitted', 'DocumentLibraryFileUploaded',
                        'VerificationApplicationAttachmentArchived', 'VendorFileArchived',
                        'EquipmentDocumentArchived', 'EquipmentAttachmentArchived')) AND
@@ -193,14 +194,15 @@ public sealed class KmSyncWorker(
                             deletion.Status == "Completed"))) ||
                      (options.VendorEnabled &&
                       x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
-                       x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile) ||
+                       x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile &&
+                       !db.VendorFileDeletionJobs.Any(deletion =>
+                           deletion.VendorFileId == x.SourceEntityId)) ||
                       (options.EquipmentEnabled &&
                        (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
                         x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                        x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                        !db.EquipmentFileDeletionJobs.Any(deletion =>
-                           deletion.ApparatusFileId == x.SourceEntityId &&
-                           deletion.Status != EquipmentFileDeletionStatuses.Completed)) ||
+                           deletion.ApparatusFileId == x.SourceEntityId)) ||
                       (x.EventType != KmIntegrationEventTypes.TestReportCommitted &&
                        x.EventType != KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
                        x.EventType != KmIntegrationEventTypes.VerificationApplicationAttachmentArchived &&
@@ -613,6 +615,8 @@ public sealed class KmSyncWorker(
             row.EventId != row.SourceEntityId || row.DocumentId != row.SourceEntityId || row.Version != 1 ||
             !TryGetServiceBaseUri(options, out var serviceBase))
             return null;
+        if (await db.VendorFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+            x.VendorFileId == row.SourceEntityId, cancellationToken)) return null;
         var file = await db.VendorFiles.AsNoTracking().Include(x => x.Vendor)
             .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);
         if (file?.Vendor is null || file.ArchiveStatus != FileArchiveStatuses.Archived ||
@@ -659,8 +663,7 @@ public sealed class KmSyncWorker(
             !TryGetServiceBaseUri(options, out var serviceBase))
             return null;
         if (await db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
-            x.ApparatusFileId == row.SourceEntityId &&
-            x.Status != EquipmentFileDeletionStatuses.Completed, cancellationToken))
+            x.ApparatusFileId == row.SourceEntityId, cancellationToken))
             return null;
         var file = await db.ApparatusFiles.AsNoTracking().Include(x => x.Apparatus).ThenInclude(x => x.Vendor)
             .SingleOrDefaultAsync(x => x.Id == row.SourceEntityId, cancellationToken);

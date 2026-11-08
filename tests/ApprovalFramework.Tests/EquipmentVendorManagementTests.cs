@@ -135,6 +135,11 @@ public sealed class EquipmentVendorManagementTests
                 await service.ArchiveApprovedFileAsync(id, file, "tester",
                     operation, "approver", DateTime.UtcNow);
             }
+            db.ApprovalAuditEvents.AddRange(operations.Select(operation =>
+                ApprovalAuditEvent.Create(operation, "vendors", "vendor",
+                    ApprovalAuditActions.ApprovalBypassed, "approver", DateTime.UtcNow,
+                    null, ApprovalStatus.Committed)));
+            await db.SaveChangesAsync();
 
             var retryId = await service.ArchiveApprovedFileAsync(id,
                 File("manual.pdf", "application/pdf", "pdf-content"), "tester",
@@ -164,9 +169,10 @@ public sealed class EquipmentVendorManagementTests
             Assert.False(Directory.Exists(Path.Combine(root, "設備儀器管理", "廠商資訊", "Keysight Technologies")));
             var downloaded = await service.DownloadAsync(before.Files.Single(x => x.FileName == "manual.pdf").Id);
             Assert.Equal("pdf-content", Encoding.UTF8.GetString(downloaded.Content));
-            var blockedDelete = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-                service.DeleteFileAsync(before.Files[0].Id));
-            Assert.Contains("KM", blockedDelete.Message);
+            var deletion = await service.DeleteFileAsync(before.Files[0].Id, "writer");
+            Assert.NotNull(deletion);
+            Assert.Equal(VendorFileDeletionStatuses.Completed, deletion.Status);
+            Assert.False(await db.VendorFiles.AnyAsync(x => x.Id == before.Files[0].Id));
         }
         finally { DeleteRoot(root); }
     }

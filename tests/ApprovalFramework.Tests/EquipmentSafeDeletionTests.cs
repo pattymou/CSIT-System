@@ -164,7 +164,7 @@ public sealed class EquipmentSafeDeletionTests
             var adapter = new MockEquipmentDeletionApi();
             Assert.Equal(2, await Dispatcher(factory, adapter).ProcessBatchAsync());
             Assert.Equal(2, adapter.Requests.Count);
-            var callbacks = new EquipmentFileDeletionCallbackService(factory);
+            var callbacks = new KmDocumentDeletionV2CallbackService(factory);
             foreach (var request in adapter.Requests)
             {
                 var callback = Completed(request, adapter.JobId(request.DeletionRequestId));
@@ -758,7 +758,7 @@ public sealed class EquipmentSafeDeletionTests
             rawDataExport);
 
     private static KmDeletionDispatchService Dispatcher(Factory factory,
-        IEquipmentDocumentDeletionAdapter adapter) => new(factory, new NoopCaseDeletionClient(),
+        IKmDocumentDeletionV2Client adapter) => new(factory, new NoopCaseDeletionClient(),
         Options.Create(new KmDeletionOptions
         { Enabled = true, EquipmentEnabled = true, Scope = "mock.equipment.delete" }),
         Options.Create(new KmIntegrationOptions
@@ -894,11 +894,11 @@ public sealed class EquipmentSafeDeletionTests
     private static Task<string> EquipmentFolderAsync(AppDbContext db, string equipmentId) =>
         new ManagedAssetFileStorage(db).EquipmentFolderAsync(equipmentId);
 
-    private static EquipmentDocumentDeletionCallback Completed(
-        EquipmentDocumentDeletionRequest request, string jobId)
+    private static KmDocumentDeletionV2Callback Completed(
+        KmDocumentDeletionV2Request request, string jobId)
     {
         var now = DateTimeOffset.UtcNow;
-        return new("CSIT.EquipmentDocumentDeletion", "draft-1", Guid.NewGuid(), "CSIT",
+        return new("2.0", Guid.NewGuid(), "CSIT",
             request.DeletionRequestId, jobId, request.Resource, "Completed",
             new KmDeletionTimestamps(now, now.AddSeconds(2), null),
             new KmDeletionResult(true, now.AddSeconds(1),
@@ -953,12 +953,12 @@ public sealed class EquipmentSafeDeletionTests
         }
     }
 
-    private sealed class MockEquipmentDeletionApi : IEquipmentDocumentDeletionAdapter
+    private sealed class MockEquipmentDeletionApi : IKmDocumentDeletionV2Client
     {
         private readonly Dictionary<Guid, string> jobs = [];
-        public List<EquipmentDocumentDeletionRequest> Requests { get; } = [];
+        public List<KmDocumentDeletionV2Request> Requests { get; } = [];
         public string JobId(Guid requestId) => jobs[requestId];
-        public Task<KmDeletionDeliveryResult> SubmitAsync(EquipmentDocumentDeletionRequest request,
+        public Task<KmDeletionDeliveryResult> SubmitAsync(KmDocumentDeletionV2Request request,
             CancellationToken cancellationToken = default)
         {
             Requests.Add(request);

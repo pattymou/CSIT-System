@@ -18,13 +18,19 @@ public sealed class EquipmentFileKmDeletionTests
         if (string.IsNullOrWhiteSpace(connection)) return;
         var info = new NpgsqlConnectionStringBuilder(connection);
         Assert.Equal("127.0.0.1", info.Host);
-        Assert.Equal(55434, info.Port);
-        Assert.StartsWith("csit_equipment_deletion_", info.Database,
-            StringComparison.Ordinal);
+        Assert.True(
+            info.Port == 55434 && info.Database!.StartsWith("csit_equipment_deletion_",
+                StringComparison.Ordinal) ||
+            info.Port == 55435 && info.Database!.StartsWith("csit_task_d_",
+                StringComparison.Ordinal));
 
         var factory = new Factory(connection);
         await using (var migrate = factory.CreateDbContext())
+        {
             await migrate.Database.MigrateAsync();
+            Assert.Contains("20261108070415_AddKmTaskDDocumentDeletionV141",
+                await migrate.Database.GetAppliedMigrationsAsync());
+        }
         var root = NewRoot();
         try
         {
@@ -66,11 +72,26 @@ public sealed class EquipmentFileKmDeletionTests
                     """);
             }
             Assert.Equal(1, await Dispatcher(factory, adapter).ProcessBatchAsync());
-            Assert.Single(adapter.Requests);
+            var request = Assert.Single(adapter.Requests);
+            await using (var dispatched = factory.CreateDbContext())
+                Assert.Equal("CANCELLED_BY_DELETION",
+                    (await dispatched.KmIntegrationOutbox.SingleAsync(x =>
+                        x.SourceEntityId == leased)).LastErrorCode);
+            var callback = Completed(request, adapter.JobId(request.DeletionRequestId));
+            var callbacks = new KmDocumentDeletionV2CallbackService(factory);
+            Assert.Equal(KmDeletionCallbackOutcome.Accepted,
+                await callbacks.ApplyAsync(callback));
+            Assert.Equal(KmDeletionCallbackOutcome.Accepted,
+                await callbacks.ApplyAsync(callback));
             await using var verify = factory.CreateDbContext();
-            Assert.Equal("CANCELLED_BY_DELETION",
-                (await verify.KmIntegrationOutbox.SingleAsync(x =>
-                    x.SourceEntityId == leased)).LastErrorCode);
+            Assert.False(await verify.KmIntegrationOutbox.AnyAsync(x =>
+                x.SourceEntityId == leased));
+            Assert.False(await verify.ApparatusFiles.AnyAsync(x => x.Id == leased));
+            Assert.Equal(EquipmentFileDeletionStatuses.Completed,
+                (await verify.EquipmentFileDeletionJobs.SingleAsync(x =>
+                    x.ApparatusFileId == leased)).Status);
+            Assert.Single(await verify.KmDocumentDeletionV2Callbacks.Where(x =>
+                x.DeletionRequestId == request.DeletionRequestId).ToListAsync());
         }
         finally { Directory.Delete(root, true); }
     }
@@ -276,8 +297,8 @@ public sealed class EquipmentFileKmDeletionTests
             var adapter = new MockEquipmentDeletionApi();
             Assert.Equal(1, await Dispatcher(factory, adapter).ProcessBatchAsync());
             var accepted = Assert.Single(adapter.Requests);
-            Assert.Equal(targetId, accepted.Resource.ApparatusFileId);
-            Assert.Equal("ApparatusFile", accepted.Resource.SourceEntityType);
+            Assert.Equal(targetId, accepted.Resource.SourceEntityId);
+            Assert.Equal("EquipmentAttachment", accepted.Resource.SourceType);
 
             await using (var before = factory.CreateDbContext())
             {
@@ -286,7 +307,7 @@ public sealed class EquipmentFileKmDeletionTests
             }
 
             var callback = Completed(accepted, adapter.JobId(accepted.DeletionRequestId));
-            var callbacks = new EquipmentFileDeletionCallbackService(factory);
+            var callbacks = new KmDocumentDeletionV2CallbackService(factory);
             Assert.Equal(KmDeletionCallbackOutcome.Accepted, await callbacks.ApplyAsync(callback));
             Assert.Equal(KmDeletionCallbackOutcome.Accepted, await callbacks.ApplyAsync(callback));
             Assert.Equal(KmDeletionCallbackOutcome.Conflict,
@@ -302,7 +323,7 @@ public sealed class EquipmentFileKmDeletionTests
             Assert.Equal(EquipmentFileDeletionStatuses.Completed, job.Status);
             Assert.NotNull(job.KmVerifiedAt);
             Assert.NotNull(job.DbRecordDeletedAt);
-            Assert.Single(await verify.EquipmentFileDeletionCallbacks.ToListAsync());
+            Assert.Single(await verify.KmDocumentDeletionV2Callbacks.ToListAsync());
         }
         finally { Directory.Delete(root, true); }
     }
@@ -331,7 +352,7 @@ public sealed class EquipmentFileKmDeletionTests
             Assert.Equal(1, await Dispatcher(factory, adapter).ProcessBatchAsync());
             var request = adapter.Requests.Last();
             var failedCallback = Failed(request, "KM-EQUIPMENT-RETRY");
-            var callbacks = new EquipmentFileDeletionCallbackService(factory);
+            var callbacks = new KmDocumentDeletionV2CallbackService(factory);
             Assert.Equal(KmDeletionCallbackOutcome.Accepted,
                 await callbacks.ApplyAsync(failedCallback));
             await using (var failed = factory.CreateDbContext())
@@ -346,7 +367,7 @@ public sealed class EquipmentFileKmDeletionTests
     }
 
     private static KmDeletionDispatchService Dispatcher(Factory factory,
-        IEquipmentDocumentDeletionAdapter adapter) => new(factory, new NoopCaseDeletionClient(),
+        IKmDocumentDeletionV2Client adapter) => new(factory, new NoopCaseDeletionClient(),
         Options.Create(new KmDeletionOptions
         { Enabled = true, EquipmentEnabled = true, Scope = "mock.equipment.delete" }),
         Options.Create(new KmIntegrationOptions
@@ -355,11 +376,11 @@ public sealed class EquipmentFileKmDeletionTests
             MaxRetryCount = 4
         }), adapter);
 
-    private static EquipmentDocumentDeletionCallback Completed(
-        EquipmentDocumentDeletionRequest request, string jobId)
+    private static KmDocumentDeletionV2Callback Completed(
+        KmDocumentDeletionV2Request request, string jobId)
     {
         var now = DateTimeOffset.UtcNow;
-        return new("CSIT.EquipmentDocumentDeletion", "draft-1", Guid.NewGuid(), "CSIT",
+        return new("2.0", Guid.NewGuid(), "CSIT",
             request.DeletionRequestId, jobId, request.Resource, "Completed",
             new KmDeletionTimestamps(now, now.AddSeconds(2), null),
             new KmDeletionResult(true, now.AddSeconds(1),
@@ -367,11 +388,11 @@ public sealed class EquipmentFileKmDeletionTests
                     "Deleted", "Deleted", "NotPresent")), null);
     }
 
-    private static EquipmentDocumentDeletionCallback Failed(
-        EquipmentDocumentDeletionRequest request, string jobId)
+    private static KmDocumentDeletionV2Callback Failed(
+        KmDocumentDeletionV2Request request, string jobId)
     {
         var now = DateTimeOffset.UtcNow;
-        return new("CSIT.EquipmentDocumentDeletion", "draft-1", Guid.NewGuid(), "CSIT",
+        return new("2.0", Guid.NewGuid(), "CSIT",
             request.DeletionRequestId, jobId, request.Resource, "Failed",
             new KmDeletionTimestamps(now, null, now.AddSeconds(1)), null,
             new KmDeletionError("KM_TEMPORARY", "Synthetic retryable failure.", true));
@@ -430,13 +451,13 @@ public sealed class EquipmentFileKmDeletionTests
     }
 
     private sealed class MockEquipmentDeletionApi(params KmDeletionDeliveryResult[] results)
-        : IEquipmentDocumentDeletionAdapter
+        : IKmDocumentDeletionV2Client
     {
         private readonly Queue<KmDeletionDeliveryResult> queued = new(results);
         private readonly Dictionary<Guid, string> jobs = [];
-        public List<EquipmentDocumentDeletionRequest> Requests { get; } = [];
+        public List<KmDocumentDeletionV2Request> Requests { get; } = [];
         public string JobId(Guid requestId) => jobs[requestId];
-        public Task<KmDeletionDeliveryResult> SubmitAsync(EquipmentDocumentDeletionRequest request,
+        public Task<KmDeletionDeliveryResult> SubmitAsync(KmDocumentDeletionV2Request request,
             CancellationToken cancellationToken = default)
         {
             Assert.True(request.IsValid());

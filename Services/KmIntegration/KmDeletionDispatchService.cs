@@ -13,7 +13,7 @@ public sealed class KmDeletionDispatchService(
     IKmDeletionClient client,
     IOptions<KmDeletionOptions> deletion,
     IOptions<KmIntegrationOptions> integration,
-    IEquipmentDocumentDeletionAdapter? equipmentAdapter = null)
+    IKmDocumentDeletionV2Client? v2Client = null)
 {
     public async Task<int> ProcessBatchAsync(int maxCount = 20,
         CancellationToken cancellationToken = default)
@@ -23,7 +23,10 @@ public sealed class KmDeletionDispatchService(
         var documentCount = remaining == 0 ? 0 :
             await ProcessDocumentBatchAsync(remaining, cancellationToken);
         remaining = Math.Max(0, remaining - documentCount);
-        return caseCount + documentCount + (remaining == 0 ? 0 :
+        var vendorCount = remaining == 0 ? 0 :
+            await ProcessVendorBatchAsync(remaining, cancellationToken);
+        remaining = Math.Max(0, remaining - vendorCount);
+        return caseCount + documentCount + vendorCount + (remaining == 0 ? 0 :
             await ProcessEquipmentBatchAsync(remaining, cancellationToken));
     }
 
@@ -220,6 +223,111 @@ public sealed class KmDeletionDispatchService(
         return result.Accepted;
     }
 
+    private async Task<int> ProcessVendorBatchAsync(int maxCount,
+        CancellationToken cancellationToken)
+    {
+        if (!deletion.Value.Enabled || !deletion.Value.VendorEnabled) return 0;
+        var now = DateTime.UtcNow;
+        List<Guid> candidateIds;
+        await using (var db = await dbFactory.CreateDbContextAsync(cancellationToken))
+        {
+            candidateIds = await db.VendorFileDeletionJobs.AsNoTracking()
+                .Where(job => job.AttemptCount < integration.Value.MaxRetryCount &&
+                    (job.Status == VendorFileDeletionStatuses.Pending ||
+                     job.Status == VendorFileDeletionStatuses.Failed &&
+                        job.LastErrorRetryable == true ||
+                     job.Status == VendorFileDeletionStatuses.Dispatching &&
+                        job.LeaseExpiresAt <= now) &&
+                    !db.KmIntegrationOutbox.Any(outbox =>
+                        outbox.EventType == KmIntegrationEventTypes.VendorFileArchived &&
+                        outbox.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile &&
+                        outbox.SourceEntityId == job.VendorFileId &&
+                        outbox.Status == KmIntegrationStatus.Dispatching &&
+                        outbox.LeaseExpiresAt > now))
+                .OrderBy(job => job.RequestedAt).ThenBy(job => job.Id)
+                .Select(job => job.Id).Take(maxCount).ToListAsync(cancellationToken);
+        }
+        var accepted = 0;
+        foreach (var id in candidateIds)
+            if (await DispatchVendorAsync(id, cancellationToken)) accepted++;
+        return accepted;
+    }
+
+    public async Task<bool> DispatchVendorAsync(Guid jobId,
+        CancellationToken cancellationToken = default)
+    {
+        if (!deletion.Value.Enabled || !deletion.Value.VendorEnabled) return false;
+        ValidateConfiguration();
+        Guid lease;
+        KmDocumentDeletionV2Request request;
+        await using (var db = await dbFactory.CreateDbContextAsync(cancellationToken))
+        {
+            await using var transaction = db.Database.IsRelational()
+                ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
+            var job = db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true
+                ? await db.VendorFileDeletionJobs.FromSqlInterpolated($"""
+                    SELECT * FROM vendor_file_deletion_jobs WHERE id = {jobId} FOR UPDATE
+                    """).SingleOrDefaultAsync(cancellationToken)
+                : await db.VendorFileDeletionJobs.SingleOrDefaultAsync(x => x.Id == jobId,
+                    cancellationToken);
+            if (job is null || job.AttemptCount >= integration.Value.MaxRetryCount ||
+                !await db.VendorFiles.AnyAsync(x => x.Id == job.VendorFileId,
+                    cancellationToken)) return false;
+            var now = DateTime.UtcNow;
+            var ingestion = db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true
+                ? await db.KmIntegrationOutbox.FromSqlInterpolated($"""
+                    SELECT * FROM km_integration_outbox
+                    WHERE event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile'
+                      AND source_entity_id = {job.VendorFileId} FOR UPDATE
+                    """).SingleOrDefaultAsync(cancellationToken)
+                : await db.KmIntegrationOutbox.SingleOrDefaultAsync(outbox =>
+                    outbox.EventType == KmIntegrationEventTypes.VendorFileArchived &&
+                    outbox.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile &&
+                    outbox.SourceEntityId == job.VendorFileId, cancellationToken);
+            if (ingestion is null || ingestion.EventId != job.CanonicalIngestionEventId ||
+                ingestion.DocumentId != job.DocumentId || ingestion.Version != job.Version)
+                return false;
+            if (ingestion.Status == KmIntegrationStatus.Dispatching)
+            {
+                if (ingestion.LeaseExpiresAt > now) return false;
+                if (ingestion.LeaseToken.HasValue)
+                    ingestion.DeliveryFailed(ingestion.LeaseToken.Value,
+                        "CANCELLED_BY_DELETION",
+                        "Vendor deletion took ownership after the ingestion lease expired.",
+                        null, now);
+            }
+            try { lease = job.ClaimDispatch(now,
+                TimeSpan.FromSeconds(integration.Value.LeaseSeconds)); }
+            catch (InvalidOperationException) { return false; }
+            request = job.ToRequest();
+            if (!request.IsValid()) return false;
+            await db.SaveChangesAsync(cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        }
+
+        var result = await (v2Client ?? new UnavailableKmDocumentDeletionV2Client())
+            .SubmitAsync(request, cancellationToken);
+        await using (var db = await dbFactory.CreateDbContextAsync(cancellationToken))
+        {
+            await using var transaction = db.Database.IsRelational()
+                ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken) : null;
+            var job = db.Database.ProviderName?.Contains("Npgsql", StringComparison.OrdinalIgnoreCase) == true
+                ? await db.VendorFileDeletionJobs.FromSqlInterpolated($"""
+                    SELECT * FROM vendor_file_deletion_jobs WHERE id = {jobId} FOR UPDATE
+                    """).SingleAsync(cancellationToken)
+                : await db.VendorFileDeletionJobs.SingleAsync(x => x.Id == jobId,
+                    cancellationToken);
+            if (job.LeaseToken != lease || job.Status != VendorFileDeletionStatuses.Dispatching)
+                return false;
+            if (result.Accepted) job.DeliveryAccepted(lease, result.JobId!, DateTime.UtcNow);
+            else job.DeliveryFailed(lease, result.ErrorCode ?? "UNKNOWN", null,
+                result.Retryable, DateTime.UtcNow);
+            await db.SaveChangesAsync(cancellationToken);
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        }
+        return result.Accepted;
+    }
+
     private async Task<int> ProcessEquipmentBatchAsync(int maxCount,
         CancellationToken cancellationToken)
     {
@@ -257,7 +365,7 @@ public sealed class KmDeletionDispatchService(
         if (!deletion.Value.Enabled || !deletion.Value.EquipmentEnabled) return false;
         ValidateConfiguration();
         Guid lease;
-        EquipmentDocumentDeletionRequest request;
+        KmDocumentDeletionV2Request request;
         await using (var db = await dbFactory.CreateDbContextAsync(cancellationToken))
         {
             await using var transaction = db.Database.IsRelational()
@@ -285,6 +393,9 @@ public sealed class KmDeletionDispatchService(
                      outbox.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                     outbox.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                     outbox.SourceEntityId == job.ApparatusFileId, cancellationToken);
+            if (ingestion is null || ingestion.EventId != job.CanonicalIngestionEventId ||
+                ingestion.DocumentId != job.DocumentId || ingestion.Version != job.Version)
+                return false;
             if (ingestion?.Status == KmIntegrationStatus.Dispatching)
             {
                 if (ingestion.LeaseExpiresAt > now) return false;
@@ -298,12 +409,13 @@ public sealed class KmDeletionDispatchService(
                 TimeSpan.FromSeconds(integration.Value.LeaseSeconds)); }
             catch (InvalidOperationException) { return false; }
             request = job.ToRequest();
+            if (!request.IsValid()) return false;
             await db.SaveChangesAsync(cancellationToken);
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
         }
 
-        var adapter = equipmentAdapter ?? new UnavailableEquipmentDocumentDeletionAdapter();
-        var result = await adapter.SubmitAsync(request, cancellationToken);
+        var result = await (v2Client ?? new UnavailableKmDocumentDeletionV2Client())
+            .SubmitAsync(request, cancellationToken);
         await using (var db = await dbFactory.CreateDbContextAsync(cancellationToken))
         {
             await using var transaction = db.Database.IsRelational()

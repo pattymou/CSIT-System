@@ -17,6 +17,7 @@ public static class KmIntegrationAuthorization
     public const string DocumentReadScope = "csit.document.read";
     public const string StatusWriteScope = "csit.ingestion.status.write";
     public const string AnalysisStatusWriteScope = "csit.km.status.write";
+    public const string DeletionStatusWriteScope = "csit.km.deletion-status.write";
 }
 
 // The service bearer validator is deliberately unavailable until Client Credentials is delivered.

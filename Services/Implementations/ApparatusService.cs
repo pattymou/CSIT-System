@@ -675,7 +675,7 @@ public class ApparatusService : IApparatusService
             .SingleOrDefaultAsync(x => x.Id == fileId);
         if (file is null) return false;
         if (await _db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
-            x.ApparatusFileId == fileId && x.Status != EquipmentFileDeletionStatuses.Completed))
+            x.ApparatusFileId == fileId))
             throw new InvalidOperationException("設備附件正在執行安全刪除，禁止更新 Metadata。");
         if (file.Apparatus.ModuleCode != "equipment" || string.IsNullOrWhiteSpace(file.MetadataJson))
             throw new InvalidOperationException("此檔案目前沒有可確認的設備 Metadata 建議。");
@@ -1235,6 +1235,10 @@ public class ApparatusService : IApparatusService
     private async Task EnsureEquipmentOutboxAsync(
         Apparatus apparatus, ApparatusFile file, bool saveChanges = true)
     {
+        if (await _db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
+            x.ApparatusFileId == file.Id))
+            throw new InvalidOperationException(
+                "This Equipment attachment version has a durable deletion hold and cannot be recreated.");
         if (!await _db.KmIntegrationOutbox.AnyAsync(x =>
                 (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
                  x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&

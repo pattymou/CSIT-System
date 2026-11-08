@@ -1049,6 +1049,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("integer")
                         .HasColumnName("attempt_count");
 
+                    b.Property<Guid?>("CanonicalIngestionEventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("canonical_ingestion_event_id");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
@@ -1108,6 +1112,12 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("physical_file_deleted_at");
 
+                    b.Property<string>("ReasonCode")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("reason_code");
+
                     b.Property<DateTime>("RequestedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("requested_at");
@@ -1156,7 +1166,7 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.ToTable("equipment_file_deletion_jobs", null, t =>
                         {
-                            t.HasCheckConstraint("ck_equipment_file_deletion_identity", "source_entity_type = 'ApparatusFile' AND apparatus_file_id = document_id AND version = 1");
+                            t.HasCheckConstraint("ck_equipment_file_deletion_identity", "source_entity_type = 'EquipmentAttachment' AND apparatus_file_id = document_id AND version = 1 AND reason_code IN ('SourceDeleted','VersionSuperseded','AdministrativeCleanup')");
 
                             t.HasCheckConstraint("ck_equipment_file_deletion_status", "status IN ('Pending','Dispatching','Accepted','Processing','Failed','KmVerified','LocalCleanup','CleanupFailed','Completed')");
                         });
@@ -1584,6 +1594,46 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                             t.HasCheckConstraint("ck_km_analysis_version", "version >= 1");
                         });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmDocumentDeletionV2CallbackReceipt", b =>
+                {
+                    b.Property<Guid>("CallbackId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("callback_id");
+
+                    b.Property<Guid>("DeletionRequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("deletion_request_id");
+
+                    b.Property<string>("PayloadSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("payload_sha256");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)")
+                        .HasColumnName("source_type");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.HasKey("CallbackId");
+
+                    b.HasIndex("SourceType", "DeletionRequestId");
+
+                    b.ToTable("km_v2_document_deletion_callbacks", (string)null);
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.KmIntegrationManualRetryAudit", b =>
@@ -8377,6 +8427,142 @@ namespace SIT.DepartmentSystem.Web.Migrations
                             t.HasCheckConstraint("ck_vendor_files_archive_status", "archive_status IN ('Pending','Archived','Failed')");
 
                             t.HasCheckConstraint("ck_vendor_files_metadata_verification", "metadata_verification_status IN ('NotApplicable','PendingVerification','Verified','Rejected')");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.VendorFileDeletionJob", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("attempt_count");
+
+                    b.Property<Guid?>("CanonicalIngestionEventId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("canonical_ingestion_event_id");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<DateTime?>("DbRecordDeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("db_record_deleted_at");
+
+                    b.Property<Guid>("DocumentId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("document_id");
+
+                    b.Property<string>("FileName")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("character varying(300)")
+                        .HasColumnName("file_name");
+
+                    b.Property<string>("KmDeletionJobId")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("km_deletion_job_id");
+
+                    b.Property<DateTime?>("KmVerifiedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("km_verified_at");
+
+                    b.Property<string>("LastErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("last_error_code");
+
+                    b.Property<string>("LastErrorMessage")
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("last_error_message");
+
+                    b.Property<bool?>("LastErrorRetryable")
+                        .HasColumnType("boolean")
+                        .HasColumnName("last_error_retryable");
+
+                    b.Property<DateTime?>("LeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("lease_expires_at");
+
+                    b.Property<Guid?>("LeaseToken")
+                        .HasColumnType("uuid")
+                        .HasColumnName("lease_token");
+
+                    b.Property<DateTime?>("PhysicalFileDeletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("physical_file_deleted_at");
+
+                    b.Property<string>("ReasonCode")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)")
+                        .HasColumnName("reason_code");
+
+                    b.Property<DateTime>("RequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("requested_at");
+
+                    b.Property<string>("RequestedBy")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("requested_by");
+
+                    b.Property<string>("Sha256")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("sha256");
+
+                    b.Property<string>("SourceType")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("character varying(60)")
+                        .HasColumnName("source_type");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.Property<Guid>("VendorFileId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("vendor_file_id");
+
+                    b.Property<Guid>("VendorId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("vendor_id");
+
+                    b.Property<int>("Version")
+                        .HasColumnType("integer")
+                        .HasColumnName("version");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("KmDeletionJobId")
+                        .IsUnique()
+                        .HasFilter("km_deletion_job_id IS NOT NULL");
+
+                    b.HasIndex("VendorFileId")
+                        .IsUnique();
+
+                    b.HasIndex("Status", "UpdatedAt");
+
+                    b.ToTable("vendor_file_deletion_jobs", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_vendor_file_deletion_identity", "source_type = 'VendorFile' AND vendor_file_id = document_id AND version = 1 AND reason_code IN ('SourceDeleted','VersionSuperseded','AdministrativeCleanup')");
+
+                            t.HasCheckConstraint("ck_vendor_file_deletion_status", "status IN ('Pending','Dispatching','Accepted','Processing','Failed','KmVerified','LocalCleanup','CleanupFailed','Completed')");
                         });
                 });
 

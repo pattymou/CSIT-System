@@ -76,6 +76,62 @@ public sealed class KmDeletionContractTests
     }
 
     [Fact]
+    public async Task V2ClientUsesExactContractPathAndRejectsCorrelationDrift()
+    {
+        var id = Guid.NewGuid();
+        var resource = new KmDocumentDeletionV2Resource(
+            KmDocumentDeletionV2SourceTypes.VendorFile, id, id, 1, new string('A', 64),
+            null, null, Guid.NewGuid(), null, id, "DocumentVersion");
+        var request = new KmDocumentDeletionV2Request("2.0", "CSIT",
+            "DocumentDeletionRequested", Guid.NewGuid(), new DateTimeOffset(Now),
+            KmDocumentDeletionReasonCodes.SourceDeleted, resource);
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.Accepted)
+        {
+            Content = JsonContent.Create(new KmDeletionAccepted(request.DeletionRequestId,
+                "KM-V2-DELETE-1", "Accepted"))
+        });
+        var client = new KmDocumentDeletionV2Client(new HttpClient(handler),
+            Options.Create(new KmIntegrationOptions
+                { BaseUrl = "https://km.example.test/", TimeoutSeconds = 5 }),
+            Options.Create(new KmDeletionOptions
+                { Enabled = true, VendorEnabled = true, Scope = "csit.document.delete" }),
+            new StaticToken());
+
+        var accepted = await client.SubmitAsync(request);
+        Assert.True(accepted.Accepted);
+        Assert.Equal(KmDocumentDeletionV2Client.Path, handler.Path);
+        Assert.Equal(request.DeletionRequestId.ToString("D"), handler.IdempotencyKey);
+        Assert.Contains("\"scope\":\"DocumentVersion\"", handler.Body);
+        Assert.Contains("\"applicationId\":null", handler.Body);
+
+        var drift = new KmDocumentDeletionV2Client(new HttpClient(new RecordingHandler(_ =>
+            new HttpResponseMessage(HttpStatusCode.Accepted)
+            {
+                Content = JsonContent.Create(new KmDeletionAccepted(Guid.NewGuid(),
+                    "KM-OTHER", "Accepted"))
+            })), Options.Create(new KmIntegrationOptions
+                { BaseUrl = "https://km.example.test/", TimeoutSeconds = 5 }),
+            Options.Create(new KmDeletionOptions
+                { Enabled = true, VendorEnabled = true, Scope = "csit.document.delete" }),
+            new StaticToken());
+        Assert.Equal("INVALID_RESPONSE", (await drift.SubmitAsync(request)).ErrorCode);
+        Assert.False((request with { ReasonCode = "Unknown" }).IsValid());
+        Assert.False((request with { Resource = resource with { Sha256 = "bad" } }).IsValid());
+        var completedAt = new DateTimeOffset(Now.AddMinutes(1));
+        var validCallback = new KmDocumentDeletionV2Callback("2.0", Guid.NewGuid(), "CSIT",
+            request.DeletionRequestId, "KM-V2-DELETE-1", resource, "Completed",
+            new KmDeletionTimestamps(new DateTimeOffset(Now), completedAt, null),
+            new KmDeletionResult(true, completedAt.AddSeconds(-1), new KmDeletionCleanup(
+                "Deleted", "NotPresent", "Deleted", "Deleted", "Deleted", "Deleted",
+                "Deleted")), null);
+        Assert.True(validCallback.IsValid());
+        Assert.False((validCallback with { Result = validCallback.Result! with
+            { Cleanup = validCallback.Result.Cleanup with { Cache = "Pending" } } }).IsValid());
+        Assert.False((validCallback with { Timestamps = validCallback.Timestamps with
+            { FailedAt = completedAt } }).IsValid());
+    }
+
+    [Fact]
     public async Task MockKmUsesFormalEndpointAndPreservesIdempotencyAcrossFailures()
     {
         await using var mock = await MockKmDeletionServer.StartAsync();

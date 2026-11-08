@@ -14,7 +14,7 @@ public static class EquipmentFileDeletionModelConfiguration
                 table.HasCheckConstraint("ck_equipment_file_deletion_status",
                     "status IN ('Pending','Dispatching','Accepted','Processing','Failed','KmVerified','LocalCleanup','CleanupFailed','Completed')");
                 table.HasCheckConstraint("ck_equipment_file_deletion_identity",
-                    "source_entity_type = 'ApparatusFile' AND apparatus_file_id = document_id AND version = 1");
+                    "source_entity_type = 'EquipmentAttachment' AND apparatus_file_id = document_id AND version = 1 AND reason_code IN ('SourceDeleted','VersionSuperseded','AdministrativeCleanup')");
             });
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Id).HasColumnName("id");
@@ -25,6 +25,8 @@ public static class EquipmentFileDeletionModelConfiguration
             entity.Property(x => x.SourceEntityType).HasColumnName("source_entity_type").HasMaxLength(60);
             entity.Property(x => x.FileName).HasColumnName("file_name").HasMaxLength(300);
             entity.Property(x => x.Sha256).HasColumnName("sha256").HasMaxLength(64);
+            entity.Property(x => x.ReasonCode).HasColumnName("reason_code").HasMaxLength(40);
+            entity.Property(x => x.CanonicalIngestionEventId).HasColumnName("canonical_ingestion_event_id");
             entity.Property(x => x.RequestedBy).HasColumnName("requested_by").HasMaxLength(100);
             entity.Property(x => x.RequestedAt).HasColumnName("requested_at");
             entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(30);
