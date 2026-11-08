@@ -3,8 +3,6 @@ name: CSIT KM A-D Mock E2E
 on:
   workflow_dispatch:
   pull_request:
-    branches:
-      - feature/km-stage-integration
     paths:
       - 'contracts/csit-km-integration-v1/**'
       - 'Controllers/KmIntegrationController.cs'
