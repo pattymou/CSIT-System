@@ -286,14 +286,9 @@ public sealed class DocumentLibraryKmIntegrationTests
     [Trait("Category", "PostgreSqlIntegration")]
     public async Task MigrationAndDocumentLibraryFlow_RunAgainstIsolatedPostgreSql()
     {
-        var connection = Environment.GetEnvironmentVariable("CSIT_DOCUMENTLIBRARY_KM_POSTGRES_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connection)) return;
-        var info = new NpgsqlConnectionStringBuilder(connection);
-        Assert.Equal("127.0.0.1", info.Host);
-        Assert.Equal(55432, info.Port);
-        Assert.StartsWith("csit_documentlibrary_km_e2e_", info.Database, StringComparison.Ordinal);
-        Assert.Equal("postgres", info.Username);
-        Assert.True(string.IsNullOrEmpty(info.Password));
+        if (!KmMockE2EPostgreSql.TryGetConnection(
+                "CSIT_DOCUMENTLIBRARY_KM_POSTGRES_CONNECTION",
+                ["csit_documentlibrary_km_e2e_"], [55432], out var connection)) return;
 
         var factory = new PostgreSqlFactory(connection);
         await VerifyMigrationUpAndLegacyCompatibilityAsync(factory, connection);

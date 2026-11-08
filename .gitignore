@@ -48,3 +48,6 @@ publish/
 # Local manual capture dependencies and validation artifacts
 tools/manual-screenshots/
 wwwroot/manual/images/
+
+# Local and CI-generated acceptance evidence
+artifacts/

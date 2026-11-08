@@ -20,12 +20,9 @@ public sealed class VendorAttachmentLifecycleTests
     [Trait("Category", "PostgreSqlIntegration")]
     public async Task TaskDVendorDeletionRunsAgainstIsolatedPostgreSql()
     {
-        var connection = Environment.GetEnvironmentVariable("CSIT_TASK_D_POSTGRES_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connection)) return;
-        var info = new Npgsql.NpgsqlConnectionStringBuilder(connection);
-        Assert.Equal("127.0.0.1", info.Host);
-        Assert.Equal(55435, info.Port);
-        Assert.StartsWith("csit_task_d_", info.Database, StringComparison.Ordinal);
+        if (!KmMockE2EPostgreSql.TryGetConnection(
+                "CSIT_TASK_D_POSTGRES_CONNECTION",
+                ["csit_task_d_"], [55435], out var connection)) return;
         var factory = new PostgreSqlFactory(connection);
         await using (var db = factory.CreateDbContext())
             Assert.Contains("20261108070415_AddKmTaskDDocumentDeletionV141",

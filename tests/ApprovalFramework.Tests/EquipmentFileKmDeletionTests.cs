@@ -13,16 +13,9 @@ public sealed class EquipmentFileKmDeletionTests
     [Trait("Category", "PostgreSqlIntegration")]
     public async Task ImageDeletionSafetyPaths_RunAgainstIsolatedPostgreSql()
     {
-        var connection = Environment.GetEnvironmentVariable(
-            "CSIT_EQUIPMENT_DELETION_POSTGRES_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connection)) return;
-        var info = new NpgsqlConnectionStringBuilder(connection);
-        Assert.Equal("127.0.0.1", info.Host);
-        Assert.True(
-            info.Port == 55434 && info.Database!.StartsWith("csit_equipment_deletion_",
-                StringComparison.Ordinal) ||
-            info.Port == 55435 && info.Database!.StartsWith("csit_task_d_",
-                StringComparison.Ordinal));
+        if (!KmMockE2EPostgreSql.TryGetConnection(
+                "CSIT_EQUIPMENT_DELETION_POSTGRES_CONNECTION",
+                ["csit_equipment_deletion_", "csit_task_d_"], [55434, 55435], out var connection)) return;
 
         var factory = new Factory(connection);
         await using (var migrate = factory.CreateDbContext())

@@ -254,14 +254,9 @@ public sealed class KmAnalysisIntegrationTests
     [Trait("Category", "PostgreSqlIntegration")]
     public async Task MigrationAndCallbackTransaction_RunAgainstIsolatedPostgreSql()
     {
-        var connection = Environment.GetEnvironmentVariable("CSIT_KM_ANALYSIS_POSTGRES_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connection)) return;
-        var info = new NpgsqlConnectionStringBuilder(connection);
-        Assert.Equal("127.0.0.1", info.Host);
-        Assert.Equal(55436, info.Port);
-        Assert.StartsWith("csit_km_analysis_e2e_", info.Database, StringComparison.Ordinal);
-        Assert.Equal("postgres", info.Username);
-        Assert.True(string.IsNullOrEmpty(info.Password));
+        if (!KmMockE2EPostgreSql.TryGetConnection(
+                "CSIT_KM_ANALYSIS_POSTGRES_CONNECTION",
+                ["csit_km_analysis_e2e_"], [55436], out var connection)) return;
 
         var factory = new PostgreSqlFactory(connection);
         await using (var db = await factory.CreateDbContextAsync())
@@ -275,7 +270,10 @@ public sealed class KmAnalysisIntegrationTests
         var columnsBefore = await ReadPublicColumnsAsync(connection, tablesBefore);
         await using (var db = await factory.CreateDbContextAsync())
         {
-            await db.Database.MigrateAsync();
+            // Keep this migration-delta assertion scoped to Task B. Later Task C/D
+            // migrations are validated by their own PostgreSQL acceptance cases.
+            await db.GetService<IMigrator>()
+                .MigrateAsync("20261105060913_AddKmDocumentAnalysisResultsV14");
             Assert.Contains("20261105060913_AddKmDocumentAnalysisResultsV14",
                 await db.Database.GetAppliedMigrationsAsync());
         }
@@ -315,6 +313,12 @@ public sealed class KmAnalysisIntegrationTests
         Assert.Contains("IX_km_document_analysis_results_analysis_result_id", indexes);
         Assert.Contains("IX_km_document_analysis_results_source_type_source_entity_id_d~", indexes);
         Assert.Contains("IX_km_analysis_review_revisions_analysis_result_id_revision", indexes);
+
+        // The current callback service also enforces Task C/D hold and tombstone
+        // guards, so exercise it on the complete current schema after preserving
+        // the exact Task B migration-delta assertions above.
+        await using (var db = await factory.CreateDbContextAsync())
+            await db.Database.MigrateAsync();
 
         var outbox = await SeedVendorAsync(factory, "postgres.pdf", ShaA, "KM-PG-1");
         var callback = Completed(outbox, KmAnalysisSourceTypes.VendorFile, ShaA, "PostgreSQL result");

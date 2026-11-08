@@ -71,14 +71,10 @@ public sealed class TestReportKmEndToEndTests
     [Trait("Category", "PostgreSqlIntegration")]
     public async Task FormalReportsFlowThroughMockKmAndPersistAllStatesInIsolatedPostgreSql()
     {
-        var connection = Environment.GetEnvironmentVariable("CSIT_TESTREPORT_KM_POSTGRES_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connection)) return;
+        if (!KmMockE2EPostgreSql.TryGetConnection(
+                "CSIT_TESTREPORT_KM_POSTGRES_CONNECTION",
+                ["csit_testreport_km_e2e_"], [55432], out var connection)) return;
         var connectionInfo = new NpgsqlConnectionStringBuilder(connection);
-        Assert.Equal("127.0.0.1", connectionInfo.Host);
-        Assert.Equal(55432, connectionInfo.Port);
-        Assert.StartsWith("csit_testreport_km_e2e_", connectionInfo.Database, StringComparison.Ordinal);
-        Assert.Equal("postgres", connectionInfo.Username);
-        Assert.True(string.IsNullOrEmpty(connectionInfo.Password));
 
         var factory = new PostgreSqlFactory(connection);
         var storage = Path.Combine(Path.GetTempPath(), "csit-testreport-km-pg-" + Guid.NewGuid().ToString("N"));

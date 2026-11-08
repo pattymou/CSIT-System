@@ -16,12 +16,9 @@ public sealed class KmV2PostgreSqlClaimTests
     [Trait("Category", "PostgreSqlIntegration")]
     public async Task PostgreSqlClaimDispatchesAllV2SourcesIncludingEquipmentImage()
     {
-        var connection = Environment.GetEnvironmentVariable("CSIT_KM_V2_POSTGRES_CONNECTION");
-        if (string.IsNullOrWhiteSpace(connection)) return;
-        var info = new NpgsqlConnectionStringBuilder(connection);
-        Assert.Equal("127.0.0.1", info.Host);
-        Assert.Equal(55432, info.Port);
-        Assert.StartsWith("csit_km_v2_", info.Database, StringComparison.Ordinal);
+        if (!KmMockE2EPostgreSql.TryGetConnection(
+                "CSIT_KM_V2_POSTGRES_CONNECTION",
+                ["csit_km_v2_"], [55432], out var connection)) return;
 
         var factory = new Factory(connection);
         var root = Path.Combine(Path.GetTempPath(), "csit-km-v2-pg-" + Guid.NewGuid().ToString("N"));
