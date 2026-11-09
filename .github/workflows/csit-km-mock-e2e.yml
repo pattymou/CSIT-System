@@ -2,6 +2,11 @@ name: CSIT KM A-D Mock E2E
 
 on:
   workflow_dispatch:
+    inputs:
+      target_ref:
+        description: 'Feature branch or commit containing the complete Mock E2E implementation'
+        required: true
+        default: 'feature/km-stage-integration'
   pull_request:
     paths:
       - 'contracts/csit-km-integration-v1/**'
@@ -54,6 +59,8 @@ jobs:
       KmDeletion__EquipmentEnabled: 'false'
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
@@ -67,18 +74,21 @@ jobs:
         run: |
           dotnet restore tests/ApprovalFramework.Tests/ApprovalFramework.Tests.csproj
           dotnet build tests/ApprovalFramework.Tests/ApprovalFramework.Tests.csproj -c Release --no-restore
+      - name: Verify incomplete-test Gate fails closed
+        shell: pwsh
+        run: tools/km-mock-e2e/Test-KmMockE2EGate.ps1
       - name: Mock E2E round 1
         continue-on-error: true
         shell: pwsh
-        run: tools/km-mock-e2e/Invoke-KmMockE2ERound.ps1 -Round 1 -RunId '${{ github.run_id }}' -PostgresPassword 'csit-mock-e2e-only'
+        run: tools/km-mock-e2e/Invoke-KmMockE2ERound.ps1 -Round 1 -RunId '${{ github.run_id }}' -PostgresPassword 'csit-mock-e2e-only' -AllowEphemeralGitHubService
       - name: Mock E2E round 2
         continue-on-error: true
         shell: pwsh
-        run: tools/km-mock-e2e/Invoke-KmMockE2ERound.ps1 -Round 2 -RunId '${{ github.run_id }}' -PostgresPassword 'csit-mock-e2e-only'
+        run: tools/km-mock-e2e/Invoke-KmMockE2ERound.ps1 -Round 2 -RunId '${{ github.run_id }}' -PostgresPassword 'csit-mock-e2e-only' -AllowEphemeralGitHubService
       - name: Mock E2E round 3
         continue-on-error: true
         shell: pwsh
-        run: tools/km-mock-e2e/Invoke-KmMockE2ERound.ps1 -Round 3 -RunId '${{ github.run_id }}' -PostgresPassword 'csit-mock-e2e-only'
+        run: tools/km-mock-e2e/Invoke-KmMockE2ERound.ps1 -Round 3 -RunId '${{ github.run_id }}' -PostgresPassword 'csit-mock-e2e-only' -AllowEphemeralGitHubService
       - name: Build coverage matrix and enforce acceptance
         if: always()
         shell: pwsh

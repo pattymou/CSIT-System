@@ -6,6 +6,8 @@ param(
     [int] $PostgresPort = 5432,
     [string] $PostgresUser = 'postgres',
     [Parameter(Mandatory = $true)][string] $PostgresPassword,
+    [string] $ExpectedClusterSystemId,
+    [switch] $AllowEphemeralGitHubService,
     [string] $PsqlPath = 'psql',
     [string] $ResultsRoot = 'artifacts/km-mock-e2e'
 )
@@ -17,6 +19,7 @@ $diagnosticLog = Join-Path $roundDirectory 'diagnostic.log'
 New-Item -ItemType Directory -Force -Path $roundDirectory | Out-Null
 
 $databaseBase = "csit_km_mock_e2e_${RunId}_r${Round}"
+$minimumExpectedTests = 216
 if ($databaseBase.Length -gt 45) { throw "Isolated database prefix is unexpectedly long: $databaseBase" }
 
 $databaseKeys = @(
@@ -55,9 +58,54 @@ function Invoke-Psql {
     }
 }
 
+function Invoke-PsqlScalar {
+    param([string] $Sql)
+    $output = @(& $PsqlPath -X -tA -h $PostgresHost -p $PostgresPort -U $PostgresUser `
+        -d postgres -v ON_ERROR_STOP=1 -c $Sql 2>&1)
+    $nativeExitCode = $LASTEXITCODE
+    $output | Out-File -FilePath $diagnosticLog -Append -Encoding utf8
+    if ($nativeExitCode -ne 0) { throw "PostgreSQL identity query failed with exit code $nativeExitCode" }
+    return (($output | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ }) -join "`n")
+}
+
 try {
     "KM Mock E2E round $Round; run $RunId; commit $env:GITHUB_SHA" |
         Set-Content -LiteralPath $diagnosticLog -Encoding utf8
+
+    if ($PostgresHost -notin @('127.0.0.1', 'localhost', '::1')) {
+        throw "PostgreSQL must be loopback-only; refusing host $PostgresHost."
+    }
+    if ($PostgresUser -ne 'postgres') { throw 'The disposable PostgreSQL service must use its isolated postgres owner.' }
+
+    $clusterSystemId = Invoke-PsqlScalar 'SELECT system_identifier::text FROM pg_control_system();'
+    $serverMajor = Invoke-PsqlScalar "SELECT current_setting('server_version_num')::int / 10000;"
+    $databaseInventory = @(Invoke-PsqlScalar "SELECT datname FROM pg_database ORDER BY datname;" -split "`n")
+    if ($serverMajor -ne '16') { throw "PostgreSQL 16 is required; connected server major is $serverMajor." }
+    $forbiddenDatabase = @($databaseInventory | Where-Object {
+        $_ -match '(?i)(^|_)(dev|prod|production)(_|$)' -or $_ -eq 'sit_department_system'
+    } | Select-Object -First 1)
+    if ($forbiddenDatabase.Count -gt 0) {
+        throw "Refusing a cluster containing a DEV/Production-like database: $($forbiddenDatabase[0])."
+    }
+
+    if ($AllowEphemeralGitHubService) {
+        if ($env:GITHUB_ACTIONS -ne 'true') { throw '-AllowEphemeralGitHubService is valid only inside GitHub Actions.' }
+        $runDatabasePattern = "^csit_km_mock_e2e_${RunId}_r[1-3]_[a-z0-9_]+$"
+        $unexpectedDatabase = @($databaseInventory | Where-Object {
+            $_ -notin @('postgres', 'template0', 'template1') -and $_ -notmatch $runDatabasePattern
+        })
+        if ($unexpectedDatabase.Count -gt 0) {
+            throw "GitHub PostgreSQL service is not fresh; unexpected database(s): $($unexpectedDatabase -join ', ')."
+        }
+    }
+    elseif ([string]::IsNullOrWhiteSpace($ExpectedClusterSystemId)) {
+        throw 'Local execution requires -ExpectedClusterSystemId from the independently verified test cluster.'
+    }
+    elseif ($clusterSystemId -ne $ExpectedClusterSystemId) {
+        throw "PostgreSQL cluster identity mismatch. Expected $ExpectedClusterSystemId, received $clusterSystemId."
+    }
+    "Confirmed PostgreSQL 16 cluster $clusterSystemId on ${PostgresHost}:$PostgresPort; databases: $($databaseInventory -join ', ')" |
+        Out-File -FilePath $diagnosticLog -Append -Encoding utf8
 
     $allDatabases = @($templateDatabase) + @($databaseKeys | ForEach-Object { "${databaseBase}_$_" })
     foreach ($database in $allDatabases) {
@@ -79,7 +127,7 @@ try {
     }
     $templateConnection = "Host=$PostgresHost;Port=$PostgresPort;Database=$templateDatabase;Username=$PostgresUser;Password=$PostgresPassword;Include Error Detail=true"
     Invoke-LoggedCommand {
-        & dotnet ef database update --project SIT.DepartmentSystem.Web.csproj `
+        & dotnet ef database update --project SIT.DepartmentSystem.Web.csproj --configuration Release `
             --connection $templateConnection --no-build
     }
 
@@ -93,7 +141,7 @@ try {
     $analysisConnection = "Host=$PostgresHost;Port=$PostgresPort;Database=${databaseBase}_analysis;Username=$PostgresUser;Password=$PostgresPassword;Include Error Detail=true"
     Invoke-LoggedCommand {
         & dotnet ef database update 20261102075735_AddDocumentLibraryFileDeletionLifecycle `
-            --project SIT.DepartmentSystem.Web.csproj --connection $analysisConnection --no-build
+            --project SIT.DepartmentSystem.Web.csproj --configuration Release --connection $analysisConnection --no-build
     }
 
     $connectionByKey = @{}
@@ -103,6 +151,7 @@ try {
 
     $env:CSIT_KM_MOCK_E2E_REQUIRED = 'true'
     $env:CSIT_KM_MOCK_E2E_RUN_ID = $RunId
+    $env:CSIT_KM_MOCK_E2E_CLUSTER_ID = $clusterSystemId
     $env:CSIT_DOCUMENTLIBRARY_KM_POSTGRES_CONNECTION = $connectionByKey.documentlibrary
     $env:CSIT_TESTREPORT_KM_POSTGRES_CONNECTION = $connectionByKey.testreport
     $env:CSIT_EQUIPMENT_DELETION_POSTGRES_CONNECTION = $connectionByKey.equipment_deletion
@@ -137,6 +186,20 @@ try {
             --collect 'XPlat Code Coverage'
     }
 
+    $trxPath = Join-Path $roundDirectory "km-mock-e2e-round-$Round.trx"
+    if (-not (Test-Path -LiteralPath $trxPath)) { throw "VSTest did not produce the required TRX: $trxPath" }
+    [xml]$trxXml = Get-Content -LiteralPath $trxPath -Raw
+    $trxResults = @($trxXml.SelectNodes("//*[local-name()='UnitTestResult']"))
+    $passedCount = @($trxResults | Where-Object outcome -eq 'Passed').Count
+    $failedCount = @($trxResults | Where-Object outcome -eq 'Failed').Count
+    $notRunCount = @($trxResults | Where-Object outcome -ne 'Passed').Count - $failedCount
+    if ($trxResults.Count -lt $minimumExpectedTests) {
+        throw "Incomplete KM Mock E2E selection: expected at least $minimumExpectedTests tests, found $($trxResults.Count)."
+    }
+    if ($failedCount -gt 0 -or $notRunCount -gt 0 -or $passedCount -ne $trxResults.Count) {
+        throw "Incomplete KM Mock E2E execution: $passedCount passed, $failedCount failed, $notRunCount not run/skipped."
+    }
+
     # VSTest can materialize the same collector attachment twice. Keep one
     # byte-identical copy so the artifact remains compact without losing evidence.
     $coverageHashes = @{}
@@ -155,6 +218,10 @@ try {
         exitCode = 0
         completedAtUtc = [DateTime]::UtcNow.ToString('O')
         databases = $databaseKeys.Count
+        clusterSystemId = $clusterSystemId
+        passed = $passedCount
+        failed = $failedCount
+        notRun = $notRunCount
     } | ConvertTo-Json | Set-Content (Join-Path $roundDirectory 'round-status.json') -Encoding utf8
 }
 catch {

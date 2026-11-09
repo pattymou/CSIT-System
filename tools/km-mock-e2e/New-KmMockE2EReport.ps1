@@ -1,6 +1,7 @@
 [CmdletBinding()]
 param(
     [string] $ResultsRoot = 'artifacts/km-mock-e2e',
+    [ValidateRange(1, 10000)][int] $MinimumExpectedTestsPerRound = 216,
     [switch] $Enforce
 )
 
@@ -43,7 +44,7 @@ foreach ($round in 1..3) {
     $allResults += $results
     $rounds += [ordered]@{
         round = $round
-        status = if (-not $status -or $status.exitCode -ne 0) { 'FAIL' } elseif (-not $trx) { 'NOT RUN' } elseif (@($results | Where-Object outcome -eq 'Failed').Count -gt 0) { 'FAIL' } else { 'PASS' }
+        status = if (-not $status -or $status.exitCode -ne 0) { 'FAIL' } elseif (-not $trx -or $results.Count -lt $MinimumExpectedTestsPerRound) { 'NOT RUN' } elseif (@($results | Where-Object outcome -eq 'Failed').Count -gt 0) { 'FAIL' } elseif (@($results | Where-Object outcome -ne 'Passed').Count -gt 0) { 'NOT RUN' } else { 'PASS' }
         passed = @($results | Where-Object outcome -eq 'Passed').Count
         failed = @($results | Where-Object outcome -eq 'Failed').Count
         notRun = @($results | Where-Object outcome -notin @('Passed','Failed')).Count
@@ -60,7 +61,7 @@ foreach ($area in $coverageAreas) {
             if ($result.round -ne $round) { return $false }
             return @($area.classes | Where-Object { $result.testName -like "*$_*" }).Count -gt 0
         })
-        $row["round$round"] = if ($matched.Count -eq 0) { 'NOT RUN' } elseif (@($matched | Where-Object outcome -eq 'Failed').Count -gt 0) { 'FAIL' } else { 'PASS' }
+        $row["round$round"] = if ($matched.Count -eq 0) { 'NOT RUN' } elseif (@($matched | Where-Object outcome -eq 'Failed').Count -gt 0) { 'FAIL' } elseif (@($matched | Where-Object outcome -ne 'Passed').Count -gt 0) { 'NOT RUN' } else { 'PASS' }
     }
     $row.overall = if (@($row.round1,$row.round2,$row.round3) -contains 'FAIL') { 'FAIL' } elseif (@($row.round1,$row.round2,$row.round3) -contains 'NOT RUN') { 'NOT RUN' } else { 'PASS' }
     $matrix += [pscustomobject]$row
