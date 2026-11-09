@@ -7,20 +7,6 @@ on:
         description: 'Feature branch or commit containing the complete Mock E2E implementation'
         required: true
         default: 'feature/km-stage-integration'
-  pull_request:
-    paths:
-      - 'contracts/csit-km-integration-v1/**'
-      - 'Controllers/KmIntegrationController.cs'
-      - 'Data/**'
-      - 'Entities/**'
-      - 'Migrations/**'
-      - 'Models/Api/**'
-      - 'Models/Config/**'
-      - 'Services/KmIntegration/**'
-      - 'Services/Implementations/**'
-      - 'tests/ApprovalFramework.Tests/**'
-      - 'tools/km-mock-e2e/**'
-      - '.github/workflows/csit-km-mock-e2e.yml'
 
 permissions:
   contents: read
