@@ -1,0 +1,103 @@
+name: CSIT Multi-User Load Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: 'Feature branch or commit containing the load-test implementation'
+        required: true
+        default: 'feature/km-stage-integration'
+      user_level:
+        description: 'Isolated user level (all runs 5, 20, then 50)'
+        required: true
+        type: choice
+        default: 'all'
+        options: ['5', '20', '50', 'all']
+      workload:
+        description: 'Workload selection'
+        required: true
+        type: choice
+        default: 'mixed'
+        options: ['mixed', 'documents', 'reservations', 'concurrency']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: csit-multi-user-load-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  isolated-load-test:
+    name: PostgreSQL 16 / 5-20-50 user acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: csit-load-test-only
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      DOTNET_NOLOGO: true
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      KmIntegration__Enabled: 'false'
+      KmIntegration__VendorEnabled: 'false'
+      KmIntegration__EquipmentEnabled: 'false'
+      KmDeletion__Enabled: 'false'
+      KmDeletion__VendorEnabled: 'false'
+      KmDeletion__EquipmentEnabled: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.target_ref || github.sha }}
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          cache: true
+          cache-dependency-path: '**/*.csproj'
+      - name: Set up k6
+        uses: grafana/setup-k6-action@v1
+        with:
+          k6-version: '2.3.0'
+      - name: Install EF tool
+        shell: pwsh
+        run: dotnet tool install --global dotnet-ef --version 10.0.1
+      - name: Build release regression
+        shell: pwsh
+        run: |
+          dotnet restore tests/ApprovalFramework.Tests/ApprovalFramework.Tests.csproj
+          dotnet build tests/ApprovalFramework.Tests/ApprovalFramework.Tests.csproj -c Release --no-restore
+      - name: Full release regression
+        shell: pwsh
+        run: >-
+          dotnet test tests/ApprovalFramework.Tests/ApprovalFramework.Tests.csproj -c Release
+          --no-build --no-restore --logger "trx;LogFileName=release-regression.trx"
+          --results-directory artifacts/load-test/release-regression
+      - name: Verify incomplete load Gate fails closed
+        shell: pwsh
+        run: tools/load-test/Test-CsitLoadTestGate.ps1
+      - name: Run isolated load and concurrency Gate
+        shell: pwsh
+        run: |
+          $runId = "gh${{ github.run_id }}a${{ github.run_attempt }}"
+          $level = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.user_level }}' } else { 'all' }
+          $workload = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.workload }}' } else { 'mixed' }
+          tools/load-test/Invoke-CsitLoadTest.ps1 -RunId $runId -UserLevel $level -Workload $workload `
+            -PostgresPassword 'csit-load-test-only' -AllowEphemeralGitHubService
+      - name: Upload load-test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: csit-multi-user-load-test-${{ github.run_id }}
+          path: artifacts/load-test
+          if-no-files-found: error
+          retention-days: 30
