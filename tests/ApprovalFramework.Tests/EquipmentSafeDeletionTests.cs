@@ -222,14 +222,14 @@ public sealed class EquipmentSafeDeletionTests
         {
             await SeedStorageAsync(factory, root);
             await SeedEquipmentFileAsync(factory, root, "EQ-RETRY", "locked.pdf", false, false);
-            string path;
-            await using (var db = factory.CreateDbContext())
-                path = await db.ApparatusFiles.Where(x => x.ApparatusId == "EQ-RETRY")
-                    .Select(x => Path.Combine(x.FilePath, x.FileName)).SingleAsync();
+            Guid fileId;
+            await using (var lookup = factory.CreateDbContext())
+                fileId = await lookup.ApparatusFiles.Where(x => x.ApparatusId == "EQ-RETRY")
+                    .Select(x => x.Id).SingleAsync();
+            var quarantineCollision = await CreateQuarantineCollisionAsync(factory, fileId);
             EquipmentDeletionRequestResult requested;
-            using (File.Open(path, FileMode.Open, FileAccess.Read, FileShare.None))
+            await using (var db = factory.CreateDbContext())
             {
-                await using var db = factory.CreateDbContext();
                 requested = await Service(db).RequestAsync("EQ-RETRY", "writer");
                 Assert.False(requested.Completed);
                 Assert.Equal(EquipmentFileDeletionStatuses.CleanupFailed,
@@ -238,6 +238,7 @@ public sealed class EquipmentSafeDeletionTests
                     (await db.EquipmentFileDeletionJobs.SingleAsync()).LastErrorCode);
                 Assert.True(await db.Apparatuses.AnyAsync(x => x.Id == "EQ-RETRY"));
             }
+            Directory.Delete(quarantineCollision);
 
             await using (var retry = factory.CreateDbContext())
                 Assert.Equal(1, await Service(retry).ProcessPendingAsync());
@@ -355,14 +356,10 @@ public sealed class EquipmentSafeDeletionTests
             var blockedId = await SeedEquipmentFileAsync(factory, root, "EQ-PARTIAL", "blocked.png", false, false);
             var completedId = await SeedEquipmentFileAsync(factory, root, "EQ-PARTIAL", "completed.jpg", false, false);
             var otherId = await SeedEquipmentFileAsync(factory, root, "EQ-OTHER", "keep.pdf", false, false);
-            string blockedPath;
-            await using (var db = factory.CreateDbContext())
-                blockedPath = await db.ApparatusFiles.Where(x => x.Id == blockedId)
-                    .Select(x => Path.Combine(x.FilePath, x.FileName)).SingleAsync();
+            var quarantineCollision = await CreateQuarantineCollisionAsync(factory, blockedId);
 
-            using (File.Open(blockedPath, FileMode.Open, FileAccess.Read, FileShare.None))
+            await using (var db = factory.CreateDbContext())
             {
-                await using var db = factory.CreateDbContext();
                 var requested = await Service(db).RequestAsync("EQ-PARTIAL", "writer");
                 Assert.False(requested.Completed);
             }
@@ -379,6 +376,7 @@ public sealed class EquipmentSafeDeletionTests
                     (await waiting.EquipmentFileDeletionJobs.SingleAsync(x =>
                         x.ApparatusFileId == completedId)).Status);
             }
+            Directory.Delete(quarantineCollision);
 
             await using (var retry = factory.CreateDbContext())
                 Assert.Equal(1, await Service(retry).ProcessPendingAsync());
@@ -756,6 +754,19 @@ public sealed class EquipmentSafeDeletionTests
         IRawDataExportService? rawDataExport = null) =>
         new(db, new EquipmentFileDeletionService(db), new ManagedAssetFileStorage(db),
             rawDataExport);
+
+    private static async Task<string> CreateQuarantineCollisionAsync(Factory factory, Guid fileId)
+    {
+        await using var db = factory.CreateDbContext();
+        var file = await db.ApparatusFiles.SingleAsync(x => x.Id == fileId);
+        var job = EquipmentFileDeletionJob.Create(file, "test", false, DateTime.UtcNow);
+        db.EquipmentFileDeletionJobs.Add(job);
+        await db.SaveChangesAsync();
+        var collision = Path.Combine(file.FilePath, file.FileName) +
+            ".csit-delete-" + job.Id.ToString("N");
+        Directory.CreateDirectory(collision);
+        return collision;
+    }
 
     private static KmDeletionDispatchService Dispatcher(Factory factory,
         IKmDocumentDeletionV2Client adapter) => new(factory, new NoopCaseDeletionClient(),
