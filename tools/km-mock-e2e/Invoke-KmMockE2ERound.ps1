@@ -79,7 +79,8 @@ try {
 
     $clusterSystemId = Invoke-PsqlScalar 'SELECT system_identifier::text FROM pg_control_system();'
     $serverMajor = Invoke-PsqlScalar "SELECT current_setting('server_version_num')::int / 10000;"
-    $databaseInventory = @(Invoke-PsqlScalar "SELECT datname FROM pg_database ORDER BY datname;" -split "`n")
+    $databaseInventoryText = Invoke-PsqlScalar "SELECT datname FROM pg_database ORDER BY datname;"
+    $databaseInventory = @($databaseInventoryText -split '\r?\n' | Where-Object { $_ })
     if ($serverMajor -ne '16') { throw "PostgreSQL 16 is required; connected server major is $serverMajor." }
     $forbiddenDatabase = @($databaseInventory | Where-Object {
         $_ -match '(?i)(^|_)(dev|prod|production)(_|$)' -or $_ -eq 'sit_department_system'
