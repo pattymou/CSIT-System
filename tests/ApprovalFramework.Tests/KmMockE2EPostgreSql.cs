@@ -6,6 +6,7 @@ internal static class KmMockE2EPostgreSql
 {
     private const string RequiredVariable = "CSIT_KM_MOCK_E2E_REQUIRED";
     private const string ClusterIdVariable = "CSIT_KM_MOCK_E2E_CLUSTER_ID";
+    private const string ServerAddressVariable = "CSIT_KM_MOCK_E2E_SERVER_ADDRESS";
 
     public static bool TryGetConnection(
         string variable,
@@ -50,8 +51,11 @@ internal static class KmMockE2EPostgreSql
     private static void AssertConfirmedCluster(NpgsqlConnectionStringBuilder info, string runId)
     {
         var expectedClusterId = Environment.GetEnvironmentVariable(ClusterIdVariable);
+        var expectedServerAddress = Environment.GetEnvironmentVariable(ServerAddressVariable);
         Assert.False(string.IsNullOrWhiteSpace(expectedClusterId),
             $"{ClusterIdVariable} must identify the independently verified PostgreSQL cluster.");
+        Assert.False(string.IsNullOrWhiteSpace(expectedServerAddress),
+            $"{ServerAddressVariable} must come from the preflight identity query.");
 
         using var database = new NpgsqlConnection(info.ConnectionString);
         database.Open();
@@ -66,8 +70,7 @@ internal static class KmMockE2EPostgreSql
         Assert.Equal(info.Database, reader.GetString(0));
         Assert.Equal(expectedClusterId, reader.GetString(1));
         var serverAddress = reader.GetString(2);
-        Assert.True(serverAddress is "127.0.0.1" or "127.0.0.1/32" or "::1" or "::1/128",
-            $"PostgreSQL server address must be loopback-only, received '{serverAddress}'.");
+        Assert.Equal(expectedServerAddress, serverAddress);
         Assert.Equal(info.Port, reader.GetInt32(3));
         Assert.Equal(16, reader.GetInt32(4));
         reader.Close();

@@ -78,6 +78,7 @@ try {
     if ($PostgresUser -ne 'postgres') { throw 'The disposable PostgreSQL service must use its isolated postgres owner.' }
 
     $clusterSystemId = Invoke-PsqlScalar 'SELECT system_identifier::text FROM pg_control_system();'
+    $serverAddress = Invoke-PsqlScalar 'SELECT inet_server_addr()::text;'
     $serverMajor = Invoke-PsqlScalar "SELECT current_setting('server_version_num')::int / 10000;"
     $databaseInventoryText = Invoke-PsqlScalar "SELECT datname FROM pg_database ORDER BY datname;"
     $databaseInventory = @($databaseInventoryText -split '\r?\n' | Where-Object { $_ })
@@ -105,7 +106,7 @@ try {
     elseif ($clusterSystemId -ne $ExpectedClusterSystemId) {
         throw "PostgreSQL cluster identity mismatch. Expected $ExpectedClusterSystemId, received $clusterSystemId."
     }
-    "Confirmed PostgreSQL 16 cluster $clusterSystemId on ${PostgresHost}:$PostgresPort; databases: $($databaseInventory -join ', ')" |
+    "Confirmed PostgreSQL 16 cluster $clusterSystemId through ${PostgresHost}:$PostgresPort (server $serverAddress); databases: $($databaseInventory -join ', ')" |
         Out-File -FilePath $diagnosticLog -Append -Encoding utf8
 
     $allDatabases = @($templateDatabase) + @($databaseKeys | ForEach-Object { "${databaseBase}_$_" })
@@ -153,6 +154,7 @@ try {
     $env:CSIT_KM_MOCK_E2E_REQUIRED = 'true'
     $env:CSIT_KM_MOCK_E2E_RUN_ID = $RunId
     $env:CSIT_KM_MOCK_E2E_CLUSTER_ID = $clusterSystemId
+    $env:CSIT_KM_MOCK_E2E_SERVER_ADDRESS = $serverAddress
     $env:CSIT_DOCUMENTLIBRARY_KM_POSTGRES_CONNECTION = $connectionByKey.documentlibrary
     $env:CSIT_TESTREPORT_KM_POSTGRES_CONNECTION = $connectionByKey.testreport
     $env:CSIT_EQUIPMENT_DELETION_POSTGRES_CONNECTION = $connectionByKey.equipment_deletion
