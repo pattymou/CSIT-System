@@ -121,7 +121,7 @@ try {
     # It is a NOLOGIN role inside the disposable PostgreSQL service, never a DEV identity.
     Invoke-Psql "DO `$`$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='csit_runtime_dev') THEN CREATE ROLE csit_runtime_dev NOLOGIN; END IF; END `$`$;"
     Invoke-Psql "CREATE DATABASE $templateDatabase;"
-    $baselineSql = Join-Path $PSScriptRoot 'baseline-a2d6224.sql'
+    $baselineSql = Join-Path $PSScriptRoot 'baseline-a2d6224.psql'
     if (-not (Test-Path -LiteralPath $baselineSql)) { throw "Missing baseline schema: $baselineSql" }
     Invoke-LoggedCommand {
         & $PsqlPath -X -h $PostgresHost -p $PostgresPort -U $PostgresUser `

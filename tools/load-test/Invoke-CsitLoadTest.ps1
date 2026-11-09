@@ -98,7 +98,7 @@ try {
     Invoke-PsqlScalar "DO `$`$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='csit_runtime_dev') THEN CREATE ROLE csit_runtime_dev NOLOGIN; END IF; END `$`$;" | Out-Null
     Invoke-PsqlScalar "CREATE DATABASE $database;" | Out-Null
     $databaseCreated = $true
-    $baseline = Join-Path $root 'tools/km-mock-e2e/baseline-a2d6224.sql'
+    $baseline = Join-Path $root 'tools/km-mock-e2e/baseline-a2d6224.psql'
     Invoke-Logged { & $PsqlPath -X -h $PostgresHost -p $PostgresPort -U $PostgresUser -d $database -v ON_ERROR_STOP=1 -f $baseline }
     $connection = "Host=$PostgresHost;Port=$PostgresPort;Database=$database;Username=$PostgresUser;Password=$PostgresPassword;Include Error Detail=true"
     Invoke-Logged { & dotnet ef database update --project (Join-Path $root 'SIT.DepartmentSystem.Web.csproj') `
