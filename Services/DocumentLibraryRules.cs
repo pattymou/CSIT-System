@@ -34,7 +34,7 @@ public static partial class DocumentLibraryRules
 
     public static string NormalizeOriginalFileName(string? value)
     {
-        var fileName = Path.GetFileName(value)?.Trim();
+        var fileName = Path.GetFileName(value?.Replace('\\', '/'))?.Trim();
         if (string.IsNullOrWhiteSpace(fileName))
             throw new InvalidOperationException("檔案名稱不可空白。");
         if (fileName.Length > 300)

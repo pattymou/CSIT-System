@@ -451,8 +451,7 @@ public sealed class VerificationAttachmentArchiveProcessor(
     {
         var name = DocumentLibraryRules.NormalizeName(value);
         if (name is "." or ".." || Path.IsPathRooted(name) ||
-            name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 ||
-            name.Contains(Path.DirectorySeparatorChar) || name.Contains(Path.AltDirectorySeparatorChar) ||
+            name.IndexOfAny("<>:\"/\\|?*".ToCharArray()) >= 0 || name.Any(char.IsControl) ||
             name.EndsWith(' ') || name.EndsWith('.'))
             throw new InvalidOperationException("Model Name contains characters that are unsafe for a Windows folder.");
         var stem = name.Split('.')[0];
@@ -480,9 +479,18 @@ public sealed class VerificationAttachmentArchiveProcessor(
 
     private static string ResolveWithinRoot(string root, string relativePath)
     {
-        if (string.IsNullOrWhiteSpace(relativePath) || Path.IsPathRooted(relativePath))
+        if (string.IsNullOrWhiteSpace(relativePath))
             throw new InvalidOperationException("Attachment storage path is invalid.");
-        var fullPath = Path.GetFullPath(Path.Combine(root, relativePath));
+        var normalizedPath = relativePath.Trim()
+            .Replace('\\', Path.DirectorySeparatorChar)
+            .Replace('/', Path.DirectorySeparatorChar);
+        var hasWindowsDrive = normalizedPath.Length >= 2 &&
+            char.IsLetter(normalizedPath[0]) && normalizedPath[1] == ':';
+        var segments = normalizedPath.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        if (Path.IsPathRooted(normalizedPath) || hasWindowsDrive ||
+            segments.Any(x => x is "." or ".."))
+            throw new InvalidOperationException("Attachment storage path is invalid.");
+        var fullPath = Path.GetFullPath(Path.Combine(root, normalizedPath));
         var prefix = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             + Path.DirectorySeparatorChar;
         if (!fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
