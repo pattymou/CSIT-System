@@ -1,5 +1,7 @@
 # CSIT DEV delivery
 
+長期專案背景、Owner 架構決議、CSIT／Anderson KM 責任分界、已驗證證據與待確認事項，請先閱讀 [`docs/CSIT-PROJECT-CONTEXT.md`](docs/CSIT-PROJECT-CONTEXT.md)。本指引的 DEV Ready、Migration、Production 與資料安全規範仍完整有效。
+
 For a completed, deliverable CSIT change on `feature/km-stage-integration`, unless the latest user request forbids deployment:
 
 1. Review the diff and exclude credentials, runtime output, and local configuration.
