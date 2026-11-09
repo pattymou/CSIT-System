@@ -18,17 +18,20 @@ $requiredByWorkload = @{
     concurrency = @('read','edit','verification_attachment','verification_submit',
         'verification_approval','reservation','reservation_approval')
 }
-$rows = @(); $levelRows = @(); $databaseInvariants = @()
+$rows = @(); $levelRows = @(); $databaseInvariants = @(); $postgresMetrics = @()
 $failures = [Collections.Generic.List[string]]::new()
 foreach ($level in $ExpectedLevels) {
     $directory = Join-Path $ResultsRoot "level-$level"
     $summaryPath = Join-Path $directory 'k6-summary.json'
     $invariantPath = Join-Path $directory 'invariants.json'
-    if (!(Test-Path -LiteralPath $summaryPath) -or !(Test-Path -LiteralPath $invariantPath)) {
+    $postgresPath = Join-Path $directory 'postgres-metrics.json'
+    if (!(Test-Path -LiteralPath $summaryPath) -or !(Test-Path -LiteralPath $invariantPath) -or
+        !(Test-Path -LiteralPath $postgresPath)) {
         $failures.Add("Level $level did not produce complete evidence."); continue
     }
     $summary = Get-Content -LiteralPath $summaryPath -Raw | ConvertFrom-Json
     $invariant = Get-Content -LiteralPath $invariantPath -Raw | ConvertFrom-Json
+    $postgres = Get-Content -LiteralPath $postgresPath -Raw | ConvertFrom-Json
     $levelRows += [pscustomobject]@{
         Level = $level
         Rps = [double]$summary.metrics.http_reqs.values.rate
@@ -38,6 +41,18 @@ foreach ($level in $ExpectedLevels) {
         DatabasePassed = $invariant.passed -eq $true
     }
     $databaseInvariants += [pscustomobject]@{ Level=$level; Invariants=$invariant }
+    $postgresMetrics += [pscustomobject]@{ Level=$level; Metrics=$postgres }
+    if ([int]$postgres.max_connections -lt 1 -or [int]$postgres.applicationPoolMaximum -lt 1 -or
+        [int]$postgres.peakConnections -lt 1) {
+        $failures.Add("Level $level has incomplete PostgreSQL connection capacity evidence.")
+    }
+    if ([int]$postgres.connectionSamples -lt 1) { $failures.Add("Level $level did not sample PostgreSQL connections.") }
+    if ([int]$postgres.connectionSampleFailures -gt 0) {
+        $failures.Add("Level $level had $($postgres.connectionSampleFailures) PostgreSQL connection sample failures.")
+    }
+    if ([int]$postgres.connectionExhaustionEvents -gt 0) {
+        $failures.Add("Level $level exhausted PostgreSQL connections $($postgres.connectionExhaustionEvents) time(s).")
+    }
     foreach ($metric in @('checks','system_failure','authorization_violation','correctness_violation')) {
         if ($null -eq $summary.metrics.$metric) { $failures.Add("Level $level metric $metric was Not Run.") }
     }
@@ -61,13 +76,19 @@ foreach ($level in $ExpectedLevels) {
 
 $report = [ordered]@{ generatedAtUtc=[DateTime]::UtcNow.ToString('O'); workload=$Workload;
     levels=$ExpectedLevels; passed=($failures.Count -eq 0); failures=$failures;
-    summaries=$levelRows; databaseInvariants=$databaseInvariants; operations=$rows }
+    summaries=$levelRows; databaseInvariants=$databaseInvariants; postgresMetrics=$postgresMetrics; operations=$rows }
 $report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $ResultsRoot 'report.json') -Encoding utf8
 $lines = @('# CSIT Multi-User Load Test', '', "- Workload: **$Workload**",
     "- Levels: **$($ExpectedLevels -join ', ') users**", "- Gate: **$(if ($failures.Count) {'FAIL'} else {'PASS'})**", '',
     '| Users | Iterations | RPS | HTTP error rate | Check success | DB invariants |',
     '|---:|---:|---:|---:|---:|---:|')
 foreach ($levelRow in $levelRows) { $lines += "| $($levelRow.Level) | $($levelRow.Iterations) | $([Math]::Round($levelRow.Rps,2)) | $([Math]::Round(100*$levelRow.HttpErrorRate,2))% | $([Math]::Round(100*$levelRow.CheckSuccessRate,2))% | $(if ($levelRow.DatabasePassed) {'PASS'} else {'FAIL'}) |" }
+$lines += @('', '| Users | PG peak | PG limit | App pool limit | Exhaustion events | Sample failures |',
+    '|---:|---:|---:|---:|---:|---:|')
+foreach ($row in $postgresMetrics) {
+    $metric = $row.Metrics
+    $lines += "| $($row.Level) | $($metric.peakConnections) | $($metric.max_connections) | $($metric.applicationPoolMaximum) | $($metric.connectionExhaustionEvents) | $($metric.connectionSampleFailures) |"
+}
 $lines += @('',
     '| Users | Operation | Requests | Success | P50 ms | P95 ms | P99 ms |',
     '|---:|---|---:|---:|---:|---:|---:|')

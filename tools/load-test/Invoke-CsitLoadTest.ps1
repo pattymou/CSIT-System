@@ -28,6 +28,7 @@ $results = [IO.Path]::GetFullPath((Join-Path $root $ResultsRoot))
 $diagnostic = Join-Path $results 'diagnostic.log'
 $allowedRoot = Join-Path ([IO.Path]::GetTempPath()) "csit-load-$RunId"
 $storageRoot = Join-Path $allowedRoot 'storage'
+$script:connectionExhaustionEvents = 0
 
 New-Item -ItemType Directory -Force -Path $results, $storageRoot,
     (Join-Path $storageRoot 'documents'), (Join-Path $storageRoot 'staging'),
@@ -57,8 +58,62 @@ function Invoke-PsqlScalar([string] $Sql, [string] $TargetDatabase = 'postgres')
     }
     finally { $ErrorActionPreference = $old }
     $output | Out-File -LiteralPath $diagnostic -Append -Encoding utf8
+    if (($output -join "`n") -match '(?i)too many clients already|remaining connection slots are reserved') {
+        $script:connectionExhaustionEvents++
+    }
     if ($code -ne 0) { throw "PostgreSQL command failed: $Sql" }
     return (($output | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ }) -join "`n")
+}
+function Invoke-PsqlScalarWithRetry([string] $Sql, [string] $TargetDatabase, [int] $Attempts = 4) {
+    foreach ($attempt in 1..$Attempts) {
+        try { return Invoke-PsqlScalar $Sql $TargetDatabase }
+        catch {
+            if ($attempt -eq $Attempts) { throw }
+            Start-Sleep -Milliseconds (250 * $attempt)
+        }
+    }
+}
+function Start-ConnectionSampler([string] $OutputPath, [string] $StopPath, [string] $TargetDatabase) {
+    Remove-Item -LiteralPath $OutputPath, $StopPath -Force -ErrorAction SilentlyContinue
+    return Start-Job -ScriptBlock {
+        param($Psql, $HostName, $Port, $User, $Password, $Database, $Output, $Stop)
+        $env:PGPASSWORD = $Password
+        $peakTotal = 0; $peakDatabase = 0; $samples = 0; $sampleFailures = 0; $exhaustions = 0
+        while (-not (Test-Path -LiteralPath $Stop)) {
+            $result = @(& $Psql -X -tA -h $HostName -p $Port -U $User -d $Database `
+                -v ON_ERROR_STOP=1 -c "SELECT count(*)::text || '|' || (count(*) FILTER (WHERE datname=current_database()))::text FROM pg_stat_activity;" 2>&1)
+            if ($LASTEXITCODE -eq 0) {
+                $value = ($result | ForEach-Object { $_.ToString().Trim() } |
+                    Where-Object { $_ -match '^\d+\|\d+$' } | Select-Object -Last 1)
+                if ($value) {
+                    $parts = $value -split '\|'; $samples++
+                    $peakTotal = [Math]::Max($peakTotal, [int]$parts[0])
+                    $peakDatabase = [Math]::Max($peakDatabase, [int]$parts[1])
+                } else { $sampleFailures++ }
+            } else {
+                $sampleFailures++
+                if (($result -join "`n") -match '(?i)too many clients already|remaining connection slots are reserved') {
+                    $exhaustions++
+                }
+            }
+            Start-Sleep -Milliseconds 200
+        }
+        [ordered]@{ samples=$samples; sampleFailures=$sampleFailures; peakConnections=$peakTotal;
+            peakDatabaseConnections=$peakDatabase; connectionExhaustionEvents=$exhaustions } |
+            ConvertTo-Json | Set-Content -LiteralPath $Output -Encoding utf8
+    } -ArgumentList $PsqlPath, $PostgresHost, $PostgresPort, $PostgresUser, $PostgresPassword,
+        $TargetDatabase, $OutputPath, $StopPath
+}
+function Stop-ConnectionSampler($Job, [string] $StopPath) {
+    New-Item -ItemType File -Force -Path $StopPath | Out-Null
+    Wait-Job -Job $Job -Timeout 10 | Out-Null
+    if ($Job.State -eq 'Running') { Stop-Job -Job $Job }
+    Receive-Job -Job $Job 2>&1 | Out-File -LiteralPath $diagnostic -Append -Encoding utf8
+    Remove-Job -Job $Job -Force
+}
+function Get-AppConnectionExhaustionCount([string] $Path) {
+    if (-not (Test-Path -LiteralPath $Path)) { return 0 }
+    return @(Select-String -LiteralPath $Path -Pattern 'too many clients already|remaining connection slots are reserved').Count
 }
 function Invoke-Logged([scriptblock] $Command) {
     $old = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
@@ -80,6 +135,13 @@ function New-IdentityHeader([string] $Role, [int] $Index = 1,
 try {
     $clusterId = Invoke-PsqlScalar 'SELECT system_identifier::text FROM pg_control_system();'
     $serverMajor = Invoke-PsqlScalar "SELECT current_setting('server_version_num')::int / 10000;"
+    $serverMaxConnections = [int](Invoke-PsqlScalar "SELECT current_setting('max_connections');")
+    $reservedConnections = [int](Invoke-PsqlScalar "SELECT current_setting('superuser_reserved_connections');")
+    $applicationPoolMaximum = [Math]::Min(80, $serverMaxConnections - $reservedConnections - 10)
+    if ($applicationPoolMaximum -lt 10 -or
+        $applicationPoolMaximum -ge ($serverMaxConnections - $reservedConnections)) {
+        throw "PostgreSQL connection capacity is insufficient for an isolated load test."
+    }
     $inventory = @((Invoke-PsqlScalar 'SELECT datname FROM pg_database ORDER BY datname;') -split '\r?\n')
     if ($serverMajor -ne '16') { throw "PostgreSQL 16 is required; found $serverMajor." }
     $forbidden = @($inventory | Where-Object { $_ -eq 'sit_department_system' -or
@@ -100,7 +162,7 @@ try {
     $databaseCreated = $true
     $baseline = Join-Path $root 'tools/km-mock-e2e/baseline-a2d6224.psql'
     Invoke-Logged { & $PsqlPath -X -h $PostgresHost -p $PostgresPort -U $PostgresUser -d $database -v ON_ERROR_STOP=1 -f $baseline }
-    $connection = "Host=$PostgresHost;Port=$PostgresPort;Database=$database;Username=$PostgresUser;Password=$PostgresPassword;Include Error Detail=true"
+    $connection = "Host=$PostgresHost;Port=$PostgresPort;Database=$database;Username=$PostgresUser;Password=$PostgresPassword;Include Error Detail=true;Maximum Pool Size=$applicationPoolMaximum"
     Invoke-Logged { & dotnet ef database update --project (Join-Path $root 'SIT.DepartmentSystem.Web.csproj') `
         --configuration Release --connection $connection --no-build }
 
@@ -151,6 +213,10 @@ try {
     foreach ($users in $levels) {
         $levelDirectory = Join-Path $results "level-$users"
         New-Item -ItemType Directory -Force -Path $levelDirectory | Out-Null
+        $samplerPath = Join-Path $levelDirectory 'postgres-connection-samples.json'
+        $samplerStopPath = Join-Path $levelDirectory '.stop-postgres-sampler'
+        $appExhaustionsBefore = Get-AppConnectionExhaustionCount $appErr
+        $psqlExhaustionsBefore = $script:connectionExhaustionEvents
         $env:CSIT_LOAD_BASE_URL = $baseUrl
         $env:CSIT_LOAD_RUN_ID = $RunId
         $env:CSIT_LOAD_USERS = $users.ToString()
@@ -158,12 +224,31 @@ try {
         $env:CSIT_LOAD_OUTPUT = ($levelDirectory -replace '\\','/')
         $env:CSIT_LOAD_WARMUP = $Warmup
         $env:CSIT_LOAD_STEADY = $Steady
-        Invoke-Logged { & $K6Path run (Join-Path $PSScriptRoot 'csit-multi-user.js') }
+        $sampler = Start-ConnectionSampler $samplerPath $samplerStopPath $database
+        try { Invoke-Logged { & $K6Path run (Join-Path $PSScriptRoot 'csit-multi-user.js') } }
+        finally { Stop-ConnectionSampler $sampler $samplerStopPath }
         $invariants = Invoke-RestMethod -Uri "$baseUrl/api/load-test-control/invariants" `
             -Headers @{ 'X-CSIT-Load-Identity' = $adminHeader } -TimeoutSec 30
         $invariants | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $levelDirectory 'invariants.json') -Encoding utf8
         if ($invariants.passed -ne $true) { throw "Level $users consistency validation failed." }
-        Invoke-PsqlScalar "SELECT json_build_object('connections',numbackends,'transactions',xact_commit+xact_rollback,'deadlocks',deadlocks,'temp_bytes',temp_bytes)::text FROM pg_stat_database WHERE datname=current_database();" $database |
+        $metricsJson = Invoke-PsqlScalarWithRetry "SELECT json_build_object('connections',numbackends,'total_connections',(SELECT count(*) FROM pg_stat_activity),'transactions',xact_commit+xact_rollback,'deadlocks',deadlocks,'temp_bytes',temp_bytes,'max_connections',current_setting('max_connections')::int,'superuser_reserved_connections',current_setting('superuser_reserved_connections')::int)::text FROM pg_stat_database WHERE datname=current_database();" $database
+        $metrics = $metricsJson | ConvertFrom-Json
+        $samples = if (Test-Path -LiteralPath $samplerPath) {
+            Get-Content -LiteralPath $samplerPath -Raw | ConvertFrom-Json
+        } else {
+            [pscustomobject]@{ samples=0; sampleFailures=1; peakConnections=0;
+                peakDatabaseConnections=0; connectionExhaustionEvents=0 }
+        }
+        $exhaustions = [int]$samples.connectionExhaustionEvents +
+            ($script:connectionExhaustionEvents - $psqlExhaustionsBefore) +
+            ((Get-AppConnectionExhaustionCount $appErr) - $appExhaustionsBefore)
+        $metrics | Add-Member -NotePropertyName applicationPoolMaximum -NotePropertyValue $applicationPoolMaximum
+        $metrics | Add-Member -NotePropertyName peakConnections -NotePropertyValue ([int]$samples.peakConnections)
+        $metrics | Add-Member -NotePropertyName peakDatabaseConnections -NotePropertyValue ([int]$samples.peakDatabaseConnections)
+        $metrics | Add-Member -NotePropertyName connectionSamples -NotePropertyValue ([int]$samples.samples)
+        $metrics | Add-Member -NotePropertyName connectionSampleFailures -NotePropertyValue ([int]$samples.sampleFailures)
+        $metrics | Add-Member -NotePropertyName connectionExhaustionEvents -NotePropertyValue $exhaustions
+        $metrics | ConvertTo-Json -Depth 4 |
             Set-Content -LiteralPath (Join-Path $levelDirectory 'postgres-metrics.json') -Encoding utf8
     }
 
