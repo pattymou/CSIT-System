@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using Npgsql;
 using SIT.DepartmentSystem.Web.Data;
 using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Api;
@@ -473,6 +474,32 @@ public sealed class DocumentLibraryService(
         DateTime? receivedAt,
         CancellationToken cancellationToken)
     {
+        const int maximumAttempts = 3;
+        var stableReceivedAt = receivedAt?.ToUniversalTime() ?? DateTime.UtcNow;
+        for (var attempt = 1; ; attempt++)
+        {
+            try
+            {
+                return await StageApprovedCoreAttemptAsync(documentFileId, requestedFolderId,
+                    previousFileId, file, uploadedBy, bypassAudit, stableReceivedAt, cancellationToken);
+            }
+            catch (Exception ex) when (attempt < maximumAttempts && IsSerializationFailure(ex))
+            {
+                await Task.Delay(TimeSpan.FromMilliseconds(25 * attempt), cancellationToken);
+            }
+        }
+    }
+
+    private async Task<DocumentLibraryFileDto> StageApprovedCoreAttemptAsync(
+        Guid documentFileId,
+        Guid? requestedFolderId,
+        Guid? previousFileId,
+        IFormFile file,
+        string uploadedBy,
+        DocumentLibraryBypassAudit? bypassAudit,
+        DateTime receivedAt,
+        CancellationToken cancellationToken)
+    {
         if (documentFileId == Guid.Empty) throw new InvalidOperationException("文件識別碼不可空白。");
         ArgumentNullException.ThrowIfNull(file);
         if (file.Length <= 0) throw new InvalidOperationException("不可上傳空白檔案。");
@@ -540,7 +567,7 @@ public sealed class DocumentLibraryService(
         }
 
         var id = documentFileId;
-        var now = receivedAt?.ToUniversalTime() ?? DateTime.UtcNow;
+        var now = receivedAt;
         var originalName = DocumentLibraryRules.NormalizeOriginalFileName(file.FileName);
         var standardName = DocumentLibraryRules.CreateStandardFileName(originalName, now, id);
         var relativePath = Path.Combine(now.ToString("yyyy"), now.ToString("MM"), folderId.ToString("N"), standardName);
@@ -629,6 +656,14 @@ public sealed class DocumentLibraryService(
             if (createdPhysicalFile && File.Exists(absolutePath)) File.Delete(absolutePath);
             throw;
         }
+    }
+
+    private static bool IsSerializationFailure(Exception exception)
+    {
+        for (Exception? current = exception; current is not null; current = current.InnerException)
+            if (current is PostgresException { SqlState: PostgresErrorCodes.SerializationFailure })
+                return true;
+        return false;
     }
 
     public async Task<DocumentLibraryFileDto> UploadProductInformationAsync(

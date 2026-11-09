@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -20,6 +21,33 @@ namespace ApprovalFramework.Tests;
 
 public sealed class DocumentLibraryKmIntegrationTests
 {
+    [Fact]
+    public async Task ApprovedUpload_RetriesSerializationFailureWithoutDuplicateDocument()
+    {
+        var roots = TemporaryRoots.Create();
+        try
+        {
+            var failure = new SerializationFailureInterceptor();
+            var factory = new InMemoryFactory(failure);
+            var folderId = await SeedFoldersAsync(factory);
+            var attemptsBeforeUpload = failure.SaveAttempts;
+            failure.FailuresRemaining = 1;
+            var documentFileId = Guid.NewGuid();
+            var bytes = Encoding.UTF8.GetBytes("retry-safe-document");
+            await using var stream = new MemoryStream(bytes);
+            var uploaded = await Service(factory, roots).StageApprovedAsync(documentFileId, folderId,
+                new FormFile(stream, 0, bytes.Length, "files", "retry.txt")
+                { Headers = new HeaderDictionary(), ContentType = "text/plain" }, "retry-user");
+
+            Assert.Equal(documentFileId, uploaded.Id);
+            Assert.Equal(attemptsBeforeUpload + 2, failure.SaveAttempts);
+            await using var db = await factory.CreateDbContextAsync();
+            Assert.Single(await db.DocumentLibraryFiles.ToListAsync());
+            Assert.Single(await db.DocumentProcessingJobs.ToListAsync());
+        }
+        finally { roots.Dispose(); }
+    }
+
     [Fact]
     public async Task ApprovedReplacement_IsImmutableV2JobWithExactSupersedes()
     {
@@ -602,11 +630,35 @@ public sealed class DocumentLibraryKmIntegrationTests
 
     private sealed class InMemoryFactory : IDbContextFactory<AppDbContext>
     {
-        private readonly DbContextOptions<AppDbContext> options = new DbContextOptionsBuilder<AppDbContext>()
-            .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options;
+        private readonly DbContextOptions<AppDbContext> options;
+        public InMemoryFactory(SaveChangesInterceptor? interceptor = null)
+        {
+            var builder = new DbContextOptionsBuilder<AppDbContext>()
+                .UseInMemoryDatabase(Guid.NewGuid().ToString("N"));
+            if (interceptor is not null) builder.AddInterceptors(interceptor);
+            options = builder.Options;
+        }
         public AppDbContext CreateDbContext() => new(options);
         public Task<AppDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(CreateDbContext());
+    }
+
+    private sealed class SerializationFailureInterceptor : SaveChangesInterceptor
+    {
+        public int FailuresRemaining { get; set; }
+        public int SaveAttempts { get; private set; }
+
+        public override ValueTask<InterceptionResult<int>> SavingChangesAsync(
+            DbContextEventData eventData,
+            InterceptionResult<int> result,
+            CancellationToken cancellationToken = default)
+        {
+            SaveAttempts++;
+            if (FailuresRemaining-- > 0)
+                throw new PostgresException("serialization test failure", "ERROR", "ERROR",
+                    PostgresErrorCodes.SerializationFailure);
+            return ValueTask.FromResult(result);
+        }
     }
 
     private sealed class PostgreSqlFactory(string connection) : IDbContextFactory<AppDbContext>

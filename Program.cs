@@ -18,8 +18,11 @@ using OpenIddict.Validation.AspNetCore;
 using SIT.DepartmentSystem.Web.Services.ValidationRequests;
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
+using SIT.DepartmentSystem.Web.Services.LoadTesting;
 
 var builder = WebApplication.CreateBuilder(args);
+var loadTestMode = builder.Environment.IsEnvironment("LoadTest");
+if (loadTestMode) LoadTestSafety.ValidateBeforeServices(builder);
 var devRuntimeSecretsFile = Environment.GetEnvironmentVariable("CSIT_DEV_RUNTIME_SECRETS_FILE");
 if (!string.IsNullOrWhiteSpace(devRuntimeSecretsFile))
 {
@@ -106,7 +109,9 @@ if (useSharedIdentity && !builder.Environment.IsDevelopment())
     throw new InvalidOperationException("Shared Identity P0 is enabled only in Development.");
 
 var authentication = builder.Services
-    .AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+    .AddAuthentication(loadTestMode
+        ? LoadTestAuthenticationDefaults.Scheme
+        : CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
     {
         options.LoginPath = "/signin";
@@ -120,6 +125,9 @@ var authentication = builder.Services
         options.SlidingExpiration = false;
         if (useSharedIdentity) options.EventsType = typeof(SharedIdentityCookieEvents);
     });
+if (loadTestMode)
+    authentication.AddScheme<AuthenticationSchemeOptions, LoadTestAuthenticationHandler>(
+        LoadTestAuthenticationDefaults.Scheme, _ => { });
 if (useSharedIdentity)
 {
     var serviceAuthority = builder.Configuration["SharedIdentity:Authority"];
@@ -454,6 +462,8 @@ builder.Services.AddScoped(sp =>
 // builder.Services.AddAuthorization();
 
 var app = builder.Build();
+if (loadTestMode)
+    await LoadTestSafety.ValidateDatabaseAsync(app.Services, app.Configuration);
 if (app.Environment.IsDevelopment())
     app.UseForwardedHeaders();
 
@@ -502,6 +512,11 @@ app.UseStaticFiles();
 
 app.Use(async (context, next) =>
 {
+    if (!loadTestMode && context.Request.Path.StartsWithSegments("/api/load-test-control"))
+    {
+        context.Response.StatusCode = StatusCodes.Status404NotFound;
+        return;
+    }
     if (context.Request.Path.StartsWithSegments("/administration/accounts"))
     {
         context.Response.Headers.CacheControl = "no-store, no-cache, max-age=0";

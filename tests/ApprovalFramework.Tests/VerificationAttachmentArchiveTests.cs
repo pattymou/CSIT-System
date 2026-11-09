@@ -36,6 +36,7 @@ public sealed class VerificationAttachmentArchiveTests
         var attachment = await db.VerificationApplicationFiles.Include(x => x.DocumentLibraryFile)
             .SingleAsync(x => x.VerificationApplicationId == application.Id);
         var document = Assert.IsType<DocumentLibraryFile>(attachment.DocumentLibraryFile);
+        Assert.Equal(attachment.Id, document.DocumentId);
         Assert.Equal(DocumentStorageAreas.Library, document.StorageArea);
         var folders = await db.DocumentFolders.AsNoTracking().ToListAsync();
         var level1 = Assert.Single(folders, x => x.Level == 1);

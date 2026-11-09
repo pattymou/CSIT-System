@@ -50,6 +50,7 @@ internal static class VerificationApplicationAttachmentLinker
             document = new DocumentLibraryFile
             {
                 Id = Guid.NewGuid(),
+                DocumentId = attachment.Id,
             };
             db.DocumentLibraryFiles.Add(document);
             attachment.DocumentLibraryFileId = document.Id;
