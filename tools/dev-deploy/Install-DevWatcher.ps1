@@ -61,7 +61,7 @@ $scriptRoot = $PSScriptRoot
 foreach ($name in @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevMigrationReview.ps1',
         'Approve-DevMigrationReview.ps1', 'Initialize-DevManagedAssetStorage.ps1',
         'Restart-DevCurrent.ps1', 'Request-DevRuntimeMaintenance.ps1',
-        'Request-DevM2MTokenVerification.ps1')) {
+        'Request-DevM2MTokenVerification.ps1', 'Request-DevKmOutboxDispatch.ps1')) {
     $target = Join-Path $root ('automation\' + $name)
     Copy-Item -LiteralPath (Join-Path $scriptRoot $name) -Destination $target -Force
     & icacls.exe $target /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-19:R' | Out-Null

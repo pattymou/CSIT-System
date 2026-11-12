@@ -17,6 +17,10 @@ public interface IKmIntegrationClient
         CancellationToken cancellationToken) =>
         Task.FromResult(KmDeliveryResult.Failure(false, "UNSUPPORTED",
             "KM v2 document delivery is unavailable."));
+    Task<KmDeliveryResult> SubmitSingleDocumentJobAsync(
+        KmV2DocumentJobRequest request,
+        CancellationToken cancellationToken) =>
+        SubmitDocumentJobAsync(request, cancellationToken);
     Task<KmMetadataChangeDeliveryResult> SubmitMetadataChangeAsync(
         KmMetadataChangeRequest request, CancellationToken cancellationToken) =>
         Task.FromResult(KmMetadataChangeDeliveryResult.Failure(false, "UNSUPPORTED",
@@ -171,9 +175,20 @@ public sealed class KmIntegrationClient(
     public async Task<KmDeliveryResult> SubmitDocumentJobAsync(
         KmV2DocumentJobRequest request,
         CancellationToken cancellationToken)
+        => await SubmitDocumentJobCoreAsync(request, cancellationToken, requireEnabled: true);
+
+    public async Task<KmDeliveryResult> SubmitSingleDocumentJobAsync(
+        KmV2DocumentJobRequest request,
+        CancellationToken cancellationToken)
+        => await SubmitDocumentJobCoreAsync(request, cancellationToken, requireEnabled: false);
+
+    private async Task<KmDeliveryResult> SubmitDocumentJobCoreAsync(
+        KmV2DocumentJobRequest request,
+        CancellationToken cancellationToken,
+        bool requireEnabled)
     {
         var options = configured.Value;
-        if (!options.Enabled)
+        if (requireEnabled && !options.Enabled)
             return KmDeliveryResult.Failure(false, "DISABLED", "KM integration is disabled.");
         if (!TryGetBaseUri(options, out var baseUri))
             return KmDeliveryResult.Failure(false, "CONFIGURATION", "KM integration configuration is incomplete.");

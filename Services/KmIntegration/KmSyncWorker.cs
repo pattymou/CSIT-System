@@ -9,6 +9,11 @@ using SIT.DepartmentSystem.Web.Models.Config;
 
 namespace SIT.DepartmentSystem.Web.Services.KmIntegration;
 
+public sealed record KmSingleDispatchResult(
+    Guid OutboxId, Guid EventId, KmIntegrationStatus Status, string? KmJobId, string? ErrorCode);
+
+public sealed class KmSingleDispatchException(string message) : Exception(message);
+
 public sealed class KmSyncWorker(
     IDbContextFactory<AppDbContext> dbFactory,
     IKmIntegrationClient client,
@@ -27,10 +32,51 @@ public sealed class KmSyncWorker(
         {
             var claim = await ClaimNextAsync(options, cancellationToken);
             if (claim is null) break;
-            await DispatchAsync(claim.Value.Id, claim.Value.Lease, options, cancellationToken);
+            await DispatchAsync(claim.Value.Id, claim.Value.Lease, options, cancellationToken,
+                allowDisabled: false);
             count++;
         }
         return count;
+    }
+
+    /// <summary>Dispatch exactly one approved verification attachment without scanning the queue.</summary>
+    public async Task<KmSingleDispatchResult> ProcessSingleVerificationAttachmentAsync(
+        Guid outboxId, Guid eventId, CancellationToken cancellationToken = default)
+    {
+        if (outboxId == Guid.Empty || eventId == Guid.Empty)
+            throw new KmSingleDispatchException("OutboxId and EventId are required.");
+        var options = configured.Value;
+        ValidateOptions(options);
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            : null;
+        var row = db.Database.IsRelational()
+            ? await db.KmIntegrationOutbox
+                .FromSqlInterpolated($"SELECT * FROM km_integration_outbox WHERE id = {outboxId} FOR UPDATE")
+                .SingleOrDefaultAsync(cancellationToken)
+            : await db.KmIntegrationOutbox.SingleOrDefaultAsync(x => x.Id == outboxId, cancellationToken);
+        if (row is null || row.EventId != eventId ||
+            row.EventType != KmIntegrationEventTypes.VerificationApplicationAttachmentArchived ||
+            row.SourceEntityType != KmIntegrationSourceEntityTypes.VerificationApplicationFile)
+            throw new KmSingleDispatchException("The requested outbox row is not the specified verification attachment event.");
+        var now = DateTime.UtcNow;
+        if (row.Status is not (KmIntegrationStatus.Pending or KmIntegrationStatus.Failed) ||
+            row.RetryCount >= options.MaxRetryCount ||
+            (row.Status == KmIntegrationStatus.Failed &&
+             (!row.NextRetryAt.HasValue || row.NextRetryAt > now)))
+            throw new KmSingleDispatchException("The requested outbox row is not currently dispatchable.");
+        var lease = Guid.NewGuid();
+        row.Claim(lease, now, TimeSpan.FromSeconds(options.LeaseSeconds));
+        await db.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+
+        await DispatchAsync(row.Id, lease, options, cancellationToken, allowDisabled: true);
+        await using var resultDb = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var result = await resultDb.KmIntegrationOutbox.AsNoTracking()
+            .SingleAsync(x => x.Id == outboxId, cancellationToken);
+        return new KmSingleDispatchResult(result.Id, result.EventId, result.Status,
+            result.KmJobId, result.LastErrorCode);
     }
 
     private async Task<(Guid Id, Guid Lease)?> ClaimNextAsync(KmIntegrationOptions options,
@@ -226,7 +272,7 @@ public sealed class KmSyncWorker(
     }
 
     private async Task DispatchAsync(Guid id, Guid lease, KmIntegrationOptions options,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool allowDisabled)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(options.LeaseSeconds - 5));
@@ -285,7 +331,9 @@ public sealed class KmSyncWorker(
                     result = request is null
                         ? KmDeliveryResult.Failure(false, "VERIFICATION_ATTACHMENT_UNAVAILABLE",
                             "Accepted and formally archived verification attachment is unavailable.")
-                        : await client.SubmitDocumentJobAsync(request, deadline.Token);
+                        : await (allowDisabled
+                            ? client.SubmitSingleDocumentJobAsync(request, deadline.Token)
+                            : client.SubmitDocumentJobAsync(request, deadline.Token));
                 }
                 else if (row.EventType == KmIntegrationEventTypes.TestReportCommitted &&
                     row.SourceEntityType == KmIntegrationSourceEntityTypes.TestReport)

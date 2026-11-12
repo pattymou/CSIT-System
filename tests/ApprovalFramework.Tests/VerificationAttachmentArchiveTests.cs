@@ -243,6 +243,41 @@ public sealed class VerificationAttachmentArchiveTests
     }
 
     [Fact]
+    public async Task SingleVerificationDispatch_UsesExactEventWhileGlobalIntegrationIsDisabled()
+    {
+        await using var fixture = await ArchiveFixture.CreateAsync();
+        var application = await fixture.AddAcceptedAsync("MODEL-KM-SINGLE", "single-dispatch");
+        await fixture.Processor.EnqueueApprovedApplicationAsync(application, DateTime.UtcNow,
+            CancellationToken.None);
+        await fixture.Processor.ProcessPendingAsync();
+        Guid outboxId; Guid eventId;
+        await using (var db = fixture.Factory.CreateDbContext())
+        {
+            var row = await db.KmIntegrationOutbox.SingleAsync();
+            outboxId = row.Id; eventId = row.EventId;
+        }
+        var client = new CountingKmClient();
+        var disabled = new KmIntegrationOptions
+        {
+            Enabled = false, BaseUrl = "https://example.invalid/",
+            ServiceBaseUrl = "https://csit.invalid/", TimeoutSeconds = 2,
+            MaxRetryCount = 3, RetryScheduleSeconds = [60], PollSeconds = 1, LeaseSeconds = 30
+        };
+        var result = await new KmSyncWorker(
+            fixture.Factory, client, Options.Create(disabled), NullLogger<KmSyncWorker>.Instance,
+            Options.Create(new DocumentStorageOptions { RootPath = fixture.LibraryRoot }))
+            .ProcessSingleVerificationAttachmentAsync(outboxId, eventId);
+
+        Assert.Equal(KmIntegrationStatus.Sent, result.Status);
+        Assert.Equal(1, client.V2SubmitCount);
+        await using var verify = fixture.Factory.CreateDbContext();
+        var persisted = await verify.KmIntegrationOutbox.SingleAsync();
+        Assert.Equal(outboxId, persisted.Id);
+        Assert.Equal(eventId, persisted.EventId);
+        Assert.Equal(KmIntegrationStatus.Sent, persisted.Status);
+    }
+
+    [Fact]
     public void KmPresentation_DoesNotTreatAcceptedDeliveryAsCompleted()
     {
         var departmentId = Guid.NewGuid();

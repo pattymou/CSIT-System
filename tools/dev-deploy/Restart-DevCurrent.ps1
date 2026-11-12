@@ -88,6 +88,36 @@ function Test-DevM2MVerificationRequest {
     } catch { return $false }
 }
 
+function Test-DevKmOutboxDispatchRequest {
+    param([string] $RequestPath, [object] $Current, [datetime] $NowUtc)
+    if (-not (Test-Path -LiteralPath $RequestPath)) { return $false }
+    try {
+        $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+        $outboxId = [guid]::Empty
+        $eventId = [guid]::Empty
+        if ([string]$request.Action -ne 'DispatchVerificationAttachment' -or
+            [string]$request.Sha -ne [string]$Current.Sha -or
+            [int]$request.Pid -ne [int]$Current.Pid -or
+            [string]$request.Path -ne [string]$Current.Path -or
+            -not [guid]::TryParse([string]$request.OutboxId, [ref]$outboxId) -or
+            -not [guid]::TryParse([string]$request.EventId, [ref]$eventId) -or
+            $outboxId -eq [guid]::Empty -or $eventId -eq [guid]::Empty) { return $false }
+        $expires = [datetime]::Parse([string]$request.ExpiresAtUtc).ToUniversalTime()
+        return $expires -gt $NowUtc -and $expires -le $NowUtc.AddMinutes(11)
+    } catch { return $false }
+}
+
+function Get-DevKmOutboxDispatchDecision {
+    param([bool] $RequestValid, [bool] $CurrentValid, [int] $DevListenerCount,
+        [bool] $RuntimeMatchesCurrent, [bool] $ReleaseProcessDuplicate, [bool] $DependenciesReady)
+    if (-not $RequestValid) { return 'NoRequest' }
+    if (-not $CurrentValid) { return 'BlockedCurrent' }
+    if ($DevListenerCount -ne 1 -or $ReleaseProcessDuplicate) { return 'BlockedRuntimeShape' }
+    if (-not $RuntimeMatchesCurrent) { return 'BlockedUnboundRuntime' }
+    if (-not $DependenciesReady) { return 'BlockedDependencies' }
+    return 'Dispatch'
+}
+
 function Get-DevM2MVerificationDecision {
     param(
         [bool] $RequestValid,
@@ -116,6 +146,8 @@ $currentFile = Join-Path $stateRoot 'current.json'
 $maintenanceFile = Join-Path $stateRoot 'runtime-maintenance-request.json'
 $m2mVerificationFile = Join-Path $stateRoot 'runtime-m2m-verification-request.json'
 $m2mVerificationResultFile = Join-Path $stateRoot 'runtime-m2m-verification-result.json'
+$kmOutboxDispatchFile = Join-Path $stateRoot 'runtime-km-outbox-dispatch-request.json'
+$kmOutboxDispatchResultFile = Join-Path $stateRoot 'runtime-km-outbox-dispatch-result.json'
 $recoveryFile = Join-Path $stateRoot 'runtime-recovery.json'
 $recoveryLog = Join-Path $logsRoot 'runtime-recovery.log'
 $lock = $null
@@ -402,6 +434,62 @@ function Invoke-DevM2MVerification([object] $Current, [string] $RequestPath, [da
     }
 }
 
+function Invoke-DevKmOutboxDispatch([object] $Current, [string] $RequestPath, [datetime] $NowUtc) {
+    $releasePath = [string]$Current.Path
+    $exe = Join-Path $releasePath 'SIT.DepartmentSystem.Web.exe'
+    $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+    $logPrefix = Join-Path $logsRoot ('km-outbox-dispatch-' + ([string]$Current.Sha).Substring(0, 8) + '-' +
+        $NowUtc.ToString('yyyyMMddHHmmss'))
+    $stdout = $logPrefix + '.stdout.log'; $stderr = $logPrefix + '.stderr.log'
+    $child = $null; $exitCode = 1
+    try {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$Current.Pid)"
+        if ($null -eq $process -or [IO.Path]::GetFullPath([string]$process.ExecutablePath) -ne
+            [IO.Path]::GetFullPath($exe)) { throw 'KM outbox dispatch runtime path guard failed.' }
+        $env:ASPNETCORE_ENVIRONMENT = 'Development'; $env:DOTNET_ENVIRONMENT = 'Development'
+        $env:CSIT_DEV_RUNTIME_SECRETS_FILE = $secretFile
+        $env:CSIT_DEV_LOCAL_CERT_THUMBPRINT = $localhostCert
+        $env:CSIT_DEV_7444_CERT_THUMBPRINT = $publicCert
+        $env:DevDeployment__Sha = [string]$Current.Sha
+        $env:DevDeployment__TimeUtc = $NowUtc.ToString('yyyy-MM-dd HH:mm:ss UTC')
+        $child = Start-Process -FilePath $exe -WorkingDirectory $releasePath -WindowStyle Hidden `
+            -ArgumentList @('--dispatch-km-outbox-event', [string]$request.OutboxId, [string]$request.EventId) `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+        if (-not $child.WaitForExit(120000)) {
+            Stop-Process -Id $child.Id -Force -ErrorAction SilentlyContinue
+            throw 'KM outbox dispatch timed out.'
+        }
+        $exitCode = [int]$child.ExitCode
+        $jsonLines = @(Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match '^\s*\{.*\}\s*$' })
+        if ($jsonLines.Count -ne 1) { throw 'KM outbox dispatch result was not exactly one safe record.' }
+        $result = $jsonLines[0] | ConvertFrom-Json
+        if ([string]$result.IdentitySid -ne 'S-1-5-19') { throw 'KM outbox dispatch did not run as LOCAL SERVICE.' }
+        $record = [ordered]@{ Sha=[string]$Current.Sha; Pid=[int]$child.Id; ExitCode=$exitCode;
+            RequestedAtUtc=[string]$request.RequestedAtUtc; CompletedAtUtc=(Get-Date).ToUniversalTime().ToString('o');
+            IdentitySid=[string]$result.IdentitySid; OutboxId=[string]$result.OutboxId; EventId=[string]$result.EventId;
+            Outcome=[string]$result.Outcome; Status=[string]$result.Status; KmJobIdPresent=[bool]$result.KmJobIdPresent;
+            ErrorCode=[string]$result.ErrorCode }
+        $record | ConvertTo-Json | Set-Content -LiteralPath ($kmOutboxDispatchResultFile + '.tmp') -Encoding UTF8
+        Move-Item -LiteralPath ($kmOutboxDispatchResultFile + '.tmp') -Destination $kmOutboxDispatchResultFile -Force
+        Write-RecoveryLog $(if ($exitCode -eq 0) { 'SUCCESS' } else { 'FAILED' }) `
+            ("DEV_KM_OUTBOX_DISPATCH sha=$($Current.Sha) outbox=$($result.OutboxId) event=$($result.EventId) outcome=$($result.Outcome) status=$($result.Status) error=$($result.ErrorCode)")
+    } catch {
+        $record = [ordered]@{ Sha=[string]$Current.Sha; Pid=[int]$(if($child){$child.Id}else{0}); ExitCode=$exitCode;
+            CompletedAtUtc=(Get-Date).ToUniversalTime().ToString('o'); IdentitySid='S-1-5-19'; Outcome='FAIL';
+            Status='Failed'; KmJobIdPresent=$false; ErrorCode='WATCHER_DISPATCH_FAILED' }
+        $record | ConvertTo-Json | Set-Content -LiteralPath ($kmOutboxDispatchResultFile + '.tmp') -Encoding UTF8
+        Move-Item -LiteralPath ($kmOutboxDispatchResultFile + '.tmp') -Destination $kmOutboxDispatchResultFile -Force
+        Write-RecoveryLog 'FAILED' ("DEV_KM_OUTBOX_DISPATCH watcher_error=$($_.Exception.GetType().Name)")
+    } finally {
+        Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
+        foreach ($key in @('ASPNETCORE_ENVIRONMENT','DOTNET_ENVIRONMENT','CSIT_DEV_RUNTIME_SECRETS_FILE',
+                'CSIT_DEV_LOCAL_CERT_THUMBPRINT','CSIT_DEV_7444_CERT_THUMBPRINT','DevDeployment__Sha','DevDeployment__TimeUtc')) {
+            Remove-Item "Env:$key" -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 if ($LoadFunctionsOnly) { return }
 
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-19') {
@@ -464,8 +552,25 @@ try {
         -WindowStartedUtc $state.WindowStartedUtc -AttemptsInWindow $state.AttemptsInWindow
     $maintenanceValid = Test-DevMaintenanceRequest -RequestPath $maintenanceFile -Current $current -NowUtc $now
     $m2mVerificationValid = Test-DevM2MVerificationRequest -RequestPath $m2mVerificationFile -Current $current -NowUtc $now
-    if ($preDecision -eq 'Healthy' -and $maintenanceValid -and $m2mVerificationValid) {
-        Write-RecoveryLog 'BLOCKED' 'Both maintenance and M2M verification requests are present.'
+    $kmOutboxDispatchValid = Test-DevKmOutboxDispatchRequest -RequestPath $kmOutboxDispatchFile -Current $current -NowUtc $now
+    $validRequests = @($maintenanceValid, $m2mVerificationValid, $kmOutboxDispatchValid)
+    $requestCount = @($validRequests | Where-Object { $_ }).Count
+    if ($requestCount -gt 1) {
+        Write-RecoveryLog 'BLOCKED' 'Multiple DEV maintenance or diagnostic requests are present.'
+        return
+    }
+    if ($kmOutboxDispatchValid) {
+        $dispatchRuntimeMatches = $listeners.Count -eq 1 -and [int]$listeners[0] -eq [int]$current.Pid
+        $dispatchDecision = Get-DevKmOutboxDispatchDecision -RequestValid $true -CurrentValid $currentValid `
+            -DevListenerCount $listeners.Count -RuntimeMatchesCurrent $dispatchRuntimeMatches `
+            -ReleaseProcessDuplicate ($processes.Count -gt 1) -DependenciesReady $true
+        if ($dispatchDecision -ne 'Dispatch') { Write-RecoveryLog 'BLOCKED' $dispatchDecision; return }
+        try { Assert-DevDependencies } catch {
+            Write-RecoveryLog 'BLOCKED' 'KM outbox dispatch DEV dependency guard failed.'
+            Remove-Item -LiteralPath $kmOutboxDispatchFile -Force -ErrorAction SilentlyContinue
+            return
+        }
+        Invoke-DevKmOutboxDispatch -Current $current -RequestPath $kmOutboxDispatchFile -NowUtc $now
         return
     }
     if ($m2mVerificationValid) {
