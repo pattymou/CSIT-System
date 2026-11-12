@@ -50,10 +50,10 @@ try {
     }
     $tmp = $requestFile + '.tmp'
     $request | ConvertTo-Json | Set-Content -LiteralPath $tmp -Encoding UTF8
-    & icacls.exe $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-19:R' | Out-Null
+    & icacls.exe $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-19:M' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'M2M verification request ACL failed.' }
     Move-Item -LiteralPath $tmp -Destination $requestFile -Force
-    & icacls.exe $requestFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-19:R' | Out-Null
+    & icacls.exe $requestFile /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-19:M' | Out-Null
     if ($LASTEXITCODE -ne 0) { throw 'M2M verification request ACL verification failed.' }
     if (@(Get-NetTCPConnection -State Listen -LocalPort 5010 |
         Select-Object -ExpandProperty OwningProcess -Unique)[0] -ne $productionBefore[0]) {
