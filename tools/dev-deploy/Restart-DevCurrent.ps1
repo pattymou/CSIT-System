@@ -93,14 +93,14 @@ function Get-DevM2MVerificationDecision {
         [bool] $RequestValid,
         [bool] $CurrentValid,
         [int] $DevListenerCount,
-        [int] $ReleaseProcessCount,
         [bool] $RuntimeMatchesCurrent,
+        [bool] $ReleaseProcessDuplicate,
         [bool] $DependenciesReady
     )
 
     if (-not $RequestValid) { return 'NoRequest' }
     if (-not $CurrentValid) { return 'BlockedCurrent' }
-    if ($DevListenerCount -ne 1 -or $ReleaseProcessCount -ne 1) { return 'BlockedRuntimeShape' }
+    if ($DevListenerCount -ne 1 -or $ReleaseProcessDuplicate) { return 'BlockedRuntimeShape' }
     if (-not $RuntimeMatchesCurrent) { return 'BlockedUnboundRuntime' }
     if (-not $DependenciesReady) { return 'BlockedDependencies' }
     return 'Verify'
@@ -469,9 +469,10 @@ try {
         return
     }
     if ($m2mVerificationValid) {
+        $m2mRuntimeMatches = $listeners.Count -eq 1 -and [int]$listeners[0] -eq [int]$current.Pid
         $m2mDecision = Get-DevM2MVerificationDecision -RequestValid $true -CurrentValid $currentValid `
-            -DevListenerCount $listeners.Count -ReleaseProcessCount $processes.Count `
-            -RuntimeMatchesCurrent $runtimeMatches -DependenciesReady $true
+            -DevListenerCount $listeners.Count -RuntimeMatchesCurrent $m2mRuntimeMatches `
+            -ReleaseProcessDuplicate ($processes.Count -gt 1) -DependenciesReady $true
         if ($m2mDecision -ne 'Verify') {
             Write-RecoveryLog 'BLOCKED' $m2mDecision
             return

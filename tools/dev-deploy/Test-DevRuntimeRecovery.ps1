@@ -55,8 +55,8 @@ Assert-MaintenanceDecision 'maintenance reloads a healthy exact release' 'Reload
 
 function Assert-M2MDecision([string] $Name, [string] $Expected, [hashtable] $Case) {
     $defaults = @{
-        RequestValid=$true; CurrentValid=$true; DevListenerCount=1; ReleaseProcessCount=1;
-        RuntimeMatchesCurrent=$true; DependenciesReady=$true
+        RequestValid=$true; CurrentValid=$true; DevListenerCount=1;
+        RuntimeMatchesCurrent=$true; ReleaseProcessDuplicate=$false; DependenciesReady=$true
     }
     foreach ($key in $Case.Keys) { $defaults[$key] = $Case[$key] }
     $actual = Get-DevM2MVerificationDecision @defaults
@@ -69,7 +69,7 @@ Assert-M2MDecision 'M2M verification rejects unbound runtime' 'BlockedUnboundRun
     RuntimeMatchesCurrent=$false
 }
 Assert-M2MDecision 'M2M verification rejects duplicate runtime shape' 'BlockedRuntimeShape' @{
-    DevListenerCount=2
+    ReleaseProcessDuplicate=$true
 }
 
 $m2mFile = Join-Path ([IO.Path]::GetTempPath()) ('csit-m2m-' + [guid]::NewGuid().ToString('N') + '.json')
