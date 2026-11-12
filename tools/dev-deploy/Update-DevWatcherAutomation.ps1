@@ -46,7 +46,7 @@ foreach ($restricted in @($automationRoot, $reviewRoot)) {
 }
 $names = @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevMigrationReview.ps1',
     'Approve-DevMigrationReview.ps1', 'Initialize-DevManagedAssetStorage.ps1',
-    'Restart-DevCurrent.ps1')
+    'Restart-DevCurrent.ps1', 'Request-DevRuntimeMaintenance.ps1')
 foreach ($name in $names) {
     $source = Join-Path $PSScriptRoot $name
     $target = Join-Path $automationRoot $name

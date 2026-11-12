@@ -41,6 +41,39 @@ function Get-DevRuntimeRecoveryDecision {
     return 'Recover'
 }
 
+function Get-DevRuntimeMaintenanceDecision {
+    param(
+        [bool] $RequestValid,
+        [bool] $CurrentValid,
+        [int] $DevListenerCount,
+        [int] $ReleaseProcessCount,
+        [bool] $RuntimeMatchesCurrent,
+        [bool] $HealthPassed,
+        [bool] $DependenciesReady
+    )
+
+    if (-not $RequestValid) { return 'NoRequest' }
+    if (-not $CurrentValid) { return 'BlockedCurrent' }
+    if ($DevListenerCount -ne 1 -or $ReleaseProcessCount -ne 1) { return 'BlockedRuntimeShape' }
+    if (-not $RuntimeMatchesCurrent -or -not $HealthPassed) { return 'BlockedUnhealthy' }
+    if (-not $DependenciesReady) { return 'BlockedDependencies' }
+    return 'Reload'
+}
+
+function Test-DevMaintenanceRequest {
+    param([string] $RequestPath, [object] $Current, [datetime] $NowUtc)
+    if (-not (Test-Path -LiteralPath $RequestPath)) { return $false }
+    try {
+        $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+        if ([string]$request.Action -ne 'ReloadRuntimeConfiguration' -or
+            [string]$request.Sha -ne [string]$Current.Sha -or
+            [int]$request.Pid -ne [int]$Current.Pid -or
+            [string]$request.Path -ne [string]$Current.Path) { return $false }
+        $expires = [datetime]::Parse([string]$request.ExpiresAtUtc).ToUniversalTime()
+        return $expires -gt $NowUtc -and $expires -le $NowUtc.AddMinutes(16)
+    } catch { return $false }
+}
+
 $root = 'C:\ProgramData\CSIT-DEV'
 $stateRoot = Join-Path $root 'state'
 $releaseRoot = Join-Path $root 'releases'
@@ -48,6 +81,7 @@ $logsRoot = Join-Path $root 'logs'
 $secretFile = Join-Path $root 'secrets\runtime.json'
 $baseSettings = Join-Path $root 'secrets\base-appsettings.json'
 $currentFile = Join-Path $stateRoot 'current.json'
+$maintenanceFile = Join-Path $stateRoot 'runtime-maintenance-request.json'
 $recoveryFile = Join-Path $stateRoot 'runtime-recovery.json'
 $recoveryLog = Join-Path $logsRoot 'runtime-recovery.log'
 $lock = $null
@@ -329,7 +363,70 @@ try {
         -RuntimeMatchesCurrent $runtimeMatches -HealthPassed $healthPassed `
         -DependenciesReady $true -NowUtc $now -LastAttemptUtc $state.LastAttemptUtc `
         -WindowStartedUtc $state.WindowStartedUtc -AttemptsInWindow $state.AttemptsInWindow
-    if ($preDecision -eq 'Healthy') { return }
+    $maintenanceValid = Test-DevMaintenanceRequest -RequestPath $maintenanceFile -Current $current -NowUtc $now
+    if ($preDecision -eq 'Healthy' -and -not $maintenanceValid) { return }
+    if ($preDecision -eq 'Healthy' -and $maintenanceValid) {
+        $maintenanceDecision = Get-DevRuntimeMaintenanceDecision -RequestValid $true `
+            -CurrentValid $currentValid -DevListenerCount $listeners.Count `
+            -ReleaseProcessCount $processes.Count -RuntimeMatchesCurrent $runtimeMatches `
+            -HealthPassed $healthPassed -DependenciesReady $true
+        if ($maintenanceDecision -ne 'Reload') {
+            Write-RecoveryLog 'BLOCKED' $maintenanceDecision
+            return
+        }
+        $productionBefore = 0
+        $oldPid = [int]$current.Pid
+        $oldRelease = [string]$current.Path
+        $candidatePid = 0
+        try {
+            $productionBefore = Get-ProductionPid
+            Assert-DevDependencies
+            $oldProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$oldPid"
+            $expectedExe = Join-Path $oldRelease 'SIT.DepartmentSystem.Web.exe'
+            if ($null -eq $oldProcess -or $oldProcess.Name -ne 'SIT.DepartmentSystem.Web.exe' -or
+                [IO.Path]::GetFullPath([string]$oldProcess.ExecutablePath) -ne
+                [IO.Path]::GetFullPath($expectedExe)) {
+                throw 'DEV maintenance PID or executable guard failed.'
+            }
+            Stop-Process -Id $oldPid -Force
+            if (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {
+                throw 'DEV maintenance process did not stop.'
+            }
+            $candidatePid = Start-CurrentRelease $oldRelease ([string]$current.Sha)
+            Assert-Smoke ([string]$current.Sha) $candidatePid
+            if ((Get-ProductionPid) -ne $productionBefore) {
+                throw 'Production 5010 PID changed during DEV maintenance.'
+            }
+            $current.Pid = $candidatePid
+            $current | Add-Member -NotePropertyName ConfigReloadedAtUtc `
+                -NotePropertyValue $now.ToString('o') -Force
+            $current | ConvertTo-Json | Set-Content -LiteralPath ($currentFile + '.tmp') -Encoding UTF8
+            Move-Item -LiteralPath ($currentFile + '.tmp') -Destination $currentFile -Force
+            Remove-Item -LiteralPath $maintenanceFile -Force
+            Write-RecoveryLog 'SUCCESS' ("DEV_CONFIG_RELOAD sha=$($current.Sha) pid=$candidatePid")
+        } catch {
+            $reason = [string]$_.Exception.Message
+            if ($candidatePid -ne 0 -and (Get-Process -Id $candidatePid -ErrorAction SilentlyContinue)) {
+                $candidateProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$candidatePid"
+                $candidateExe = Join-Path $oldRelease 'SIT.DepartmentSystem.Web.exe'
+                if ($candidateProcess -and [IO.Path]::GetFullPath([string]$candidateProcess.ExecutablePath) -eq
+                    [IO.Path]::GetFullPath($candidateExe)) { Stop-Process -Id $candidatePid -Force }
+            }
+            if (-not (Get-Process -Id $oldPid -ErrorAction SilentlyContinue)) {
+                try {
+                    $rollbackPid = Start-CurrentRelease $oldRelease ([string]$current.Sha)
+                    Assert-Smoke ([string]$current.Sha) $rollbackPid
+                    $current.Pid = $rollbackPid
+                    $current | ConvertTo-Json | Set-Content -LiteralPath ($currentFile + '.tmp') -Encoding UTF8
+                    Move-Item -LiteralPath ($currentFile + '.tmp') -Destination $currentFile -Force
+                    $reason = $reason + '; rollback=PASS'
+                } catch { $reason = $reason + '; rollback=FAIL' }
+            }
+            Remove-Item -LiteralPath $maintenanceFile -Force -ErrorAction SilentlyContinue
+            Write-RecoveryLog 'FAILED' ("DEV_CONFIG_RELOAD $reason")
+        }
+        return
+    }
     if ($preDecision -ne 'Recover') {
         if ($preDecision -notin @('RetryDeferred','RetryLimit')) {
             Write-RecoveryLog 'BLOCKED' $preDecision

@@ -12,6 +12,14 @@ and no active equipment deletion job. Existing or duplicate processes fail close
 deployment lock, a five-minute cooldown, and a maximum of three starts per hour; results are written to
 `state\runtime-recovery.json` and `logs\runtime-recovery.log`.
 
+For an approved configuration-only maintenance window, an Administrator may run
+`Request-DevRuntimeMaintenance.ps1` with the exact SHA and PID from `state\current.json`. It writes a
+short-lived, SHA/PID/path-bound request under `state\runtime-maintenance-request.json`. The existing
+LOCAL SERVICE watcher consumes that request under `deploy.lock`, verifies the current release and full
+HTTPS smoke checks, restarts only the exact recorded DEV executable, preserves the Production 5010 PID,
+and removes the request after success. Invalid, expired, duplicate, or unhealthy requests fail closed;
+the request is never exposed through a website API.
+
 `Release-DevReady.ps1` is the release command for Codex after source review, Build/Test, commit, and push. It independently builds and tests the pushed commit in a clean checkout before pushing the ready tag. `Watch-DevReady.ps1` then invokes `Deploy-DevReady.ps1` from the protected local automation directory. The deployer clones the exact commit, builds it, runs the full test suite, and publishes the tested DLL into `C:\ProgramData\CSIT-DEV\releases\<SHA>`. A file lock permits one deployment at a time.
 
 The deployer reads only `C:\ProgramData\CSIT-DEV\secrets\runtime.json`, which targets `sit_department_system_dev` as `csit_runtime_dev`. It never pushes secrets or artifacts to GitHub. A change involving migration files stops before activation for DEV DBA review and backup. The current release stays live during Build/Test. After activation, HTTPS, OIDC redirect, static assets, Blazor WebSocket, and 7444 guards are checked. If a subsequent release fails smoke checks, the previous successful DEV release is restarted. A failed ready tag is recorded in `state\failed.json` and is not retried every minute.
