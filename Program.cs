@@ -464,6 +464,14 @@ builder.Services.AddScoped(sp =>
 var app = builder.Build();
 if (loadTestMode)
     await LoadTestSafety.ValidateDatabaseAsync(app.Services, app.Configuration);
+if (args.Contains("--verify-km-m2m-token", StringComparer.Ordinal))
+{
+    var exitCode = await DevKmM2MTokenVerification.RunAsync(app.Services, Console.Out,
+        CancellationToken.None);
+    await app.DisposeAsync();
+    Environment.ExitCode = exitCode;
+    return;
+}
 if (app.Environment.IsDevelopment())
     app.UseForwardedHeaders();
 

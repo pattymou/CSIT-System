@@ -20,6 +20,11 @@ HTTPS smoke checks, restarts only the exact recorded DEV executable, preserves t
 and removes the request after success. Invalid, expired, duplicate, or unhealthy requests fail closed;
 the request is never exposed through a website API.
 
+For a one-shot LOCAL SERVICE M2M credential check, an Administrator may instead run
+`Request-DevM2MTokenVerification.ps1` with the exact SHA and PID from `state\current.json`. The watcher
+executes the deployed application with the fixed `--verify-km-m2m-token` argument, records only safe
+status/claims fields, consumes the request, and never starts the web listener or exposes a user API.
+
 `Release-DevReady.ps1` is the release command for Codex after source review, Build/Test, commit, and push. It independently builds and tests the pushed commit in a clean checkout before pushing the ready tag. `Watch-DevReady.ps1` then invokes `Deploy-DevReady.ps1` from the protected local automation directory. The deployer clones the exact commit, builds it, runs the full test suite, and publishes the tested DLL into `C:\ProgramData\CSIT-DEV\releases\<SHA>`. A file lock permits one deployment at a time.
 
 The deployer reads only `C:\ProgramData\CSIT-DEV\secrets\runtime.json`, which targets `sit_department_system_dev` as `csit_runtime_dev`. It never pushes secrets or artifacts to GitHub. A change involving migration files stops before activation for DEV DBA review and backup. The current release stays live during Build/Test. After activation, HTTPS, OIDC redirect, static assets, Blazor WebSocket, and 7444 guards are checked. If a subsequent release fails smoke checks, the previous successful DEV release is restarted. A failed ready tag is recorded in `state\failed.json` and is not retried every minute.

@@ -53,6 +53,25 @@ Assert-MaintenanceDecision 'maintenance requires exact runtime shape' 'BlockedRu
 Assert-MaintenanceDecision 'maintenance refuses unhealthy runtime' 'BlockedUnhealthy' @{HealthPassed=$false}
 Assert-MaintenanceDecision 'maintenance reloads a healthy exact release' 'Reload' @{}
 
+$m2mFile = Join-Path ([IO.Path]::GetTempPath()) ('csit-m2m-' + [guid]::NewGuid().ToString('N') + '.json')
+try {
+    $current = [pscustomobject] @{ Sha = ('b' * 40); Pid = 5678;
+        Path = 'C:\ProgramData\CSIT-DEV\releases\' + ('b' * 40) }
+    $now = [datetime]::SpecifyKind([datetime]'2026-10-30T04:00:00', [DateTimeKind]::Utc)
+    @{Action='VerifyKmM2MToken'; Sha=$current.Sha; Pid=$current.Pid; Path=$current.Path;
+        ExpiresAtUtc=$now.AddMinutes(5).ToString('o')} | ConvertTo-Json |
+        Set-Content -LiteralPath $m2mFile -Encoding UTF8
+    if (-not (Test-DevM2MVerificationRequest -RequestPath $m2mFile -Current $current -NowUtc $now)) {
+        throw 'A matching unexpired M2M verification request was rejected.'
+    }
+    if (Test-DevM2MVerificationRequest -RequestPath $m2mFile -Current $current -NowUtc $now.AddMinutes(11)) {
+        throw 'An expired M2M verification request was accepted.'
+    }
+    Write-Output 'PASS M2M verification request binding and expiry'
+} finally {
+    Remove-Item -LiteralPath $m2mFile -Force -ErrorAction SilentlyContinue
+}
+
 $maintenanceFile = Join-Path ([IO.Path]::GetTempPath()) ('csit-maintenance-' + [guid]::NewGuid().ToString('N') + '.json')
 try {
     $current = [pscustomobject] @{ Action = 'ReloadRuntimeConfiguration'; Sha = ('a' * 40); Pid = 1234;

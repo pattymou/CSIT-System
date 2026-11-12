@@ -74,6 +74,20 @@ function Test-DevMaintenanceRequest {
     } catch { return $false }
 }
 
+function Test-DevM2MVerificationRequest {
+    param([string] $RequestPath, [object] $Current, [datetime] $NowUtc)
+    if (-not (Test-Path -LiteralPath $RequestPath)) { return $false }
+    try {
+        $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+        if ([string]$request.Action -ne 'VerifyKmM2MToken' -or
+            [string]$request.Sha -ne [string]$Current.Sha -or
+            [int]$request.Pid -ne [int]$Current.Pid -or
+            [string]$request.Path -ne [string]$Current.Path) { return $false }
+        $expires = [datetime]::Parse([string]$request.ExpiresAtUtc).ToUniversalTime()
+        return $expires -gt $NowUtc -and $expires -le $NowUtc.AddMinutes(11)
+    } catch { return $false }
+}
+
 $root = 'C:\ProgramData\CSIT-DEV'
 $stateRoot = Join-Path $root 'state'
 $releaseRoot = Join-Path $root 'releases'
@@ -82,6 +96,8 @@ $secretFile = Join-Path $root 'secrets\runtime.json'
 $baseSettings = Join-Path $root 'secrets\base-appsettings.json'
 $currentFile = Join-Path $stateRoot 'current.json'
 $maintenanceFile = Join-Path $stateRoot 'runtime-maintenance-request.json'
+$m2mVerificationFile = Join-Path $stateRoot 'runtime-m2m-verification-request.json'
+$m2mVerificationResultFile = Join-Path $stateRoot 'runtime-m2m-verification-result.json'
 $recoveryFile = Join-Path $stateRoot 'runtime-recovery.json'
 $recoveryLog = Join-Path $logsRoot 'runtime-recovery.log'
 $lock = $null
@@ -303,6 +319,71 @@ function Start-CurrentRelease([string] $ReleasePath, [string] $ReleaseSha) {
     }
 }
 
+function Invoke-DevM2MVerification([object] $Current, [string] $RequestPath, [datetime] $NowUtc) {
+    $releasePath = [string]$Current.Path
+    $exe = Join-Path $releasePath 'SIT.DepartmentSystem.Web.exe'
+    $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+    $logPrefix = Join-Path $logsRoot ('m2m-verification-' + ([string]$Current.Sha).Substring(0, 8) + '-' +
+        $NowUtc.ToString('yyyyMMddHHmmss'))
+    $stdout = $logPrefix + '.stdout.log'
+    $stderr = $logPrefix + '.stderr.log'
+    $child = $null
+    $exitCode = 1
+    try {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$Current.Pid)"
+        if ($null -eq $process -or [IO.Path]::GetFullPath([string]$process.ExecutablePath) -ne
+            [IO.Path]::GetFullPath($exe)) { throw 'M2M verification runtime path guard failed.' }
+        $env:ASPNETCORE_ENVIRONMENT = 'Development'
+        $env:DOTNET_ENVIRONMENT = 'Development'
+        $env:CSIT_DEV_RUNTIME_SECRETS_FILE = $secretFile
+        $env:CSIT_DEV_LOCAL_CERT_THUMBPRINT = $localhostCert
+        $env:CSIT_DEV_7444_CERT_THUMBPRINT = $publicCert
+        $env:DevDeployment__Sha = [string]$Current.Sha
+        $env:DevDeployment__TimeUtc = $NowUtc.ToString('yyyy-MM-dd HH:mm:ss UTC')
+        $child = Start-Process -FilePath $exe -WorkingDirectory $releasePath -WindowStyle Hidden `
+            -ArgumentList '--verify-km-m2m-token' -RedirectStandardOutput $stdout `
+            -RedirectStandardError $stderr -PassThru
+        if (-not $child.WaitForExit(30000)) {
+            Stop-Process -Id $child.Id -Force -ErrorAction SilentlyContinue
+            throw 'M2M verification timed out.'
+        }
+        $exitCode = [int]$child.ExitCode
+        $lines = @(Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+        if ($lines.Count -ne 1) { throw 'M2M verification result was not exactly one safe record.' }
+        $result = $lines[0] | ConvertFrom-Json
+        if ([string]$result.IdentitySid -ne 'S-1-5-19') { throw 'M2M verification did not run as LOCAL SERVICE.' }
+        $record = [ordered]@{
+            Sha = [string]$Current.Sha; Pid = [int]$child.Id; ExitCode = $exitCode
+            RequestedAtUtc = [string]$request.RequestedAtUtc; CompletedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
+            IdentitySid = [string]$result.IdentitySid; Outcome = [string]$result.Outcome
+            HttpStatus = $result.HttpStatus; Bearer = $result.Bearer; TokenAcquired = $result.TokenAcquired
+            ClaimsValidation = [string]$result.ClaimsValidation; SignatureValidation = [string]$result.SignatureValidation
+            FailureStage = [string]$result.FailureStage; ErrorCode = [string]$result.ErrorCode
+            OAuthError = [string]$result.OAuthError
+        }
+        $record | ConvertTo-Json | Set-Content -LiteralPath ($m2mVerificationResultFile + '.tmp') -Encoding UTF8
+        Move-Item -LiteralPath ($m2mVerificationResultFile + '.tmp') -Destination $m2mVerificationResultFile -Force
+        Write-RecoveryLog $(if ($exitCode -eq 0) { 'SUCCESS' } else { 'FAILED' }) `
+            ("DEV_M2M_VERIFICATION sha=$($Current.Sha) pid=$($child.Id) outcome=$($result.Outcome) " +
+             "claims=$($result.ClaimsValidation) signature=$($result.SignatureValidation) error=$($result.ErrorCode)")
+    } catch {
+        $record = [ordered]@{ Sha=[string]$Current.Sha; Pid=[int]$(if($child){$child.Id}else{0});
+            ExitCode=$exitCode; CompletedAtUtc=(Get-Date).ToUniversalTime().ToString('o');
+            IdentitySid='S-1-5-19'; Outcome='FAIL'; SignatureValidation='NOT_PERFORMED';
+            FailureStage='Watcher'; ErrorCode='WATCHER_VERIFICATION_FAILED' }
+        $record | ConvertTo-Json | Set-Content -LiteralPath ($m2mVerificationResultFile + '.tmp') -Encoding UTF8
+        Move-Item -LiteralPath ($m2mVerificationResultFile + '.tmp') -Destination $m2mVerificationResultFile -Force
+        Write-RecoveryLog 'FAILED' ("DEV_M2M_VERIFICATION watcher_error=$($_.Exception.GetType().Name)")
+    } finally {
+        Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
+        foreach ($key in @('ASPNETCORE_ENVIRONMENT','DOTNET_ENVIRONMENT','CSIT_DEV_RUNTIME_SECRETS_FILE',
+                'CSIT_DEV_LOCAL_CERT_THUMBPRINT','CSIT_DEV_7444_CERT_THUMBPRINT','DevDeployment__Sha','DevDeployment__TimeUtc')) {
+            Remove-Item "Env:$key" -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 if ($LoadFunctionsOnly) { return }
 
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-19') {
@@ -364,6 +445,15 @@ try {
         -DependenciesReady $true -NowUtc $now -LastAttemptUtc $state.LastAttemptUtc `
         -WindowStartedUtc $state.WindowStartedUtc -AttemptsInWindow $state.AttemptsInWindow
     $maintenanceValid = Test-DevMaintenanceRequest -RequestPath $maintenanceFile -Current $current -NowUtc $now
+    $m2mVerificationValid = Test-DevM2MVerificationRequest -RequestPath $m2mVerificationFile -Current $current -NowUtc $now
+    if ($preDecision -eq 'Healthy' -and $maintenanceValid -and $m2mVerificationValid) {
+        Write-RecoveryLog 'BLOCKED' 'Both maintenance and M2M verification requests are present.'
+        return
+    }
+    if ($preDecision -eq 'Healthy' -and $m2mVerificationValid) {
+        Invoke-DevM2MVerification -Current $current -RequestPath $m2mVerificationFile -NowUtc $now
+        return
+    }
     if ($preDecision -eq 'Healthy' -and -not $maintenanceValid) { return }
     if ($preDecision -eq 'Healthy' -and $maintenanceValid) {
         $maintenanceDecision = Get-DevRuntimeMaintenanceDecision -RequestValid $true `
