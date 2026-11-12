@@ -88,6 +88,24 @@ function Test-DevM2MVerificationRequest {
     } catch { return $false }
 }
 
+function Get-DevM2MVerificationDecision {
+    param(
+        [bool] $RequestValid,
+        [bool] $CurrentValid,
+        [int] $DevListenerCount,
+        [int] $ReleaseProcessCount,
+        [bool] $RuntimeMatchesCurrent,
+        [bool] $DependenciesReady
+    )
+
+    if (-not $RequestValid) { return 'NoRequest' }
+    if (-not $CurrentValid) { return 'BlockedCurrent' }
+    if ($DevListenerCount -ne 1 -or $ReleaseProcessCount -ne 1) { return 'BlockedRuntimeShape' }
+    if (-not $RuntimeMatchesCurrent) { return 'BlockedUnboundRuntime' }
+    if (-not $DependenciesReady) { return 'BlockedDependencies' }
+    return 'Verify'
+}
+
 $root = 'C:\ProgramData\CSIT-DEV'
 $stateRoot = Join-Path $root 'state'
 $releaseRoot = Join-Path $root 'releases'
@@ -450,7 +468,19 @@ try {
         Write-RecoveryLog 'BLOCKED' 'Both maintenance and M2M verification requests are present.'
         return
     }
-    if ($preDecision -eq 'Healthy' -and $m2mVerificationValid) {
+    if ($m2mVerificationValid) {
+        $m2mDecision = Get-DevM2MVerificationDecision -RequestValid $true -CurrentValid $currentValid `
+            -DevListenerCount $listeners.Count -ReleaseProcessCount $processes.Count `
+            -RuntimeMatchesCurrent $runtimeMatches -DependenciesReady $true
+        if ($m2mDecision -ne 'Verify') {
+            Write-RecoveryLog 'BLOCKED' $m2mDecision
+            return
+        }
+        try { Assert-DevDependencies } catch {
+            Write-RecoveryLog 'BLOCKED' 'M2M verification DEV dependency guard failed.'
+            Remove-Item -LiteralPath $m2mVerificationFile -Force -ErrorAction SilentlyContinue
+            return
+        }
         Invoke-DevM2MVerification -Current $current -RequestPath $m2mVerificationFile -NowUtc $now
         return
     }

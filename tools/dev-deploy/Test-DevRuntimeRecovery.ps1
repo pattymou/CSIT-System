@@ -53,6 +53,25 @@ Assert-MaintenanceDecision 'maintenance requires exact runtime shape' 'BlockedRu
 Assert-MaintenanceDecision 'maintenance refuses unhealthy runtime' 'BlockedUnhealthy' @{HealthPassed=$false}
 Assert-MaintenanceDecision 'maintenance reloads a healthy exact release' 'Reload' @{}
 
+function Assert-M2MDecision([string] $Name, [string] $Expected, [hashtable] $Case) {
+    $defaults = @{
+        RequestValid=$true; CurrentValid=$true; DevListenerCount=1; ReleaseProcessCount=1;
+        RuntimeMatchesCurrent=$true; DependenciesReady=$true
+    }
+    foreach ($key in $Case.Keys) { $defaults[$key] = $Case[$key] }
+    $actual = Get-DevM2MVerificationDecision @defaults
+    if ($actual -ne $Expected) { throw "$Name expected $Expected but received $actual" }
+    Write-Output "PASS $Name"
+}
+
+Assert-M2MDecision 'M2M verification accepts exact bound runtime' 'Verify' @{}
+Assert-M2MDecision 'M2M verification rejects unbound runtime' 'BlockedUnboundRuntime' @{
+    RuntimeMatchesCurrent=$false
+}
+Assert-M2MDecision 'M2M verification rejects duplicate runtime shape' 'BlockedRuntimeShape' @{
+    DevListenerCount=2
+}
+
 $m2mFile = Join-Path ([IO.Path]::GetTempPath()) ('csit-m2m-' + [guid]::NewGuid().ToString('N') + '.json')
 try {
     $current = [pscustomobject] @{ Sha = ('b' * 40); Pid = 5678;
