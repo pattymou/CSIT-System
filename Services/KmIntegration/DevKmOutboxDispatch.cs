@@ -52,6 +52,9 @@ public static class DevKmOutboxDispatch
         catch (Exception exception)
         {
             result.ErrorCode = exception.GetType().Name;
+            result.FailureStage = exception.TargetSite is null
+                ? "Unknown"
+                : exception.TargetSite.DeclaringType?.Name + "." + exception.TargetSite.Name;
             return await WriteAsync(output, result, 1);
         }
     }
