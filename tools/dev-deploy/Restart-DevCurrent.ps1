@@ -366,10 +366,10 @@ function Invoke-DevM2MVerification([object] $Current, [string] $RequestPath, [da
             throw 'M2M verification timed out.'
         }
         $exitCode = [int]$child.ExitCode
-        $lines = @(Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue |
-            Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
-        if ($lines.Count -ne 1) { throw 'M2M verification result was not exactly one safe record.' }
-        $result = $lines[0] | ConvertFrom-Json
+        $jsonLines = @(Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match '^\s*\{.*\}\s*$' })
+        if ($jsonLines.Count -ne 1) { throw 'M2M verification result was not exactly one safe record.' }
+        $result = $jsonLines[0] | ConvertFrom-Json
         if ([string]$result.IdentitySid -ne 'S-1-5-19') { throw 'M2M verification did not run as LOCAL SERVICE.' }
         $record = [ordered]@{
             Sha = [string]$Current.Sha; Pid = [int]$child.Id; ExitCode = $exitCode
@@ -483,6 +483,7 @@ try {
             return
         }
         Invoke-DevM2MVerification -Current $current -RequestPath $m2mVerificationFile -NowUtc $now
+        Remove-Item -LiteralPath $m2mVerificationFile -Force -ErrorAction SilentlyContinue
         return
     }
     if ($preDecision -eq 'Healthy' -and -not $maintenanceValid) { return }

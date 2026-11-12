@@ -21,6 +21,9 @@ using System.Security.Cryptography.X509Certificates;
 using SIT.DepartmentSystem.Web.Services.LoadTesting;
 
 var builder = WebApplication.CreateBuilder(args);
+var verifyKmM2MToken = args.Contains("--verify-km-m2m-token", StringComparer.Ordinal);
+if (verifyKmM2MToken)
+    builder.Logging.ClearProviders();
 var loadTestMode = builder.Environment.IsEnvironment("LoadTest");
 if (loadTestMode) LoadTestSafety.ValidateBeforeServices(builder);
 var devRuntimeSecretsFile = Environment.GetEnvironmentVariable("CSIT_DEV_RUNTIME_SECRETS_FILE");
@@ -464,7 +467,7 @@ builder.Services.AddScoped(sp =>
 var app = builder.Build();
 if (loadTestMode)
     await LoadTestSafety.ValidateDatabaseAsync(app.Services, app.Configuration);
-if (args.Contains("--verify-km-m2m-token", StringComparer.Ordinal))
+if (verifyKmM2MToken)
 {
     var exitCode = await DevKmM2MTokenVerification.RunAsync(app.Services, Console.Out,
         CancellationToken.None);
