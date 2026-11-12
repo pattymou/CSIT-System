@@ -33,7 +33,8 @@ public static class DevKmOutboxDispatch
         }
         try
         {
-            var worker = services.GetRequiredService<KmSyncWorker>();
+            using var scope = services.CreateScope();
+            var worker = scope.ServiceProvider.GetRequiredService<KmSyncWorker>();
             var dispatched = await worker.ProcessSingleVerificationAttachmentAsync(
                 outboxId, eventId, cancellationToken);
             result.Outcome = dispatched.Status is Entities.KmIntegrationStatus.Sent
