@@ -23,12 +23,13 @@ using SIT.DepartmentSystem.Web.Services.LoadTesting;
 var builder = WebApplication.CreateBuilder(args);
 var verifyKmM2MToken = args.Contains("--verify-km-m2m-token", StringComparer.Ordinal);
 var dispatchKmOutboxEvent = args.Contains("--dispatch-km-outbox-event", StringComparer.Ordinal);
+var requeueKmOutboxEvent = args.Contains("--requeue-km-outbox-event", StringComparer.Ordinal);
 var requestedOutboxId = Guid.Empty;
 var requestedEventId = Guid.Empty;
-if (dispatchKmOutboxEvent &&
+if ((dispatchKmOutboxEvent || requeueKmOutboxEvent) &&
     (args.Length != 3 || !Guid.TryParse(args[1], out requestedOutboxId) ||
      !Guid.TryParse(args[2], out requestedEventId)))
-    throw new InvalidOperationException("The DEV KM dispatch command requires exactly an OutboxId and EventId.");
+    throw new InvalidOperationException("The DEV KM outbox command requires exactly an OutboxId and EventId.");
 if (verifyKmM2MToken)
     builder.Logging.ClearProviders();
 var loadTestMode = builder.Environment.IsEnvironment("LoadTest");
@@ -485,6 +486,14 @@ if (verifyKmM2MToken)
 if (dispatchKmOutboxEvent)
 {
     var exitCode = await DevKmOutboxDispatch.RunAsync(app.Services, Console.Out,
+        requestedOutboxId, requestedEventId, CancellationToken.None);
+    await app.DisposeAsync();
+    Environment.ExitCode = exitCode;
+    return;
+}
+if (requeueKmOutboxEvent)
+{
+    var exitCode = await DevKmOutboxDispatch.RequeueAsync(app.Services, Console.Out,
         requestedOutboxId, requestedEventId, CancellationToken.None);
     await app.DisposeAsync();
     Environment.ExitCode = exitCode;

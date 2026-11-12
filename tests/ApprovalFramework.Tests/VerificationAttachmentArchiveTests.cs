@@ -278,6 +278,49 @@ public sealed class VerificationAttachmentArchiveTests
     }
 
     [Fact]
+    public async Task FailedUnauthorizedVerificationAttachment_CanBeRequeuedOnceWithAudit()
+    {
+        await using var fixture = await ArchiveFixture.CreateAsync();
+        var application = await fixture.AddAcceptedAsync("MODEL-KM-REQUEUE", "requeue");
+        await fixture.Processor.EnqueueApprovedApplicationAsync(application, DateTime.UtcNow,
+            CancellationToken.None);
+        await fixture.Processor.ProcessPendingAsync();
+        Guid outboxId; Guid eventId;
+        await using (var db = fixture.Factory.CreateDbContext())
+        {
+            var row = await db.KmIntegrationOutbox.SingleAsync();
+            outboxId = row.Id; eventId = row.EventId;
+            var lease = Guid.NewGuid();
+            row.Claim(lease, DateTime.UtcNow, TimeSpan.FromMinutes(1));
+            row.DeliveryFailed(lease, "HTTP_401", "KM rejected the bearer token.", null, DateTime.UtcNow);
+            await db.SaveChangesAsync();
+        }
+        var worker = new KmSyncWorker(
+            fixture.Factory, new CountingKmClient(), Options.Create(new KmIntegrationOptions
+            {
+                Enabled = false, BaseUrl = "https://example.invalid/",
+                ServiceBaseUrl = "https://csit.invalid/", TimeoutSeconds = 2,
+                MaxRetryCount = 3, RetryScheduleSeconds = [60], PollSeconds = 1, LeaseSeconds = 30
+            }), NullLogger<KmSyncWorker>.Instance,
+            Options.Create(new DocumentStorageOptions { RootPath = fixture.LibraryRoot }));
+
+        var result = await worker.RequeueSingleVerificationAttachmentAsync(outboxId, eventId);
+
+        Assert.Equal(KmIntegrationStatus.Pending, result.Status);
+        await using var verify = fixture.Factory.CreateDbContext();
+        var persisted = await verify.KmIntegrationOutbox.SingleAsync();
+        Assert.Equal(KmIntegrationStatus.Pending, persisted.Status);
+        Assert.Equal("HTTP_401", persisted.LastErrorCode);
+        Assert.Null(persisted.KmJobId);
+        var audit = Assert.Single(await verify.KmIntegrationManualRetryAudits.ToListAsync());
+        Assert.Equal(outboxId, audit.OutboxId);
+        Assert.Equal(eventId, audit.EventId);
+        Assert.Equal("Failed", audit.PreviousStatus);
+        Assert.Equal("HTTP_401", audit.PreviousErrorCode);
+        Assert.Contains("HTTP_401", audit.Reason, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void KmPresentation_DoesNotTreatAcceptedDeliveryAsCompleted()
     {
         var departmentId = Guid.NewGuid();

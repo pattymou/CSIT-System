@@ -99,6 +99,70 @@ public sealed class KmSyncWorker(
             result.KmJobId, result.LastErrorCode);
     }
 
+    /// <summary>
+    /// Requeues one previously failed verification attachment after an HTTP 401.
+    /// The row is locked, the formal source is revalidated, and an audit record is
+    /// written in the same transaction. No second outbox event is created.
+    /// </summary>
+    public async Task<KmSingleDispatchResult> RequeueSingleVerificationAttachmentAsync(
+        Guid outboxId, Guid eventId, CancellationToken cancellationToken = default)
+    {
+        if (outboxId == Guid.Empty || eventId == Guid.Empty)
+            throw new KmSingleDispatchException("Validation", "OutboxId and EventId are required.");
+        var options = configured.Value;
+        ValidateOptions(options);
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            : null;
+        KmIntegrationOutbox? row;
+        try
+        {
+            row = db.Database.IsRelational()
+                ? await db.KmIntegrationOutbox
+                    .FromSqlInterpolated($"SELECT * FROM km_integration_outbox WHERE id = {outboxId} FOR UPDATE")
+                    .SingleOrDefaultAsync(cancellationToken)
+                : await db.KmIntegrationOutbox.SingleOrDefaultAsync(x => x.Id == outboxId, cancellationToken);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new KmSingleDispatchException("Database", exception.Message);
+        }
+        if (row is null || row.EventId != eventId ||
+            row.EventType != KmIntegrationEventTypes.VerificationApplicationAttachmentArchived ||
+            row.SourceEntityType != KmIntegrationSourceEntityTypes.VerificationApplicationFile)
+            throw new KmSingleDispatchException("Validation", "The requested outbox row is not the specified verification attachment event.");
+
+        var now = DateTime.UtcNow;
+        if (await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
+                x.Id != row.Id && x.EventId == row.EventId && x.KmJobId != null,
+                cancellationToken))
+            throw new KmSingleDispatchException("Validation", "A KM job already exists for the requested event.");
+
+        // Reuse the exact formal attachment validation used by the real v2 dispatch;
+        // this checks Accepted, NAS path/size/SHA256 and deletion holds before requeue.
+        var request = await BuildVerificationAttachmentRequestAsync(db, row, options, cancellationToken);
+        if (request is null)
+            throw new KmSingleDispatchException("Validation",
+                "Accepted and formally archived verification attachment validation failed.");
+        var audit = KmIntegrationManualRetryAudit.Create(
+            row, "DEV_GATE1_WATCHER", "Gate 1 approved recovery after KM HTTP_401; no KM job exists.", now);
+        try
+        {
+            row.RequeueVerificationAttachmentAfterUnauthorized(now, options.MaxRetryCount);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new KmSingleDispatchException("Validation", exception.Message);
+        }
+
+        db.KmIntegrationManualRetryAudits.Add(audit);
+        await db.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return new KmSingleDispatchResult(row.Id, row.EventId, row.Status, row.KmJobId,
+            row.LastErrorCode);
+    }
+
     private async Task<(Guid Id, Guid Lease)?> ClaimNextAsync(KmIntegrationOptions options,
         CancellationToken cancellationToken)
     {

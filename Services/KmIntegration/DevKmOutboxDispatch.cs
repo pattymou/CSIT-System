@@ -60,6 +60,54 @@ public static class DevKmOutboxDispatch
         }
     }
 
+    public static async Task<int> RequeueAsync(IServiceProvider services, TextWriter output,
+        Guid outboxId, Guid eventId, CancellationToken cancellationToken)
+    {
+        var result = new Result
+        {
+            IdentitySid = WindowsIdentity.GetCurrent().User?.Value ?? "unknown",
+            OutboxId = outboxId,
+            EventId = eventId
+        };
+        if (!string.Equals(result.IdentitySid, LocalServiceSid, StringComparison.Ordinal))
+        {
+            result.ErrorCode = "NOT_LOCAL_SERVICE";
+            return await WriteAsync(output, result, 1);
+        }
+        if (outboxId == Guid.Empty || eventId == Guid.Empty)
+        {
+            result.ErrorCode = "INVALID_ID";
+            return await WriteAsync(output, result, 1);
+        }
+        try
+        {
+            using var scope = services.CreateScope();
+            var worker = scope.ServiceProvider.GetRequiredService<KmSyncWorker>();
+            var requeued = await worker.RequeueSingleVerificationAttachmentAsync(
+                outboxId, eventId, cancellationToken);
+            result.Outcome = requeued.Status == Entities.KmIntegrationStatus.Pending
+                ? "REQUEUED" : "FAILED";
+            result.Status = requeued.Status.ToString();
+            result.KmJobIdPresent = !string.IsNullOrWhiteSpace(requeued.KmJobId);
+            result.ErrorCode = requeued.ErrorCode;
+            return await WriteAsync(output, result, result.Outcome == "REQUEUED" ? 0 : 1);
+        }
+        catch (KmSingleDispatchException exception)
+        {
+            result.ErrorCode = "REQUEUE_REJECTED";
+            result.FailureStage = exception.Stage;
+            return await WriteAsync(output, result, 1);
+        }
+        catch (Exception exception)
+        {
+            result.ErrorCode = exception.GetType().Name;
+            result.FailureStage = exception.TargetSite is null
+                ? "Unknown"
+                : exception.TargetSite.DeclaringType?.Name + "." + exception.TargetSite.Name;
+            return await WriteAsync(output, result, 1);
+        }
+    }
+
     private static async Task<int> WriteAsync(TextWriter output, Result result, int exitCode)
     {
         await output.WriteLineAsync(JsonSerializer.Serialize(result));

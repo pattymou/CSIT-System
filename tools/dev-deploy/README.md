@@ -31,6 +31,15 @@ SHA, PID, OutboxId, and EventId. The watcher dispatches only that
 state machine while global KM flags remain disabled. The short-lived request is consumed and is not a
 general queue or HTTP dispatch endpoint.
 
+For a specifically approved recovery of the recorded Gate 1 HTTP 401, an Administrator may run
+`Request-DevKmOutboxRetry.ps1` with the exact SHA, PID, OutboxId, and EventId. The watcher invokes a
+single LOCAL SERVICE transaction that accepts only a Failed verification-attachment row with
+`HTTP_401`, no KM job, no lease, and an available retry. It revalidates formal approval, NAS content,
+SHA256, and deletion holds, writes the existing manual-retry audit record, and requeues the same
+outbox row without creating a second event. It does not dispatch the event; a separate, later
+`Request-DevKmOutboxDispatch.ps1` request is required after KM real mode and authorization are
+confirmed. Global KM flags remain disabled.
+
 `Release-DevReady.ps1` is the release command for Codex after source review, Build/Test, commit, and push. It independently builds and tests the pushed commit in a clean checkout before pushing the ready tag. `Watch-DevReady.ps1` then invokes `Deploy-DevReady.ps1` from the protected local automation directory. The deployer clones the exact commit, builds it, runs the full test suite, and publishes the tested DLL into `C:\ProgramData\CSIT-DEV\releases\<SHA>`. A file lock permits one deployment at a time.
 
 The deployer reads only `C:\ProgramData\CSIT-DEV\secrets\runtime.json`, which targets `sit_department_system_dev` as `csit_runtime_dev`. It never pushes secrets or artifacts to GitHub. A change involving migration files stops before activation for DEV DBA review and backup. The current release stays live during Build/Test. After activation, HTTPS, OIDC redirect, static assets, Blazor WebSocket, and 7444 guards are checked. If a subsequent release fails smoke checks, the previous successful DEV release is restarted. A failed ready tag is recorded in `state\failed.json` and is not retried every minute.

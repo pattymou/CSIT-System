@@ -243,6 +243,27 @@ public sealed class KmIntegrationOutbox
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// Requeues only a failed verification-attachment event whose delivery was rejected
+    /// by KM with HTTP 401. This is intentionally separate from the TestReport manual
+    /// retry rule so that the existing operator retry contract is unchanged.
+    /// </summary>
+    public void RequeueVerificationAttachmentAfterUnauthorized(DateTime now, int maxRetryCount)
+    {
+        if (Status != KmIntegrationStatus.Failed ||
+            LastErrorCode != "HTTP_401" || KmJobId is not null ||
+            LeaseToken is not null || LeaseExpiresAt is not null ||
+            NextRetryAt is not null || RetryCount >= maxRetryCount ||
+            EventType != KmIntegrationEventTypes.VerificationApplicationAttachmentArchived ||
+            SourceEntityType != KmIntegrationSourceEntityTypes.VerificationApplicationFile)
+            throw new InvalidOperationException(
+                "The verification attachment is not eligible for the approved HTTP_401 recovery.");
+        Status = KmIntegrationStatus.Pending;
+        UpdatedAt = now;
+        // Preserve LastError and RetryCount as delivery history; the audit records the
+        // original failure and the explicit recovery reason.
+    }
+
     public void CallbackProcessing(DateTime now)
     {
         if (Status is not (KmIntegrationStatus.Sent or KmIntegrationStatus.Processing))
