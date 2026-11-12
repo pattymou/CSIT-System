@@ -12,7 +12,10 @@ namespace SIT.DepartmentSystem.Web.Services.KmIntegration;
 public sealed record KmSingleDispatchResult(
     Guid OutboxId, Guid EventId, KmIntegrationStatus Status, string? KmJobId, string? ErrorCode);
 
-public sealed class KmSingleDispatchException(string message) : Exception(message);
+public sealed class KmSingleDispatchException(string stage, string message) : Exception(message)
+{
+    public string Stage { get; } = stage;
+}
 
 public sealed class KmSyncWorker(
     IDbContextFactory<AppDbContext> dbFactory,
@@ -44,34 +47,51 @@ public sealed class KmSyncWorker(
         Guid outboxId, Guid eventId, CancellationToken cancellationToken = default)
     {
         if (outboxId == Guid.Empty || eventId == Guid.Empty)
-            throw new KmSingleDispatchException("OutboxId and EventId are required.");
+            throw new KmSingleDispatchException("Validation", "OutboxId and EventId are required.");
         var options = configured.Value;
         ValidateOptions(options);
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         await using var transaction = db.Database.IsRelational()
             ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
             : null;
-        var row = db.Database.IsRelational()
-            ? await db.KmIntegrationOutbox
-                .FromSqlInterpolated($"SELECT * FROM km_integration_outbox WHERE id = {outboxId} FOR UPDATE")
-                .SingleOrDefaultAsync(cancellationToken)
-            : await db.KmIntegrationOutbox.SingleOrDefaultAsync(x => x.Id == outboxId, cancellationToken);
+        KmIntegrationOutbox? row;
+        try
+        {
+            row = db.Database.IsRelational()
+                ? await db.KmIntegrationOutbox
+                    .FromSqlInterpolated($"SELECT * FROM km_integration_outbox WHERE id = {outboxId} FOR UPDATE")
+                    .SingleOrDefaultAsync(cancellationToken)
+                : await db.KmIntegrationOutbox.SingleOrDefaultAsync(x => x.Id == outboxId, cancellationToken);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new KmSingleDispatchException("Database", exception.Message);
+        }
         if (row is null || row.EventId != eventId ||
             row.EventType != KmIntegrationEventTypes.VerificationApplicationAttachmentArchived ||
             row.SourceEntityType != KmIntegrationSourceEntityTypes.VerificationApplicationFile)
-            throw new KmSingleDispatchException("The requested outbox row is not the specified verification attachment event.");
+            throw new KmSingleDispatchException("Validation", "The requested outbox row is not the specified verification attachment event.");
         var now = DateTime.UtcNow;
         if (row.Status is not (KmIntegrationStatus.Pending or KmIntegrationStatus.Failed) ||
             row.RetryCount >= options.MaxRetryCount ||
             (row.Status == KmIntegrationStatus.Failed &&
              (!row.NextRetryAt.HasValue || row.NextRetryAt > now)))
-            throw new KmSingleDispatchException("The requested outbox row is not currently dispatchable.");
+            throw new KmSingleDispatchException("Validation", "The requested outbox row is not currently dispatchable.");
         var lease = Guid.NewGuid();
-        row.Claim(lease, now, TimeSpan.FromSeconds(options.LeaseSeconds));
+        try { row.Claim(lease, now, TimeSpan.FromSeconds(options.LeaseSeconds)); }
+        catch (InvalidOperationException exception)
+        { throw new KmSingleDispatchException("Claim", exception.Message); }
         await db.SaveChangesAsync(cancellationToken);
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
 
-        await DispatchAsync(row.Id, lease, options, cancellationToken, allowDisabled: true);
+        try
+        {
+            await DispatchAsync(row.Id, lease, options, cancellationToken, allowDisabled: true);
+        }
+        catch (InvalidOperationException exception)
+        {
+            throw new KmSingleDispatchException("Dispatch", exception.Message);
+        }
         await using var resultDb = await dbFactory.CreateDbContextAsync(cancellationToken);
         var result = await resultDb.KmIntegrationOutbox.AsNoTracking()
             .SingleAsync(x => x.Id == outboxId, cancellationToken);

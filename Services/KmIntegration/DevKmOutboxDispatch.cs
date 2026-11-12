@@ -43,10 +43,10 @@ public static class DevKmOutboxDispatch
             result.ErrorCode = dispatched.ErrorCode;
             return await WriteAsync(output, result, result.Outcome == "ACCEPTED" ? 0 : 1);
         }
-        catch (KmSingleDispatchException)
+        catch (KmSingleDispatchException exception)
         {
             result.ErrorCode = "DISPATCH_REJECTED";
-            result.FailureStage = "Validation";
+            result.FailureStage = exception.Stage;
             return await WriteAsync(output, result, 1);
         }
         catch (Exception exception)
