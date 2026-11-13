@@ -24,6 +24,7 @@ $reviewRoot = Join-Path $root 'migration-reviews'
 $secretFile = Join-Path $secretRoot 'runtime.json'
 $baseSettings = Join-Path $secretRoot 'base-appsettings.json'
 $currentFile = Join-Path $stateRoot 'current.json'
+$hierarchyTransitionFile = Join-Path $stateRoot 'nas-business-hierarchy-transition.json'
 $localhostCert = '46BFDA36B073576B3116CB5E52D7ABE1FC595F2D'
 $publicCert = 'D4E5BA5E6D6252575BB8D0ADD3F2A98B279C503B'
 $productionBefore = $null
@@ -310,6 +311,20 @@ try {
     $current = if (Test-Path -LiteralPath $currentFile) {
         Get-Content -LiteralPath $currentFile -Raw | ConvertFrom-Json
     } else { $null }
+    $hierarchyTransition = if (Test-Path -LiteralPath $hierarchyTransitionFile) {
+        Get-Content -LiteralPath $hierarchyTransitionFile -Raw | ConvertFrom-Json
+    } else { $null }
+    if ($hierarchyTransition) {
+        if ([int]$hierarchyTransition.SchemaVersion -ne 1 -or
+            [string]$hierarchyTransition.Status -ne 'AwaitingCompatibleDeployment' -or
+            [string]$hierarchyTransition.PreMigrationRuntimeSha -notmatch '^[0-9a-f]{40}$' -or
+            [string]$hierarchyTransition.ApplyCommitSha -ne $Sha -or -not $current -or
+            [string]$current.Sha -notin @(
+                [string]$hierarchyTransition.PreMigrationRuntimeSha,
+                [string]$hierarchyTransition.ApplyCommitSha)) {
+            throw 'DEV NAS hierarchy transition does not authorize this deployment.'
+        }
+    }
     $baselineFile = Join-Path $stateRoot 'baseline.json'
     $previousSha = if ($current) { [string] $current.Sha } else {
         [string] ((Get-Content -LiteralPath $baselineFile -Raw | ConvertFrom-Json).Sha)
@@ -419,7 +434,7 @@ try {
         if ($candidatePid -ne 0 -and (Get-Process -Id $candidatePid -ErrorAction SilentlyContinue)) {
             Stop-DevRelease $candidatePid
         }
-        if ($oldRelease) {
+        if ($oldRelease -and -not $hierarchyTransition) {
             $rollbackPid = Start-DevRelease $oldRelease ([string] $current.Sha)
             Assert-Smoke ([string] $current.Sha)
             $current.Pid = $rollbackPid
@@ -427,6 +442,8 @@ try {
             $current | ConvertTo-Json | Set-Content -LiteralPath ($currentFile + '.tmp') -Encoding UTF8
             Move-Item -LiteralPath ($currentFile + '.tmp') -Destination $currentFile -Force
             Write-Output "DEV_ROLLBACK_PASS $($current.Sha) PID=$rollbackPid"
+        } elseif ($hierarchyTransition) {
+            Write-Output 'DEV_HIERARCHY_DEPLOYMENT_ROLLBACK_REQUIRED: incompatible old runtime was not restarted.'
         }
         Assert-ProductionUnchanged
         throw "DEV deployment failed after activation: $failure"

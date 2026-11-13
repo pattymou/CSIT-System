@@ -4,10 +4,14 @@ param(
     [string] $EvidenceDirectory,
     [Parameter(Mandatory = $true)]
     [ValidatePattern('^[0-9a-f]{40}$')]
-    [string] $ApprovedSourceSha
+    [string] $ApprovedApplyCommitSha,
+    [Parameter(Mandatory = $true)]
+    [ValidatePattern('^[0-9a-f]{40}$')]
+    [string] $ApprovedCurrentRuntimeSha
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'DevNasHierarchyEvidence.ps1')
 $devRoot = 'C:\ProgramData\CSIT-DEV'
 $maintenanceRoot = Join-Path $devRoot 'maintenance'
 $runtimeFile = Join-Path $devRoot 'secrets\runtime.json'
@@ -15,11 +19,13 @@ $currentFile = Join-Path $devRoot 'state\current.json'
 $lockPath = Join-Path $devRoot 'state\deploy.lock'
 $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
 $watcherTask = 'CSIT DEV Ready Watcher'
+$transitionFile = Join-Path $devRoot 'state\nas-business-hierarchy-transition.json'
 $formalRoot = '\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV'
 $legacyTopLevels = @('DocumentLibrary','RawData','Assets','ThreeLevel','TestReports')
 $lock = $null
 $databaseChanged = $false
 $filesystemChanged = $false
+$technicalRawMoved = $false
 $runtimeChanged = $false
 
 function Assert-Administrator {
@@ -86,16 +92,12 @@ Assert-Within $evidence $maintenanceRoot
 if ((Split-Path -Leaf $evidence) -notlike 'nas-business-hierarchy-*') {
     throw 'EvidenceDirectory is not a DEV NAS hierarchy evidence directory.'
 }
-$required = @('summary.json','file-manifest.csv','database-switch.sql','database-rollback.sql','runtime.before.json')
-foreach ($name in $required) {
-    if (-not (Test-Path -LiteralPath (Join-Path $evidence $name) -PathType Leaf)) {
-        throw "Rollback evidence is incomplete: $name"
-    }
-}
-$summary = Get-Content -LiteralPath (Join-Path $evidence 'summary.json') -Raw | ConvertFrom-Json
-if ([string]$summary.SourceRuntimeSha -ne $ApprovedSourceSha -or
-    [string]$summary.NasRoot -ne $formalRoot -or -not $summary.OriginalsRetained) {
-    throw 'Rollback evidence does not match the approved source and formal root.'
+$sealedEvidence = Read-DevNasHierarchyEvidence $evidence
+$summary = $sealedEvidence.Summary
+$rollbackMode = Get-DevNasHierarchyRollbackMode $sealedEvidence `
+    $ApprovedApplyCommitSha $ApprovedCurrentRuntimeSha
+if ([string]$summary.NasRoot -ne $formalRoot -or -not $summary.OriginalsRetained) {
+    throw 'Rollback evidence does not match the formal root and source-retention contract.'
 }
 $legacyBackup = [IO.Path]::GetFullPath([string]$summary.LegacySourceBackup)
 if ($legacyBackup.StartsWith([IO.Path]::GetFullPath($formalRoot).TrimEnd('\') + '\',
@@ -146,45 +148,95 @@ foreach ($name in $legacyNames) {
         throw "Retained legacy source is missing: $name"
     }
 }
+foreach ($item in $manifest) {
+    $source = [IO.Path]::GetFullPath([string]$item.SourcePath)
+    $formalPrefix = [IO.Path]::GetFullPath($formalRoot).TrimEnd('\') + '\'
+    if (-not $source.StartsWith($formalPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Sealed source path is outside formal storage: $source"
+    }
+    $retainedSource = Join-Path $legacyBackup $source.Substring($formalPrefix.Length)
+    Assert-Within $retainedSource $legacyBackup
+    if (-not (Test-Path -LiteralPath $retainedSource -PathType Leaf)) {
+        throw "Retained legacy source file is missing: $retainedSource"
+    }
+    $retainedFile = Get-Item -LiteralPath $retainedSource
+    $retainedHash = (Get-FileHash -LiteralPath $retainedSource -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($retainedFile.Length -ne [long]$item.Size -or
+        $retainedHash -ne ([string]$item.Sha256).ToLowerInvariant()) {
+        throw "Retained legacy source SHA256 verification failed: $retainedSource"
+    }
+}
 
 $productionPid = Get-SingleListenerPid 5010
 $current = Get-Content -LiteralPath $currentFile -Raw | ConvertFrom-Json
-if ([string]$current.Sha -ne $ApprovedSourceSha) {
-    throw 'The running DEV commit does not match the rollback evidence.'
+if ([string]$current.Sha -ne $ApprovedCurrentRuntimeSha) {
+    throw 'current.json does not match the explicitly approved rollback runtime SHA.'
+}
+$beforeCurrent = Get-Content -LiteralPath (Join-Path $evidence 'current.before.json') -Raw | ConvertFrom-Json
+if ([string]$beforeCurrent.Sha -ne [string]$summary.PreMigrationRuntimeSha -or
+    [string]$beforeCurrent.Sha -notmatch '^[0-9a-f]{40}$') {
+    throw 'The sealed pre-migration current.json is invalid.'
 }
 $rollbackRetained = Join-Path (Split-Path -Parent $legacyBackup) `
     ("RollbackRetainedTargets\" + (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))
+$rollbackTechnicalRetained = Join-Path $rollbackRetained 'Technical'
+$technicalRoot = [IO.Path]::GetFullPath([string]$summary.TechnicalRoot)
+$technicalRawRoot = Join-Path $technicalRoot 'RawData'
 $connection = Get-Connection
-$runtimeTargetBackup = Join-Path $evidence 'runtime.rollback-target.json'
+$rollbackState = Join-Path $maintenanceRoot `
+    ("nas-business-hierarchy-rollback-state-" + (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ'))
+New-Item -ItemType Directory -Path $rollbackState | Out-Null
+$runtimeTargetBackup = Join-Path $rollbackState 'runtime.rollback-target.json'
+$currentTargetBackup = Join-Path $rollbackState 'current.rollback-target.json'
 Copy-Item -LiteralPath $runtimeFile -Destination $runtimeTargetBackup -Force
+Copy-Item -LiteralPath $currentFile -Destination $currentTargetBackup -Force
 try {
     $lock = [IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,
         [IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$current.Pid)"
-    if ($null -eq $process -or $process.Name -ne 'SIT.DepartmentSystem.Web.exe' -or
-        $process.ExecutablePath -notlike "*$($current.Sha)*") {
-        throw 'The recorded DEV process is not the current SHA-scoped runtime.'
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$current.Pid)" -ErrorAction SilentlyContinue
+    if ($process) {
+        if ($process.Name -ne 'SIT.DepartmentSystem.Web.exe' -or
+            $process.ExecutablePath -notlike "*$($current.Sha)*") {
+            throw 'The recorded DEV process is not the approved SHA-scoped runtime.'
+        }
+        Stop-Process -Id ([int]$current.Pid) -Force
+        $stopped = Get-Process -Id ([int]$current.Pid) -ErrorAction SilentlyContinue
+        if ($stopped) { $null = $stopped.WaitForExit(15000) }
+    } elseif ($rollbackMode -ne 'BeforeDeployment') {
+        throw 'The deployed Apply runtime is absent; post-deployment rollback is blocked.'
     }
-    Stop-Process -Id ([int]$current.Pid) -Force
-    $stopped = Get-Process -Id ([int]$current.Pid) -ErrorAction SilentlyContinue
-    if ($stopped) { $null = $stopped.WaitForExit(15000) }
 
     $filesystemChanged = $true
     Move-DirectorySet $formalRoot $rollbackRetained $businessTopLevels
+    Move-DirectorySet $technicalRoot $rollbackTechnicalRetained @('RawData')
+    $technicalRawMoved = $true
     Move-DirectorySet $legacyBackup $formalRoot $legacyNames
     Invoke-DevSql $connection (Get-Content -LiteralPath (Join-Path $evidence 'database-rollback.sql') -Raw)
     $databaseChanged = $true
     Copy-Item -LiteralPath (Join-Path $evidence 'runtime.before.json') -Destination $runtimeFile -Force
     $runtimeChanged = $true
+    Copy-Item -LiteralPath (Join-Path $evidence 'current.before.json') -Destination $currentFile -Force
+    New-Item -ItemType Directory -Path $technicalRawRoot | Out-Null
     if ((Get-SingleListenerPid 5010) -ne $productionPid) {
         throw 'Production 5010 PID changed during DEV NAS hierarchy rollback.'
     }
-    Write-Output "DEV_NAS_BUSINESS_HIERARCHY_ROLLBACK_COMPLETE retained=$rollbackRetained"
+    $transition = [ordered]@{
+        SchemaVersion = 1
+        Status = 'RolledBack'
+        PreMigrationRuntimeSha = [string]$summary.PreMigrationRuntimeSha
+        ApplyCommitSha = [string]$summary.ApplyCommitSha
+        EvidenceDirectory = $evidence
+    }
+    $transition | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($transitionFile + '.tmp') -Encoding UTF8
+    Move-Item -LiteralPath ($transitionFile + '.tmp') -Destination $transitionFile -Force
+    Write-Output "DEV_NAS_BUSINESS_HIERARCHY_ROLLBACK_COMPLETE mode=$rollbackMode retained=$rollbackRetained"
 } catch {
     $failure = $_
     $recoveryFailures = [Collections.Generic.List[string]]::new()
     if ($runtimeChanged) {
         try { Copy-Item -LiteralPath $runtimeTargetBackup -Destination $runtimeFile -Force }
+        catch { $recoveryFailures.Add($_.Exception.Message) }
+        try { Copy-Item -LiteralPath $currentTargetBackup -Destination $currentFile -Force }
         catch { $recoveryFailures.Add($_.Exception.Message) }
     }
     if ($databaseChanged) {
@@ -196,6 +248,16 @@ try {
         catch { $recoveryFailures.Add($_.Exception.Message) }
         try { Move-DirectorySet $rollbackRetained $formalRoot $businessTopLevels }
         catch { $recoveryFailures.Add($_.Exception.Message) }
+        if ($technicalRawMoved) { try {
+            if (Test-Path -LiteralPath $technicalRawRoot -PathType Container) {
+                if (@(Get-ChildItem -LiteralPath $technicalRawRoot -Force).Count -ne 0) {
+                    throw 'Recovery cannot replace a non-empty technical RawData directory.'
+                }
+                Remove-Item -LiteralPath $technicalRawRoot
+            }
+            Move-DirectorySet $rollbackTechnicalRetained $technicalRoot @('RawData')
+        }
+        catch { $recoveryFailures.Add($_.Exception.Message) } }
     }
     if ($recoveryFailures.Count) {
         throw "Rollback failed: $($failure.Exception.Message); recovery failures: $($recoveryFailures -join '; ')"

@@ -6,17 +6,22 @@ param(
     [switch] $Apply,
     [Parameter(Mandatory = $true, ParameterSetName = 'Apply')]
     [ValidatePattern('^[0-9a-f]{40}$')]
-    [string] $ApprovedSourceSha
+    [string] $ApprovedApplyCommitSha
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'DevNasHierarchyEvidence.ps1')
 $devRoot = 'C:\ProgramData\CSIT-DEV'
 $runtimeFile = Join-Path $devRoot 'secrets\runtime.json'
 $currentFile = Join-Path $devRoot 'state\current.json'
 $lockPath = Join-Path $devRoot 'state\deploy.lock'
+$watchLockPath = Join-Path $devRoot 'state\watch.lock'
 $maintenanceRoot = Join-Path $devRoot 'maintenance'
 $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
 $watcherTask = 'CSIT DEV Ready Watcher'
+$installedWatcher = Join-Path $devRoot 'automation\Watch-DevReady.ps1'
+$installedDeployer = Join-Path $devRoot 'automation\Deploy-DevReady.ps1'
+$transitionFile = Join-Path $devRoot 'state\nas-business-hierarchy-transition.json'
 $nasRoot = '\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV'
 $approvedWorkspaceRoot = '\\AI-NAS\Workspace_B'
 $oldDocumentRoot = Join-Path $nasRoot 'DocumentLibrary'
@@ -31,6 +36,7 @@ $oldThreeLevelRoots = @{
 }
 $legacyTopLevels = @('DocumentLibrary','RawData','Assets','ThreeLevel','TestReports')
 $lock = $null
+$watchLock = $null
 $runtimeBackup = $null
 $databaseChanged = $false
 $oldDevPid = 0
@@ -529,7 +535,8 @@ Assert-EveryLegacyFileClassified $manifest
 Assert-FormalInventory $manifest $true
 $summary = [ordered]@{
     Mode = if ($Apply) { 'Apply' } else { 'Audit' }
-    SourceRuntimeSha = [string]$current.Sha
+    PreMigrationRuntimeSha = [string]$current.Sha
+    ApplyCommitSha = if ($Apply) { $ApprovedApplyCommitSha } else { $null }
     NasRoot = $nasRoot
     TechnicalRoot = [IO.Path]::GetFullPath($TechnicalRoot)
     FormalFileCount = @($manifest | Where-Object Kind -ne 'TechnicalRawData').Count
@@ -549,8 +556,11 @@ if (-not $Apply) {
 
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $head = (& git -C $repositoryRoot rev-parse HEAD 2>$null).Trim()
-if ($LASTEXITCODE -ne 0 -or $head -ne $ApprovedSourceSha) {
-    throw 'ApprovedSourceSha does not match the reviewed source checkout.'
+if ($LASTEXITCODE -ne 0 -or $head -ne $ApprovedApplyCommitSha) {
+    throw 'ApprovedApplyCommitSha does not match the reviewed source checkout.'
+}
+if (Test-Path -LiteralPath $transitionFile) {
+    throw 'A DEV NAS hierarchy transition fence already exists.'
 }
 foreach ($probeRoot in @($nasRoot, $newRawRoot)) {
     $probeOutput = @(& (Join-Path $PSScriptRoot 'Test-DevNasAccess.ps1') -NasRoot $probeRoot)
@@ -559,22 +569,54 @@ foreach ($probeRoot in @($nasRoot, $newRawRoot)) {
     }
 }
 try {
+    $watchLock = [IO.File]::Open($watchLockPath,[IO.FileMode]::OpenOrCreate,
+        [IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+} catch [IO.IOException] { throw 'The DEV watcher is active; reconciliation was not started.' }
+try {
     $lock = [IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,
         [IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
-} catch [IO.IOException] { throw 'A DEV deployment or maintenance operation is already running.' }
-
+} catch [IO.IOException] {
+    $watchLock.Dispose(); $watchLock = $null
+    throw 'A DEV deployment or maintenance operation is already running.'
+}
+foreach ($automation in @(
+        @{ Installed=$installedWatcher; Source=(Join-Path $PSScriptRoot 'Watch-DevReady.ps1') },
+        @{ Installed=$installedDeployer; Source=(Join-Path $PSScriptRoot 'Deploy-DevReady.ps1') })) {
+    if (-not (Test-Path -LiteralPath $automation.Installed -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $automation.Installed -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $automation.Source -Algorithm SHA256).Hash) {
+        $lock.Dispose(); $lock = $null
+        $watchLock.Dispose(); $watchLock = $null
+        throw 'The protected DEV watcher and deployer must be updated to this reviewed transition-aware version before Apply.'
+    }
+}
+if (Test-Path -LiteralPath $transitionFile) {
+    $lock.Dispose(); $lock = $null
+    $watchLock.Dispose(); $watchLock = $null
+    throw 'A DEV NAS hierarchy transition fence appeared while acquiring maintenance locks.'
+}
+try {
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
-$evidenceDir = Join-Path $maintenanceRoot "nas-business-hierarchy-$stamp-$($ApprovedSourceSha.Substring(0,8))"
-$legacyBackupRoot = Join-Path $TechnicalRoot "LegacySourceBackup\nas-business-hierarchy-$stamp-$($ApprovedSourceSha.Substring(0,8))"
+$evidenceDir = Join-Path $maintenanceRoot "nas-business-hierarchy-$stamp-$($ApprovedApplyCommitSha.Substring(0,8))"
+$legacyBackupRoot = Join-Path $TechnicalRoot "LegacySourceBackup\nas-business-hierarchy-$stamp-$($ApprovedApplyCommitSha.Substring(0,8))"
 New-Item -ItemType Directory -Path $evidenceDir | Out-Null
 $runtimeBackup = Join-Path $evidenceDir 'runtime.before.json'
 Copy-Item -LiteralPath $runtimeFile -Destination $runtimeBackup
+Copy-Item -LiteralPath $currentFile -Destination (Join-Path $evidenceDir 'current.before.json')
 $manifest | Export-Csv -LiteralPath (Join-Path $evidenceDir 'file-manifest.csv') -NoTypeInformation -Encoding UTF8
 $summary.EvidenceDirectory = $evidenceDir
 $summary.LegacySourceBackup = $legacyBackupRoot
 $summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidenceDir 'summary.json') -Encoding UTF8
+$transition = [ordered]@{
+    SchemaVersion = 1
+    Status = 'AwaitingCompatibleDeployment'
+    PreMigrationRuntimeSha = [string]$current.Sha
+    ApplyCommitSha = $ApprovedApplyCommitSha
+    EvidenceDirectory = $evidenceDir
+}
+$transition | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($transitionFile + '.tmp') -Encoding UTF8
+Move-Item -LiteralPath ($transitionFile + '.tmp') -Destination $transitionFile -Force
 
-try {
     $process = Get-CimInstance Win32_Process -Filter "ProcessId=$oldDevPid"
     if ($null -eq $process -or $process.Name -ne 'SIT.DepartmentSystem.Web.exe' -or
         $process.ExecutablePath -notlike "*$($current.Sha)*") {
@@ -599,6 +641,8 @@ try {
     Assert-FormalInventory $manifest $false
     $summary.CompletedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
     $summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidenceDir 'summary.json') -Encoding UTF8
+    $null = New-DevNasHierarchyEvidenceIntegrity $evidenceDir `
+        ([string]$current.Sha) $ApprovedApplyCommitSha
     Write-Output "DEV_NAS_BUSINESS_HIERARCHY_FILES_VERIFIED count=$($manifest.Count) bytes=$($summary.TotalBytes)"
 } catch {
     $failure = $_
@@ -611,12 +655,20 @@ try {
     if ($runtimeBackup -and (Test-Path -LiteralPath $runtimeBackup)) {
         try { Set-RuntimeRoots -Rollback } catch { $rollbackFailures.Add($_.Exception.Message) }
     }
+    if (Test-Path -LiteralPath $transitionFile) {
+        try {
+            $transition.Status = 'RolledBack'
+            $transition | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($transitionFile + '.tmp') -Encoding UTF8
+            Move-Item -LiteralPath ($transitionFile + '.tmp') -Destination $transitionFile -Force
+        } catch { $rollbackFailures.Add($_.Exception.Message) }
+    }
     if ($rollbackFailures.Count) {
         throw "Reconciliation failed: $($failure.Exception.Message); rollback failures: $($rollbackFailures -join '; ')"
     }
     throw $failure
 } finally {
     if ($lock) { $lock.Dispose(); $lock = $null }
+    if ($watchLock) { $watchLock.Dispose(); $watchLock = $null }
     Start-ScheduledTask -TaskName $watcherTask -ErrorAction SilentlyContinue
 }
 if ((Get-SingleListenerPid 5010) -ne $productionPid) {

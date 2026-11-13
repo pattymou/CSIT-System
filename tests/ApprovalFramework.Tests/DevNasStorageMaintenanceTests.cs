@@ -78,7 +78,13 @@ public sealed class DevNasStorageMaintenanceTests
     {
         var script = Read("Reconcile-DevNasBusinessHierarchy.ps1");
         Assert.Contains("DefaultParameterSetName = 'Audit'", script);
-        Assert.Contains("ApprovedSourceSha", script);
+        Assert.Contains("ApprovedApplyCommitSha", script);
+        Assert.Contains("PreMigrationRuntimeSha", script);
+        Assert.Contains("ApplyCommitSha", script);
+        Assert.Contains("current.before.json", script);
+        Assert.Contains("New-DevNasHierarchyEvidenceIntegrity", script);
+        Assert.Contains("AwaitingCompatibleDeployment", script);
+        Assert.Contains("watcher and deployer", script);
         Assert.Contains("Get-FileHash", script);
         Assert.Contains("Existing target differs and will not be overwritten", script);
         Assert.Contains("OriginalsRetained = $true", script);
@@ -103,13 +109,54 @@ public sealed class DevNasStorageMaintenanceTests
     {
         var script = Read("Rollback-DevNasBusinessHierarchy.ps1");
         Assert.Contains("EvidenceDirectory", script);
-        Assert.Contains("ApprovedSourceSha", script);
+        Assert.Contains("ApprovedApplyCommitSha", script);
+        Assert.Contains("ApprovedCurrentRuntimeSha", script);
+        Assert.Contains("Get-DevNasHierarchyRollbackMode", script);
+        Assert.Contains("current.before.json", script);
         Assert.Contains("Get-FileHash", script);
         Assert.Contains("database-rollback.sql", script);
         Assert.Contains("database-switch.sql", script);
         Assert.Contains("RollbackRetainedTargets", script);
+        Assert.Contains("Retained legacy source SHA256 verification failed", script);
         Assert.Contains("Production 5010 PID changed", script);
-        Assert.DoesNotContain("Remove-Item -LiteralPath", script, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Recovery cannot replace a non-empty technical RawData directory", script);
+        Assert.Contains("Move-DirectorySet $technicalRoot $rollbackTechnicalRetained @('RawData')", script);
+    }
+
+    [Fact]
+    public void BusinessHierarchyEvidenceContractSealsVersionsAndEveryRollbackArtifact()
+    {
+        var script = Read("DevNasHierarchyEvidence.ps1");
+        Assert.Contains("SchemaVersion", script);
+        Assert.Contains("PreMigrationRuntimeSha", script);
+        Assert.Contains("ApplyCommitSha", script);
+        Assert.Contains("evidence-integrity.json", script);
+        Assert.Contains("file-manifest.csv", script);
+        Assert.Contains("database-switch.sql", script);
+        Assert.Contains("database-rollback.sql", script);
+        Assert.Contains("runtime.before.json", script);
+        Assert.Contains("current.before.json", script);
+        Assert.Contains("BeforeDeployment", script);
+        Assert.Contains("AfterDeployment", script);
+        Assert.Contains("unrelated to this hierarchy transition", script);
+    }
+
+    [Fact]
+    public void DevWatcherFencesOldRuntimeDuringHierarchyTransitionAndAfterRollback()
+    {
+        var script = Read("Watch-DevReady.ps1");
+        Assert.Contains("nas-business-hierarchy-transition.json", script);
+        Assert.Contains("AwaitingCompatibleDeployment", script);
+        Assert.Contains("RolledBack", script);
+        Assert.Contains("transition.ApplyCommitSha", script);
+        Assert.Contains("transition.PreMigrationRuntimeSha", script);
+        Assert.Contains("Restart-DevCurrent.ps1", script);
+
+        var deployer = Read("Deploy-DevReady.ps1");
+        Assert.Contains("nas-business-hierarchy-transition.json", deployer);
+        Assert.Contains("AwaitingCompatibleDeployment", deployer);
+        Assert.Contains("transition does not authorize this deployment", deployer);
+        Assert.Contains("incompatible old runtime was not restarted", deployer);
     }
 
     private static string Read(string name) => File.ReadAllText(Path.Combine(
