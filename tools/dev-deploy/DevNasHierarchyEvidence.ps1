@@ -7,6 +7,10 @@ $script:DevNasHierarchyEvidenceFiles = @(
     'runtime.before.json',
     'current.before.json'
 )
+$script:DevNasHierarchyOptionalEvidenceFiles = @(
+    'predecessor-fence.json',
+    'reentry-predecessor.json'
+)
 
 function Assert-DevNasHierarchySha([string] $Sha, [string] $Role) {
     if ($Sha -notmatch '^[0-9a-f]{40}$') {
@@ -21,7 +25,18 @@ function New-DevNasHierarchyEvidenceIntegrity(
     Assert-DevNasHierarchySha $PreMigrationRuntimeSha 'Pre-migration runtime SHA'
     Assert-DevNasHierarchySha $ApplyCommitSha 'Apply commit SHA'
     $evidence = [IO.Path]::GetFullPath($EvidenceDirectory)
-    $files = foreach ($name in $script:DevNasHierarchyEvidenceFiles) {
+    $evidenceFiles = @($script:DevNasHierarchyEvidenceFiles)
+    foreach ($name in $script:DevNasHierarchyOptionalEvidenceFiles) {
+        if (Test-Path -LiteralPath (Join-Path $evidence $name) -PathType Leaf) {
+            $evidenceFiles += $name
+        }
+    }
+    $optionalCount = @($evidenceFiles | Where-Object {
+        $_ -in $script:DevNasHierarchyOptionalEvidenceFiles }).Count
+    if ($optionalCount -notin @(0, $script:DevNasHierarchyOptionalEvidenceFiles.Count)) {
+        throw 'Cannot seal incomplete re-entry predecessor evidence.'
+    }
+    $files = foreach ($name in $evidenceFiles) {
         $path = Join-Path $evidence $name
         if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
             throw "Cannot seal incomplete hierarchy evidence: $name"
@@ -61,11 +76,22 @@ function Read-DevNasHierarchyEvidence([string] $EvidenceDirectory) {
     Assert-DevNasHierarchySha ([string]$integrity.PreMigrationRuntimeSha) 'Evidence pre-migration runtime SHA'
     Assert-DevNasHierarchySha ([string]$integrity.ApplyCommitSha) 'Evidence Apply commit SHA'
     $records = @($integrity.Files)
-    if ($records.Count -ne $script:DevNasHierarchyEvidenceFiles.Count -or
+    $names = @($records | ForEach-Object { [string]$_.Name })
+    $unknown = @($names | Where-Object {
+        $_ -notin @($script:DevNasHierarchyEvidenceFiles +
+            $script:DevNasHierarchyOptionalEvidenceFiles) })
+    $optionalCount = @($names | Where-Object {
+        $_ -in $script:DevNasHierarchyOptionalEvidenceFiles }).Count
+    if ($records.Count -lt $script:DevNasHierarchyEvidenceFiles.Count -or
+        $unknown.Count -ne 0 -or
+        $optionalCount -notin @(0, $script:DevNasHierarchyOptionalEvidenceFiles.Count) -or
         @($records | Group-Object Name | Where-Object Count -ne 1).Count -ne 0) {
         throw 'Rollback evidence integrity file set is invalid.'
     }
     foreach ($name in $script:DevNasHierarchyEvidenceFiles) {
+        if ($names -notcontains $name) { throw "Rollback evidence is incomplete: $name" }
+    }
+    foreach ($name in $names) {
         $record = @($records | Where-Object Name -eq $name)
         if ($record.Count -ne 1) { throw "Rollback evidence is incomplete: $name" }
         $path = Join-Path $evidence $name

@@ -86,6 +86,11 @@ public sealed class DevNasStorageMaintenanceTests
         Assert.Contains("current.before.json", script);
         Assert.Contains("New-DevNasHierarchyEvidenceIntegrity", script);
         Assert.Contains("AwaitingCompatibleDeployment", script);
+        Assert.Contains("ApprovedPriorManifestSha256", script);
+        Assert.Contains("New-ReentryPredecessorArchive", script);
+        Assert.Contains("Set-TransitionFenceAtomically", script);
+        Assert.Contains("Assert-ExistingTargets", script);
+        Assert.Contains("Assert-ReentryInventory", script);
         Assert.Contains("watcher and deployer", script);
         Assert.Contains("Get-FileHash", script);
         Assert.Contains("Existing target differs and will not be overwritten", script);
@@ -123,6 +128,27 @@ public sealed class DevNasStorageMaintenanceTests
     }
 
     [Fact]
+    public async Task BusinessHierarchyReentry_IsEvidenceBoundAtomicAndFailClosed()
+    {
+        var root = FindRepositoryRoot();
+        var output = await RunPowerShellAsync(root, Path.Combine(root, "tools", "dev-deploy",
+            "Test-DevNasHierarchyReentry.ps1"));
+
+        Assert.Contains("PASS valid_rolledback_reentry", output);
+        Assert.Contains("PASS prior_evidence_sha_mismatch_rejected", output);
+        Assert.Contains("PASS db_or_runtime_mismatch_rejected", output);
+        Assert.Contains("PASS source_or_target_sha_mismatch_rejected", output);
+        Assert.Contains("PASS unclassified_target_rejected", output);
+        Assert.Contains("PASS repeated_reentry_rejected", output);
+        Assert.Contains("PASS dual_lock_conflict_rejected", output);
+        Assert.Contains("PASS interrupted_initialization_keeps_old_fence", output);
+        Assert.Contains("PASS new_transaction_traces_prior_evidence", output);
+        Assert.Contains("PASS reentry_evidence_seals_traceability", output);
+        Assert.Contains("PASS forward_and_rollback_sql_remain_utf8", output);
+        Assert.Contains("DEV_NAS_REENTRY_TEST_PASS count=11", output);
+    }
+
+    [Fact]
     public void BusinessHierarchyRollbackIsEvidenceBoundHashVerifiedAndRetainsNewTargets()
     {
         var script = Read("Rollback-DevNasBusinessHierarchy.ps1");
@@ -154,6 +180,8 @@ public sealed class DevNasStorageMaintenanceTests
         Assert.Contains("database-rollback.sql", script);
         Assert.Contains("runtime.before.json", script);
         Assert.Contains("current.before.json", script);
+        Assert.Contains("predecessor-fence.json", script);
+        Assert.Contains("reentry-predecessor.json", script);
         Assert.Contains("BeforeDeployment", script);
         Assert.Contains("AfterDeployment", script);
         Assert.Contains("unrelated to this hierarchy transition", script);

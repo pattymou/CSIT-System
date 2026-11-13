@@ -7,6 +7,14 @@ param(
     [Parameter(Mandatory = $true, ParameterSetName = 'Apply')]
     [ValidatePattern('^[0-9a-f]{40}$')]
     [string] $ApprovedApplyCommitSha,
+    [Parameter(ParameterSetName = 'Apply')]
+    [string] $ReentryEvidenceDirectory,
+    [Parameter(ParameterSetName = 'Apply')]
+    [ValidatePattern('^[0-9a-f]{40}$')]
+    [string] $ApprovedPriorApplyCommitSha,
+    [Parameter(ParameterSetName = 'Apply')]
+    [ValidatePattern('^[0-9a-fA-F]{64}$')]
+    [string] $ApprovedPriorManifestSha256,
     [switch] $LoadFunctionsOnly
 )
 
@@ -45,6 +53,17 @@ $oldDevPid = 0
 $productionPid = 0
 $legacyBackupRoot = $null
 $legacyMoves = [Collections.Generic.List[object]]::new()
+$transitionActivated = $false
+
+function Test-ReentryRequested {
+    $values = @($ReentryEvidenceDirectory, $ApprovedPriorApplyCommitSha,
+        $ApprovedPriorManifestSha256)
+    $specified = @($values | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count
+    if ($specified -notin @(0, 3)) {
+        throw 'Re-entry requires EvidenceDirectory, prior Apply commit SHA, and prior manifest SHA256 together.'
+    }
+    return $specified -eq 3
+}
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -59,6 +78,36 @@ function Get-SingleListenerPid([int] $Port) {
         Select-Object -ExpandProperty OwningProcess -Unique)
     if ($listeners.Count -ne 1) { throw "Port $Port must have exactly one listener." }
     return [int]$listeners[0]
+}
+
+function Assert-CurrentDevRuntime($Current) {
+    $runtimePid = [int]$Current.Pid
+    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$runtimePid"
+    if ($null -eq $process -or $process.Name -ne 'SIT.DepartmentSystem.Web.exe' -or
+        $process.ExecutablePath -notlike "*$($Current.Sha)*") {
+        throw 'The recorded DEV process is not the current SHA-scoped runtime.'
+    }
+    foreach ($port in @(7296, 7444)) {
+        if ((Get-SingleListenerPid $port) -ne $runtimePid) {
+            throw "DEV port $port is not served by the recorded current runtime."
+        }
+    }
+}
+
+function Enter-DevNasMaintenanceLocks([string] $WatcherLockPath, [string] $DeploymentLockPath) {
+    $watcher = $null
+    try {
+        $watcher = [IO.File]::Open($WatcherLockPath,[IO.FileMode]::OpenOrCreate,
+            [IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    } catch [IO.IOException] { throw 'The DEV watcher is active; reconciliation was not started.' }
+    try {
+        $deployment = [IO.File]::Open($DeploymentLockPath,[IO.FileMode]::OpenOrCreate,
+            [IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
+    } catch [IO.IOException] {
+        $watcher.Dispose()
+        throw 'A DEV deployment or maintenance operation is already running.'
+    }
+    return [pscustomobject]@{ Watcher=$watcher; Deployment=$deployment }
 }
 
 function Get-Connection {
@@ -341,6 +390,188 @@ function Copy-And-Verify($Manifest) {
     }
 }
 
+function Assert-ExistingTargets($Manifest) {
+    foreach ($item in $Manifest) {
+        if (-not (Test-Path -LiteralPath $item.TargetPath -PathType Leaf)) {
+            throw "Re-entry target is missing: kind=$($item.Kind) key=$($item.Key)"
+        }
+        $target = Get-Item -LiteralPath $item.TargetPath
+        $hash = (Get-FileHash -LiteralPath $target.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($target.Length -ne [long]$item.Size -or $hash -ne ([string]$item.Sha256).ToLowerInvariant()) {
+            throw "Re-entry target SHA256 verification failed: kind=$($item.Kind) key=$($item.Key)"
+        }
+    }
+}
+
+function Assert-ExistingSources($Manifest) {
+    foreach ($item in $Manifest) {
+        if (-not (Test-Path -LiteralPath $item.SourcePath -PathType Leaf)) {
+            throw "Re-entry source is missing: kind=$($item.Kind) key=$($item.Key)"
+        }
+        $source = Get-Item -LiteralPath $item.SourcePath
+        $hash = (Get-FileHash -LiteralPath $source.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($source.Length -ne [long]$item.Size -or $hash -ne ([string]$item.Sha256).ToLowerInvariant()) {
+            throw "Re-entry source SHA256 verification failed: kind=$($item.Kind) key=$($item.Key)"
+        }
+    }
+}
+
+function Assert-ReentryInventory($PriorManifest) {
+    $allowedFormal = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    $allowedTechnical = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase)
+    foreach ($item in $PriorManifest) {
+        foreach ($path in @([string]$item.SourcePath, [string]$item.TargetPath)) {
+            if (Test-PathWithin $path $nasRoot) {
+                $null = $allowedFormal.Add([IO.Path]::GetFullPath($path))
+            }
+        }
+        if (Test-PathWithin ([string]$item.TargetPath) $newRawRoot) {
+            $null = $allowedTechnical.Add([IO.Path]::GetFullPath([string]$item.TargetPath))
+        }
+    }
+    foreach ($file in Get-ChildItem -LiteralPath $nasRoot -File -Recurse -Force) {
+        if (-not $allowedFormal.Contains([IO.Path]::GetFullPath($file.FullName))) {
+            throw 'Re-entry formal storage contains an unclassified file.'
+        }
+    }
+    foreach ($file in Get-ChildItem -LiteralPath $newRawRoot -File -Recurse -Force) {
+        if (-not $allowedTechnical.Contains([IO.Path]::GetFullPath($file.FullName))) {
+            throw 'Re-entry technical target contains an unclassified file.'
+        }
+    }
+}
+
+function Assert-ReentryState($Fence, [string] $EvidenceDirectory,
+    [string] $PriorApplyCommitSha, [string] $PriorManifestSha256,
+    $Current, $CurrentManifest, [string] $RuntimePath) {
+    $evidence = [IO.Path]::GetFullPath($EvidenceDirectory)
+    $approvedMaintenance = [IO.Path]::GetFullPath($maintenanceRoot).TrimEnd('\') + '\'
+    if (-not ($evidence + '\').StartsWith($approvedMaintenance,
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Re-entry evidence is outside the protected maintenance root.'
+    }
+    if ([int]$Fence.SchemaVersion -ne 1 -or [string]$Fence.Status -cne 'RolledBack') {
+        throw 'Re-entry requires the designated SchemaVersion 1 RolledBack fence.'
+    }
+    if ([string]$Fence.ApplyCommitSha -cne $PriorApplyCommitSha -or
+        -not [IO.Path]::GetFullPath([string]$Fence.EvidenceDirectory).Equals(
+            $evidence, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Re-entry fence does not match the approved prior Apply evidence.'
+    }
+    if (Test-Path -LiteralPath (Join-Path $evidence 'evidence-integrity.json')) {
+        throw 'Re-entry refuses prior evidence that is sealed as a completed Apply.'
+    }
+    foreach ($name in @('summary.json','file-manifest.csv','database-switch.sql',
+            'database-rollback.sql','runtime.before.json','current.before.json')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $evidence $name) -PathType Leaf)) {
+            throw "Re-entry prior evidence is incomplete: $name"
+        }
+    }
+    $manifestPath = Join-Path $evidence 'file-manifest.csv'
+    $manifestHash = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash
+    if ($manifestHash -cne $PriorManifestSha256.ToUpperInvariant()) {
+        throw 'Re-entry prior manifest SHA256 does not match the explicit approval.'
+    }
+    $summary = Get-Content -LiteralPath (Join-Path $evidence 'summary.json') -Raw |
+        ConvertFrom-Json
+    if ([string]$summary.Mode -cne 'Apply' -or
+        [string]$summary.ApplyCommitSha -cne $PriorApplyCommitSha -or
+        [string]$summary.PreMigrationRuntimeSha -cne [string]$Fence.PreMigrationRuntimeSha -or
+        -not [IO.Path]::GetFullPath([string]$summary.EvidenceDirectory).Equals(
+            $evidence, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Re-entry prior summary is unrelated to the designated fence.'
+    }
+    if (Test-Path -LiteralPath ([string]$summary.LegacySourceBackup)) {
+        throw 'Re-entry refuses a prior transaction whose LegacySourceBackup exists.'
+    }
+    if ([string]$Current.Sha -cne [string]$Fence.PreMigrationRuntimeSha) {
+        throw 'Re-entry current DEV runtime SHA is not the pre-migration runtime.'
+    }
+    if ((Get-FileHash -LiteralPath $RuntimePath -Algorithm SHA256).Hash -cne
+        (Get-FileHash -LiteralPath (Join-Path $evidence 'runtime.before.json') -Algorithm SHA256).Hash) {
+        throw 'Re-entry runtime configuration is not the pre-migration runtime configuration.'
+    }
+
+    $prior = @(Import-Csv -LiteralPath $manifestPath)
+    if ($prior.Count -ne 155 -or
+        @($prior | Where-Object Kind -eq 'TechnicalRawData').Count -ne 148 -or
+        @($prior | Where-Object Kind -ne 'TechnicalRawData').Count -ne 7) {
+        throw 'Re-entry prior manifest does not contain the approved 7 formal and 148 technical files.'
+    }
+    $priorByIdentity = @{}
+    foreach ($item in $prior) {
+        $identity = "$($item.Kind)|$($item.Key)"
+        if ($priorByIdentity.ContainsKey($identity)) {
+            throw 'Re-entry prior manifest contains a duplicate record identity.'
+        }
+        $priorByIdentity[$identity] = $item
+    }
+    if (@($CurrentManifest).Count -ne $prior.Count) {
+        throw 'Re-entry current DB/source manifest count differs from prior evidence.'
+    }
+    foreach ($item in @($CurrentManifest)) {
+        $identity = "$($item.Kind)|$($item.Key)"
+        if (-not $priorByIdentity.ContainsKey($identity)) {
+            throw 'Re-entry current DB/source manifest contains an unapproved record.'
+        }
+        $expected = $priorByIdentity[$identity]
+        if ([string]$item.DbValue -cne [string]$expected.DbValue -or
+            [string]$item.NewDbValue -cne [string]$expected.NewDbValue -or
+            [IO.Path]::GetFullPath([string]$item.SourcePath) -ine
+                [IO.Path]::GetFullPath([string]$expected.SourcePath) -or
+            [IO.Path]::GetFullPath([string]$item.TargetPath) -ine
+                [IO.Path]::GetFullPath([string]$expected.TargetPath) -or
+            [long]$item.Size -ne [long]$expected.Size -or
+            [string]$item.Sha256 -ine [string]$expected.Sha256) {
+            throw "Re-entry current DB/source manifest differs: kind=$($item.Kind) key=$($item.Key)"
+        }
+    }
+    Assert-ExistingSources $prior
+    Assert-ExistingTargets $prior
+    Assert-ReentryInventory $prior
+    return [pscustomobject]@{ Summary=$summary; Manifest=$prior; ManifestSha256=$manifestHash }
+}
+
+function New-ReentryPredecessorArchive([string] $ActiveFencePath,
+    [string] $NewEvidenceDirectory, [string] $PriorEvidenceDirectory,
+    [string] $PriorApplyCommitSha, [string] $PriorManifestSha256,
+    [string] $NewApplyCommitSha) {
+    $archivePath = Join-Path $NewEvidenceDirectory 'predecessor-fence.json'
+    $relationPath = Join-Path $NewEvidenceDirectory 'reentry-predecessor.json'
+    if ((Test-Path -LiteralPath $archivePath) -or (Test-Path -LiteralPath $relationPath)) {
+        throw 'Re-entry predecessor archive already exists in the new evidence.'
+    }
+    $fenceHash = (Get-FileHash -LiteralPath $ActiveFencePath -Algorithm SHA256).Hash
+    Copy-Item -LiteralPath $ActiveFencePath -Destination $archivePath
+    if ((Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash -cne $fenceHash) {
+        throw 'Re-entry predecessor fence archive verification failed.'
+    }
+    $relation = [ordered]@{
+        SchemaVersion = 1
+        PriorFenceSha256 = $fenceHash
+        PriorEvidenceDirectory = [IO.Path]::GetFullPath($PriorEvidenceDirectory)
+        PriorManifestSha256 = $PriorManifestSha256.ToUpperInvariant()
+        PriorApplyCommitSha = $PriorApplyCommitSha
+        NewApplyCommitSha = $NewApplyCommitSha
+    }
+    $relation | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $relationPath -Encoding UTF8
+    return $relation
+}
+
+function Set-TransitionFenceAtomically([string] $ActiveFencePath,
+    [string] $ExpectedActiveSha256, $Transition) {
+    if (-not (Test-Path -LiteralPath $ActiveFencePath -PathType Leaf) -or
+        (Get-FileHash -LiteralPath $ActiveFencePath -Algorithm SHA256).Hash -cne
+            $ExpectedActiveSha256) {
+        throw 'The active transition fence changed during re-entry initialization.'
+    }
+    $temporary = $ActiveFencePath + '.tmp'
+    $Transition | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $temporary -Encoding UTF8
+    Move-Item -LiteralPath $temporary -Destination $ActiveFencePath -Force
+}
+
 function Assert-FormalInventory($Manifest, [bool] $AllowLegacy) {
     $allowedTopLevels = [Collections.Generic.HashSet[string]]::new(
         [StringComparer]::OrdinalIgnoreCase)
@@ -524,6 +755,7 @@ function Set-RuntimeRoots([switch] $Rollback) {
 
 if ($LoadFunctionsOnly) { return }
 
+$isReentry = Test-ReentryRequested
 Assert-Administrator
 Assert-SeparateTechnicalRoot
 foreach ($path in @($runtimeFile,$currentFile,$psql)) {
@@ -571,8 +803,21 @@ $head = (& git -C $repositoryRoot rev-parse HEAD 2>$null).Trim()
 if ($LASTEXITCODE -ne 0 -or $head -ne $ApprovedApplyCommitSha) {
     throw 'ApprovedApplyCommitSha does not match the reviewed source checkout.'
 }
-if (Test-Path -LiteralPath $transitionFile) {
+if (-not $isReentry -and (Test-Path -LiteralPath $transitionFile)) {
     throw 'A DEV NAS hierarchy transition fence already exists.'
+}
+if ($isReentry -and -not (Test-Path -LiteralPath $transitionFile -PathType Leaf)) {
+    throw 'The explicitly approved RolledBack transition fence is absent.'
+}
+if ($isReentry) {
+    $initialFence = Get-Content -LiteralPath $transitionFile -Raw | ConvertFrom-Json
+    if ([string]$initialFence.Status -cne 'RolledBack' -or
+        [string]$initialFence.ApplyCommitSha -cne $ApprovedPriorApplyCommitSha -or
+        -not [IO.Path]::GetFullPath([string]$initialFence.EvidenceDirectory).Equals(
+            [IO.Path]::GetFullPath($ReentryEvidenceDirectory),
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'The active fence is not the explicitly approved RolledBack predecessor.'
+    }
 }
 foreach ($probeRoot in @($nasRoot, $newRawRoot)) {
     $probeOutput = @(& (Join-Path $PSScriptRoot 'Test-DevNasAccess.ps1') -NasRoot $probeRoot)
@@ -580,17 +825,9 @@ foreach ($probeRoot in @($nasRoot, $newRawRoot)) {
         throw "LOCAL SERVICE NAS read/write access is not verified for $probeRoot; reconciliation was not started."
     }
 }
-try {
-    $watchLock = [IO.File]::Open($watchLockPath,[IO.FileMode]::OpenOrCreate,
-        [IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
-} catch [IO.IOException] { throw 'The DEV watcher is active; reconciliation was not started.' }
-try {
-    $lock = [IO.File]::Open($lockPath,[IO.FileMode]::OpenOrCreate,
-        [IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
-} catch [IO.IOException] {
-    $watchLock.Dispose(); $watchLock = $null
-    throw 'A DEV deployment or maintenance operation is already running.'
-}
+$maintenanceLocks = Enter-DevNasMaintenanceLocks $watchLockPath $lockPath
+$watchLock = $maintenanceLocks.Watcher
+$lock = $maintenanceLocks.Deployment
 foreach ($automation in @(
         @{ Installed=$installedWatcher; Source=(Join-Path $PSScriptRoot 'Watch-DevReady.ps1') },
         @{ Installed=$installedDeployer; Source=(Join-Path $PSScriptRoot 'Deploy-DevReady.ps1') })) {
@@ -602,10 +839,37 @@ foreach ($automation in @(
         throw 'The protected DEV watcher and deployer must be updated to this reviewed transition-aware version before Apply.'
     }
 }
-if (Test-Path -LiteralPath $transitionFile) {
+if (-not $isReentry -and (Test-Path -LiteralPath $transitionFile)) {
     $lock.Dispose(); $lock = $null
     $watchLock.Dispose(); $watchLock = $null
     throw 'A DEV NAS hierarchy transition fence appeared while acquiring maintenance locks.'
+}
+$reentryState = $null
+$priorFenceSha256 = $null
+if ($isReentry) {
+    try {
+        if (-not (Test-Path -LiteralPath $transitionFile -PathType Leaf)) {
+            throw 'The approved RolledBack transition fence disappeared while acquiring maintenance locks.'
+        }
+        $priorFenceSha256 = (Get-FileHash -LiteralPath $transitionFile -Algorithm SHA256).Hash
+        $priorFence = Get-Content -LiteralPath $transitionFile -Raw | ConvertFrom-Json
+        $current = Get-Content -LiteralPath $currentFile -Raw | ConvertFrom-Json
+        $oldDevPid = [int]$current.Pid
+        if ((Get-SingleListenerPid 5010) -ne $productionPid) {
+            throw 'Production 5010 PID changed before re-entry initialization.'
+        }
+        Assert-CurrentDevRuntime $current
+        Assert-CurrentRoots $connection
+        $manifest = @(Get-Manifest $connection)
+        Assert-EveryLegacyFileClassified $manifest
+        Assert-FormalInventory $manifest $true
+        $reentryState = Assert-ReentryState $priorFence $ReentryEvidenceDirectory `
+            $ApprovedPriorApplyCommitSha $ApprovedPriorManifestSha256 $current $manifest $runtimeFile
+    } catch {
+        $lock.Dispose(); $lock = $null
+        $watchLock.Dispose(); $watchLock = $null
+        throw
+    }
 }
 try {
 $stamp = (Get-Date).ToUniversalTime().ToString('yyyyMMddTHHmmssZ')
@@ -618,6 +882,13 @@ Copy-Item -LiteralPath $currentFile -Destination (Join-Path $evidenceDir 'curren
 $manifest | Export-Csv -LiteralPath (Join-Path $evidenceDir 'file-manifest.csv') -NoTypeInformation -Encoding UTF8
 $summary.EvidenceDirectory = $evidenceDir
 $summary.LegacySourceBackup = $legacyBackupRoot
+$reentryRelation = $null
+if ($isReentry) {
+    $reentryRelation = New-ReentryPredecessorArchive $transitionFile $evidenceDir `
+        $ReentryEvidenceDirectory $ApprovedPriorApplyCommitSha `
+        $ApprovedPriorManifestSha256 $ApprovedApplyCommitSha
+    $summary.ReentryPredecessor = $reentryRelation
+}
 $summary | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $evidenceDir 'summary.json') -Encoding UTF8
 $transition = [ordered]@{
     SchemaVersion = 1
@@ -626,20 +897,27 @@ $transition = [ordered]@{
     ApplyCommitSha = $ApprovedApplyCommitSha
     EvidenceDirectory = $evidenceDir
 }
-$transition | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($transitionFile + '.tmp') -Encoding UTF8
-Move-Item -LiteralPath ($transitionFile + '.tmp') -Destination $transitionFile -Force
+if ($isReentry) {
+    $transition.ReentryPredecessor = $reentryRelation
+    Set-TransitionFenceAtomically $transitionFile $priorFenceSha256 $transition
+} else {
+    $transition | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath ($transitionFile + '.tmp') -Encoding UTF8
+    Move-Item -LiteralPath ($transitionFile + '.tmp') -Destination $transitionFile -Force
+}
+$transitionActivated = $true
 
-    $process = Get-CimInstance Win32_Process -Filter "ProcessId=$oldDevPid"
-    if ($null -eq $process -or $process.Name -ne 'SIT.DepartmentSystem.Web.exe' -or
-        $process.ExecutablePath -notlike "*$($current.Sha)*") {
-        throw 'The recorded DEV process is not the current SHA-scoped runtime.'
-    }
+    Assert-CurrentDevRuntime $current
     Stop-Process -Id $oldDevPid -Force
     $stopped = Get-Process -Id $oldDevPid -ErrorAction SilentlyContinue
     if ($stopped) { $null = $stopped.WaitForExit(15000) }
     $manifest = @(Get-Manifest $connection)
     $manifest | Export-Csv -LiteralPath (Join-Path $evidenceDir 'file-manifest.csv') -NoTypeInformation -Encoding UTF8
-    Copy-And-Verify $manifest
+    if ($isReentry) {
+        $null = Assert-ReentryState $priorFence $ReentryEvidenceDirectory `
+            $ApprovedPriorApplyCommitSha $ApprovedPriorManifestSha256 $current $manifest $runtimeFile
+    } else {
+        Copy-And-Verify $manifest
+    }
     $switchSql = New-DatabaseSwitchSql $manifest
     $rollbackSql = New-DatabaseSwitchSql $manifest -Rollback
     $switchSql | Set-Content -LiteralPath (Join-Path $evidenceDir 'database-switch.sql') -Encoding UTF8
@@ -667,7 +945,7 @@ Move-Item -LiteralPath ($transitionFile + '.tmp') -Destination $transitionFile -
     if ($runtimeBackup -and (Test-Path -LiteralPath $runtimeBackup)) {
         try { Set-RuntimeRoots -Rollback } catch { $rollbackFailures.Add($_.Exception.Message) }
     }
-    if (Test-Path -LiteralPath $transitionFile) {
+    if ($transitionActivated -and (Test-Path -LiteralPath $transitionFile)) {
         try {
             $transition.Status = 'RolledBack'
             $transition | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath ($transitionFile + '.tmp') -Encoding UTF8
