@@ -321,10 +321,23 @@ function Assert-DevDependencies {
         throw 'The runtime database is not the authorized DEV role and database.'
     }
     $expectedNasRoot = '\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV'
-    if ([string]$secrets.PSObject.Properties['DocumentStorage:RootPath'].Value -ne
-            (Join-Path $expectedNasRoot 'DocumentLibrary') -or
-        [string]$secrets.PSObject.Properties['RawData:NasRootPath'].Value -ne
-            (Join-Path $expectedNasRoot 'RawData') -or
+    $hierarchyProperty = $secrets.PSObject.Properties['FormalStorage:BusinessHierarchyEnabled']
+    $businessHierarchy = $hierarchyProperty -and
+        [bool]::Parse([string]$hierarchyProperty.Value)
+    $expectedDocumentRoot = if ($businessHierarchy) { $expectedNasRoot } else {
+        Join-Path $expectedNasRoot 'DocumentLibrary'
+    }
+    $rawRoot = [string]$secrets.PSObject.Properties['RawData:NasRootPath'].Value
+    $rawFull = [IO.Path]::GetFullPath($rawRoot).TrimEnd('\')
+    $formalFull = [IO.Path]::GetFullPath($expectedNasRoot).TrimEnd('\')
+    $workspaceFull = [IO.Path]::GetFullPath('\\AI-NAS\Workspace_B').TrimEnd('\')
+    $rawApproved = if ($businessHierarchy) {
+        $rawFull.StartsWith($workspaceFull + '\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $rawFull.StartsWith($formalFull + '\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $formalFull.StartsWith($rawFull + '\', [StringComparison]::OrdinalIgnoreCase)
+    } else { $rawFull -eq [IO.Path]::GetFullPath((Join-Path $expectedNasRoot 'RawData')).TrimEnd('\') }
+    if ([string]$secrets.PSObject.Properties['DocumentStorage:RootPath'].Value -ne $expectedDocumentRoot -or
+        -not $rawApproved -or
         [string]$secrets.PSObject.Properties['DocumentStaging:RootPath'].Value -ne
             'C:\ProgramData\CSIT-DEV\document-staging') {
         throw 'DEV formal storage configuration is not the approved AI-NAS layout.'
@@ -349,12 +362,18 @@ SELECT (SELECT count(*) FROM equipment_deletion_jobs WHERE status <> 'Completed'
         if ($result[-1] -ne '0|0') {
             throw 'Active equipment deletion work blocks automatic DEV recovery.'
         }
-        $expectedRoots = @(
+        $expectedRoots = if ($businessHierarchy) { @(
+            "AssetRootPath|equipment|$expectedNasRoot",
+            "AssetRootPath|goods|$expectedNasRoot",
+            "TestReportRootPath|default|$expectedNasRoot",
+            "ThreeLevelRootPath|certification|$expectedNasRoot",
+            "ThreeLevelRootPath|verification|$expectedNasRoot")
+        } else { @(
             'AssetRootPath|equipment|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\Assets\equipment',
             'AssetRootPath|goods|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\Assets\goods',
             'TestReportRootPath|default|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\TestReports',
             'ThreeLevelRootPath|certification|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\ThreeLevel\certification',
-            'ThreeLevelRootPath|verification|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\ThreeLevel\verification')
+            'ThreeLevelRootPath|verification|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\ThreeLevel\verification') }
         $actualRoots = @($result[1..($result.Count - 2)])
         if (($actualRoots -join "`n") -cne ($expectedRoots -join "`n")) {
             throw 'DEV SystemOptions formal roots are not the approved AI-NAS layout.'

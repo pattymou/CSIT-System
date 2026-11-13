@@ -42,10 +42,12 @@ public sealed class ManagedAssetFileStorage(AppDbContext db)
     }
 
     public async Task<string> EquipmentFolderAsync(string stableFolderName, CancellationToken cancellationToken = default) =>
-        SafeCombine(await RootAsync(cancellationToken), "設備儀器管理", "設備資訊", stableFolderName);
+        SafeCombine(await RootAsync(cancellationToken), FormalBusinessPath.EquipmentManagement,
+            FormalBusinessPath.EquipmentInformation, stableFolderName);
 
     public async Task<string> VendorFolderAsync(string stableFolderName, CancellationToken cancellationToken = default) =>
-        SafeCombine(await RootAsync(cancellationToken), "設備儀器管理", "廠商資訊", stableFolderName);
+        SafeCombine(await RootAsync(cancellationToken), FormalBusinessPath.EquipmentManagement,
+            FormalBusinessPath.VendorInformation, stableFolderName);
 
     public static string StoredFileName(Guid id, string originalFileName) =>
         id.ToString("N") + Path.GetExtension(originalFileName).ToLowerInvariant();

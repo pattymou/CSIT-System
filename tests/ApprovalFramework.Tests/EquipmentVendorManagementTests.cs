@@ -349,7 +349,7 @@ public sealed class EquipmentVendorManagementTests
             Assert.NotEqual(default, detail.UpdatedAt);
             Assert.NotNull(rawExport.LastLatestPackage);
             Assert.Empty(rawExport.LastLatestPackage.Files);
-            Assert.Contains(Path.Combine("設備儀器管理", "設備資訊", "Wi-Fi 7 Tester_ASSET-1234"),
+            Assert.Contains(Path.Combine("設備儀器管理", "設備資訊", "ASSET-1234 - Wi-Fi 7 Tester"),
                 (await db.ApparatusFiles.FirstAsync()).FilePath);
 
             var vendor = await db.Vendors.SingleAsync(x => x.Id == vendorId);

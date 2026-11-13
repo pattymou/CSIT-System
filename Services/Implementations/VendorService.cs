@@ -74,10 +74,11 @@ public sealed class VendorService(
         if (await db.Vendors.AsNoTracking().AnyAsync(x => x.NormalizedName == normalized, cancellationToken))
             throw new InvalidOperationException("已有相同名稱的廠商（名稱比對不分大小寫與多餘空白）。");
         var now = DateTime.UtcNow;
+        var id = Guid.NewGuid();
         var entity = new Vendor
         {
-            Id = Guid.NewGuid(), Name = name, NormalizedName = normalized,
-            StorageFolderName = ManagedAssetFileStorage.SafeFolderName(name), Types = types,
+            Id = id, Name = name, NormalizedName = normalized,
+            StorageFolderName = FormalBusinessPath.VendorFolder(name, id), Types = types,
             CreatedBy = Actor(actor), UpdatedBy = Actor(actor), CreatedAt = now, UpdatedAt = now
         };
         Apply(entity, request);

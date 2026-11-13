@@ -9,6 +9,7 @@ $ErrorActionPreference = 'Stop'
 $devRoot = 'C:\ProgramData\CSIT-DEV'
 $evidenceRoot = Join-Path $devRoot 'maintenance'
 $expectedNasRoot = '\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV'
+$approvedWorkspaceRoot = '\\AI-NAS\Workspace_B'
 
 function Get-SingleListenerPid([int] $Port) {
     $listeners = @(Get-NetTCPConnection -State Listen -LocalPort $Port -ErrorAction Stop |
@@ -22,8 +23,18 @@ $principal = [Security.Principal.WindowsPrincipal]::new($identity)
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
     throw 'Only a local Administrator may request the LOCAL SERVICE DEV NAS probe.'
 }
-if (-not $NasRoot.Equals($expectedNasRoot, [StringComparison]::OrdinalIgnoreCase)) {
-    throw "The probe is restricted to the approved DEV NAS root: $expectedNasRoot"
+$normalizedNasRoot = [IO.Path]::GetFullPath($NasRoot).TrimEnd('\')
+$normalizedWorkspace = [IO.Path]::GetFullPath($approvedWorkspaceRoot).TrimEnd('\')
+$normalizedFormal = [IO.Path]::GetFullPath($expectedNasRoot).TrimEnd('\')
+$isFormal = $normalizedNasRoot.Equals($normalizedFormal, [StringComparison]::OrdinalIgnoreCase)
+$isSeparateTechnical = $normalizedNasRoot.StartsWith($normalizedWorkspace + '\',
+        [StringComparison]::OrdinalIgnoreCase) -and
+    -not $normalizedNasRoot.StartsWith($normalizedFormal + '\',
+        [StringComparison]::OrdinalIgnoreCase) -and
+    -not $normalizedFormal.StartsWith($normalizedNasRoot + '\',
+        [StringComparison]::OrdinalIgnoreCase)
+if (-not $isFormal -and -not $isSeparateTechnical) {
+    throw 'The probe is restricted to the formal DEV root or a separate approved technical root.'
 }
 if (-not (Test-Path -LiteralPath $evidenceRoot -PathType Container)) {
     throw 'The protected DEV maintenance directory is unavailable.'

@@ -402,6 +402,7 @@ public sealed class DocumentLibraryService(
     {
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var folder = await db.DocumentFolders.AsNoTracking()
+            .Include(x => x.Parent).ThenInclude(x => x!.Parent)
             .SingleOrDefaultAsync(x => x.Id == folderId, cancellationToken)
             ?? throw new KeyNotFoundException("找不到資料夾。");
         if (folder.Level != DocumentLibraryRules.MaximumLevel)
@@ -534,6 +535,7 @@ public sealed class DocumentLibraryService(
         var folderId = previous?.FolderId ?? requestedFolderId
             ?? throw new InvalidOperationException("The document folder is missing.");
         var folder = await db.DocumentFolders.AsNoTracking()
+            .Include(x => x.Parent).ThenInclude(x => x!.Parent)
             .SingleOrDefaultAsync(x => x.Id == folderId, cancellationToken)
             ?? throw new KeyNotFoundException("找不到資料夾。");
         if (folder.Level != DocumentLibraryRules.MaximumLevel)
@@ -570,7 +572,8 @@ public sealed class DocumentLibraryService(
         var now = receivedAt;
         var originalName = DocumentLibraryRules.NormalizeOriginalFileName(file.FileName);
         var standardName = DocumentLibraryRules.CreateStandardFileName(originalName, now, id);
-        var relativePath = Path.Combine(now.ToString("yyyy"), now.ToString("MM"), folderId.ToString("N"), standardName);
+        var relativeFolder = FormalBusinessPath.DocumentFolder(folder);
+        var relativePath = Path.Combine(relativeFolder, standardName);
         var absolutePath = ResolvePath(DocumentStorageAreas.Staging, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(absolutePath)!);
 

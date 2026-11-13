@@ -19,6 +19,15 @@ public sealed class DevFormalStorageGuardTests
         });
         DevFormalStorageGuard.ValidateConfiguration(valid, requireAccessible: false);
 
+        var business = Configuration(new Dictionary<string, string?>
+        {
+            [DevFormalStorageGuard.BusinessHierarchyKey] = "true",
+            ["DocumentStorage:RootPath"] = @"\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV",
+            ["RawData:NasRootPath"] = @"\\AI-NAS\Workspace_B\CSIT_TECHNICAL_DEV\RawData",
+            ["DocumentStaging:RootPath"] = @"C:\ProgramData\CSIT-DEV\document-staging"
+        });
+        DevFormalStorageGuard.ValidateConfiguration(business, requireAccessible: false);
+
         var localFormal = Configuration(new Dictionary<string, string?>
         {
             ["DocumentStorage:RootPath"] = @"C:\ProgramData\CSIT-DEV\documents",
@@ -30,8 +39,9 @@ public sealed class DevFormalStorageGuardTests
 
         var mixedStaging = Configuration(new Dictionary<string, string?>
         {
-            ["DocumentStorage:RootPath"] = @"\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\DocumentLibrary",
-            ["RawData:NasRootPath"] = @"\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\RawData",
+            [DevFormalStorageGuard.BusinessHierarchyKey] = "true",
+            ["DocumentStorage:RootPath"] = @"\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV",
+            ["RawData:NasRootPath"] = @"\\AI-NAS\Workspace_B\CSIT_TECHNICAL_DEV\RawData",
             ["DocumentStaging:RootPath"] = @"\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\Staging"
         });
         Assert.Throws<InvalidOperationException>(() =>
@@ -53,14 +63,16 @@ public sealed class DevFormalStorageGuardTests
             });
         await db.SaveChangesAsync();
 
-        await DevFormalStorageGuard.ValidateDatabaseAsync(db, requireAccessible: false);
+        await DevFormalStorageGuard.ValidateDatabaseAsync(db, businessHierarchyEnabled: true,
+            requireAccessible: false);
 
         var equipment = await db.SystemOptions.SingleAsync(x =>
             x.Category == "AssetRootPath" && x.Name == "equipment");
         equipment.Value = @"D:\CSIT_Dev_Data\Assets\equipment";
         await db.SaveChangesAsync();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            DevFormalStorageGuard.ValidateDatabaseAsync(db, requireAccessible: false));
+            DevFormalStorageGuard.ValidateDatabaseAsync(db, businessHierarchyEnabled: true,
+                requireAccessible: false));
     }
 
     [Fact]

@@ -366,10 +366,13 @@ public sealed class VerificationAttachmentArchiveProcessor(
         var expectedSha = ValidateSha256(attachment);
         var standardFileName = DocumentLibraryRules.CreateStandardFileName(
             attachment.FileName, attachment.CreatedAt, attachment.Id);
-        var relativePath = Path.Combine(
-            VerificationApplicationAttachmentFolders.Root,
-            modelName,
-            VerificationApplicationAttachmentFolders.ApplicationDocuments,
+        var rootFolderId = VerificationApplicationAttachmentLinker.FolderId(null,
+            VerificationApplicationAttachmentFolders.Root);
+        var modelFolderId = VerificationApplicationAttachmentLinker.FolderId(rootFolderId, modelName);
+        var relativePath = Path.Combine(FormalBusinessPath.ThreeLevel(
+                VerificationApplicationAttachmentFolders.Root,
+                FormalBusinessPath.Segment(modelName, modelFolderId),
+                VerificationApplicationAttachmentFolders.ApplicationDocuments),
             standardFileName);
         var finalPath = ResolveWithinRoot(_libraryRoot, relativePath);
         var sourcePath = ResolveWithinRoot(_stagingRoot, attachment.FilePath);

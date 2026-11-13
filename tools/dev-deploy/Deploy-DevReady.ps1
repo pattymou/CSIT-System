@@ -84,10 +84,25 @@ function Assert-DevRuntimeConfig {
         throw 'The runtime database is not the authorized DEV role and database.'
     }
     $expectedNasRoot = '\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV'
-    $expectedDocumentRoot = Join-Path $expectedNasRoot 'DocumentLibrary'
-    $expectedRawRoot = Join-Path $expectedNasRoot 'RawData'
+    $hierarchyProperty = $secrets.PSObject.Properties['FormalStorage:BusinessHierarchyEnabled']
+    $businessHierarchy = $hierarchyProperty -and
+        [bool]::Parse([string]$hierarchyProperty.Value)
+    $expectedDocumentRoot = if ($businessHierarchy) { $expectedNasRoot } else {
+        Join-Path $expectedNasRoot 'DocumentLibrary'
+    }
+    $expectedRawRoot = [string]$secrets.PSObject.Properties['RawData:NasRootPath'].Value
+    $legacyRawRoot = Join-Path $expectedNasRoot 'RawData'
+    $approvedWorkspace = '\\AI-NAS\Workspace_B'
+    $rawFull = [IO.Path]::GetFullPath($expectedRawRoot).TrimEnd('\')
+    $formalFull = [IO.Path]::GetFullPath($expectedNasRoot).TrimEnd('\')
+    $workspaceFull = [IO.Path]::GetFullPath($approvedWorkspace).TrimEnd('\')
+    $rawApproved = if ($businessHierarchy) {
+        $rawFull.StartsWith($workspaceFull + '\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $rawFull.StartsWith($formalFull + '\', [StringComparison]::OrdinalIgnoreCase) -and
+        -not $formalFull.StartsWith($rawFull + '\', [StringComparison]::OrdinalIgnoreCase)
+    } else { $rawFull -eq [IO.Path]::GetFullPath($legacyRawRoot).TrimEnd('\') }
     if ([string]$secrets.PSObject.Properties['DocumentStorage:RootPath'].Value -ne $expectedDocumentRoot -or
-        [string]$secrets.PSObject.Properties['RawData:NasRootPath'].Value -ne $expectedRawRoot -or
+        -not $rawApproved -or
         [string]$secrets.PSObject.Properties['DocumentStaging:RootPath'].Value -ne
             'C:\ProgramData\CSIT-DEV\document-staging') {
         throw 'DEV formal storage configuration is not the approved AI-NAS layout.'
@@ -110,12 +125,18 @@ ORDER BY category,name;
             -h ([string] $connection['Host']) -p ([string] $connection['Port']) `
             -U ([string] $connection['Username']) -d ([string] $connection['Database']) |
             ForEach-Object { $_.Trim() } | Where-Object { $_ })
-        $expectedRoots = @(
+        $expectedRoots = if ($businessHierarchy) { @(
+            "AssetRootPath|equipment|$expectedNasRoot",
+            "AssetRootPath|goods|$expectedNasRoot",
+            "TestReportRootPath|default|$expectedNasRoot",
+            "ThreeLevelRootPath|certification|$expectedNasRoot",
+            "ThreeLevelRootPath|verification|$expectedNasRoot")
+        } else { @(
             'AssetRootPath|equipment|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\Assets\equipment',
             'AssetRootPath|goods|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\Assets\goods',
             'TestReportRootPath|default|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\TestReports',
             'ThreeLevelRootPath|certification|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\ThreeLevel\certification',
-            'ThreeLevelRootPath|verification|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\ThreeLevel\verification')
+            'ThreeLevelRootPath|verification|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\ThreeLevel\verification') }
         if ($LASTEXITCODE -ne 0 -or $result.Count -ne 6 -or
             $result[0] -ne 'sit_department_system_dev|csit_runtime_dev' -or
             (($result[1..5] -join "`n") -cne ($expectedRoots -join "`n"))) {

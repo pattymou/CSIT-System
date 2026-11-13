@@ -478,7 +478,9 @@ if (!string.IsNullOrWhiteSpace(devRuntimeSecretsFile))
     DevFormalStorageGuard.ValidateConfiguration(app.Configuration, requireAccessible: true);
     await using var storageScope = app.Services.CreateAsyncScope();
     var storageDb = storageScope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await DevFormalStorageGuard.ValidateDatabaseAsync(storageDb, requireAccessible: true);
+    await DevFormalStorageGuard.ValidateDatabaseAsync(storageDb,
+        app.Configuration.GetValue<bool>(DevFormalStorageGuard.BusinessHierarchyKey),
+        requireAccessible: true);
 }
 if (loadTestMode)
     await LoadTestSafety.ValidateDatabaseAsync(app.Services, app.Configuration);

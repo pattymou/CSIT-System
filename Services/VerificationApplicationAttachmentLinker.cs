@@ -8,8 +8,8 @@ namespace SIT.DepartmentSystem.Web.Services;
 
 public static class VerificationApplicationAttachmentFolders
 {
-    public const string Root = "產品驗證資料";
-    public const string ApplicationDocuments = "申請單文件";
+    public const string Root = FormalBusinessPath.ProductVerification;
+    public const string ApplicationDocuments = FormalBusinessPath.ApplicationDocuments;
 }
 
 internal static class VerificationApplicationAttachmentLinker
@@ -100,7 +100,7 @@ internal static class VerificationApplicationAttachmentLinker
 
         var folder = new DocumentFolder
         {
-            Id = DeterministicFolderId(parentId, normalizedName),
+            Id = FolderId(parentId, normalizedName),
             ParentId = parentId,
             Level = level,
             Name = normalizedName,
@@ -113,7 +113,7 @@ internal static class VerificationApplicationAttachmentLinker
         return folder;
     }
 
-    private static Guid DeterministicFolderId(Guid? parentId, string name)
+    internal static Guid FolderId(Guid? parentId, string name)
     {
         var key = $"verification-application-folder:{parentId?.ToString("N") ?? "root"}:{name.ToUpperInvariant()}";
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(key));

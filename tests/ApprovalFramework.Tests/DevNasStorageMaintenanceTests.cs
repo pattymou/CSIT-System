@@ -73,6 +73,45 @@ public sealed class DevNasStorageMaintenanceTests
         }
     }
 
+    [Fact]
+    public void BusinessHierarchyReconciliationIsAuditFirstHashVerifiedAndRetainsEverySource()
+    {
+        var script = Read("Reconcile-DevNasBusinessHierarchy.ps1");
+        Assert.Contains("DefaultParameterSetName = 'Audit'", script);
+        Assert.Contains("ApprovedSourceSha", script);
+        Assert.Contains("Get-FileHash", script);
+        Assert.Contains("Existing target differs and will not be overwritten", script);
+        Assert.Contains("OriginalsRetained = $true", script);
+        Assert.Contains("CompletedKmJobsTouched = $false", script);
+        Assert.Contains("FailedKmJobsTouched = $false", script);
+        Assert.Contains("TechnicalRoot", script);
+        Assert.Contains("outside the formal business root", script);
+        Assert.Contains("Duplicate sources map to one target", script);
+        Assert.Contains("產品驗證資料", script);
+        Assert.Contains("設備儀器管理\\設備資訊", script);
+        Assert.Contains("設備儀器管理\\廠商資訊", script);
+        Assert.DoesNotContain("DELETE FROM km_integration_outbox", script,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("UPDATE km_integration_outbox", script,
+            StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Remove-Item -LiteralPath $item.SourcePath", script,
+            StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BusinessHierarchyRollbackIsEvidenceBoundHashVerifiedAndRetainsNewTargets()
+    {
+        var script = Read("Rollback-DevNasBusinessHierarchy.ps1");
+        Assert.Contains("EvidenceDirectory", script);
+        Assert.Contains("ApprovedSourceSha", script);
+        Assert.Contains("Get-FileHash", script);
+        Assert.Contains("database-rollback.sql", script);
+        Assert.Contains("database-switch.sql", script);
+        Assert.Contains("RollbackRetainedTargets", script);
+        Assert.Contains("Production 5010 PID changed", script);
+        Assert.DoesNotContain("Remove-Item -LiteralPath", script, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string Read(string name) => File.ReadAllText(Path.Combine(
         FindRepositoryRoot(), "tools", "dev-deploy", name));
 

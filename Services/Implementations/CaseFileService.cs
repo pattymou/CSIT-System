@@ -358,8 +358,7 @@ public class CaseFileService : ICaseFileService
             .MaxAsync(x => x.VersionNo);
         var nextVersion = latestVersion + 1;
         var safeFileName = CleanFileName(file.FileName);
-        var documentRoot = GetDocumentRoot(previous);
-        var folderPath = Path.Combine(documentRoot, $"v{nextVersion:0000}");
+        var folderPath = GetBusinessFolder(previous);
         var fullPath = Path.Combine(folderPath, safeFileName);
         Directory.CreateDirectory(folderPath);
         var fileExists = File.Exists(fullPath);
@@ -805,6 +804,9 @@ public class CaseFileService : ICaseFileService
 
         var moduleCode = await GetModuleCodeByRecordIdAsync(recordId);
         var rootPath = await GetThreeLevelRootPathAsync(moduleCode);
+        var testReportModelName = isInitialReport
+            ? await ResolveTestReportModelNameAsync(recordId, taskId, caseId, taskNo)
+            : null;
 
         ModuleCaseFile? committedReport = null;
         Console.WriteLine($"[CaseFileService] Start saving files. recordId={recordId}, caseNo={caseNo}, taskId={taskId}, taskNo={taskNo}, uploadKind={uploadKind}, files={files.Count}");
@@ -825,12 +827,8 @@ public class CaseFileService : ICaseFileService
                 folderCaseName,
                 taskFolderName,
                 uploadKind,
-                safeFileName);
-
-            if (isTestReport)
-            {
-                folderPath = Path.Combine(folderPath, documentId.ToString("N"), "v0001");
-            }
+                safeFileName,
+                testReportModelName);
 
             Directory.CreateDirectory(folderPath);
 
@@ -1433,28 +1431,24 @@ public class CaseFileService : ICaseFileService
         string caseName,
         string? taskFolderName,
         string uploadKind,
-        string fileName)
+        string fileName,
+        string? testReportModelName)
     {
         if (IsTestReportUploadKind(uploadKind))
         {
-            var result = await TryBuildTestReportFolderAsync(fileName);
-
-            if (result.Success)
-            {
-                Console.WriteLine($"[CaseFileService] Test report path selected. fileName={fileName}, folder={result.FolderPath}");
-                return result.FolderPath;
-            }
-
             var testReportRootPath = await GetTestReportRootPathAsync();
-
-            var fallbackFolder = Path.Combine(
-                testReportRootPath,
-                CleanFolderName(projectName),
-                CleanFolderName(caseName),
-                CleanFolderName(string.IsNullOrWhiteSpace(taskFolderName) ? "UnknownTask" : taskFolderName));
-
-            Console.WriteLine($"[CaseFileService] Test report filename parse failed. fallback={fallbackFolder}");
-            return fallbackFolder;
+            var parsedModel = TryParseTestReportModel(fileName);
+            var modelName = string.IsNullOrWhiteSpace(testReportModelName)
+                ? parsedModel
+                : testReportModelName;
+            if (string.IsNullOrWhiteSpace(modelName))
+                throw new InvalidOperationException(
+                    "無法確認測試報告的 Model Name，已停止正式歸檔，避免放入錯誤分類。");
+            var folder = Path.Combine(testReportRootPath,
+                FormalBusinessPath.ProductVerificationFolder(modelName,
+                    FormalBusinessPath.TestReports));
+            Console.WriteLine($"[CaseFileService] Test report business path selected. fileName={fileName}, folder={folder}");
+            return folder;
         }
 
         if (!string.IsNullOrWhiteSpace(taskFolderName))
@@ -1469,10 +1463,11 @@ public class CaseFileService : ICaseFileService
         return Path.Combine(
             rootPath,
             CleanFolderName(projectName),
-            CleanFolderName(caseName));
+            CleanFolderName(caseName),
+            FormalBusinessPath.GeneralDocuments);
     }
 
-    private async Task<(bool Success, string FolderPath)> TryBuildTestReportFolderAsync(string fileName)
+    private static string? TryParseTestReportModel(string fileName)
     {
         var nameWithoutExtension = Path.GetFileNameWithoutExtension(fileName);
 
@@ -1481,27 +1476,34 @@ public class CaseFileService : ICaseFileService
             StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
         if (parts.Length < 5)
-            return (false, string.Empty);
+            return null;
 
         if (!string.Equals(parts[0], "SIT", StringComparison.OrdinalIgnoreCase))
-            return (false, string.Empty);
+            return null;
 
         if (!string.Equals(parts[1], "TR", StringComparison.OrdinalIgnoreCase))
-            return (false, string.Empty);
+            return null;
+        return string.IsNullOrWhiteSpace(parts[4]) ? null : parts[4];
+    }
 
-        var category = parts[2];
-        var testType = parts[3];
-        var model = parts[4];
+    private async Task<string?> ResolveTestReportModelNameAsync(Guid recordId, Guid? taskId,
+        Guid? caseId, string? taskNo)
+    {
+        string? modelName = null;
+        if (taskId.HasValue)
+            modelName = await _db.ModuleRecordTasks.AsNoTracking()
+                .Where(x => x.Id == taskId.Value).Select(x => x.ModelName).SingleOrDefaultAsync();
+        else if (caseId.HasValue && !string.IsNullOrWhiteSpace(taskNo))
+            modelName = await _db.ModuleRecordTasks.AsNoTracking()
+                .Where(x => x.CaseId == caseId.Value && x.TaskNo == taskNo)
+                .Select(x => x.ModelName).SingleOrDefaultAsync();
+        if (!string.IsNullOrWhiteSpace(modelName)) return modelName.Trim();
 
-        var testReportRootPath = await GetTestReportRootPathAsync();
-
-        var folderPath = Path.Combine(
-            testReportRootPath,
-            CleanFolderName(model),
-            CleanFolderName(category),
-            CleanFolderName(testType));
-
-        return (true, folderPath);
+        return await _db.VerificationApplications.AsNoTracking()
+            .Where(x => x.ModuleRecordId == recordId && x.ProductModel != null && x.ProductModel != "")
+            .OrderByDescending(x => x.SubmittedAt)
+            .Select(x => x.ProductModel)
+            .FirstOrDefaultAsync();
     }
 
     private async Task<string> GetProjectFolderAsync(Guid recordId)
@@ -1739,14 +1741,15 @@ public class CaseFileService : ICaseFileService
         };
     }
 
-    private static string GetDocumentRoot(ModuleCaseFile file)
+    private static string GetBusinessFolder(ModuleCaseFile file)
     {
         var versionFolder = new DirectoryInfo(file.FilePath);
         if (versionFolder.Name.StartsWith("v", StringComparison.OrdinalIgnoreCase)
             && versionFolder.Parent?.Name.Equals(file.DocumentId.ToString("N"), StringComparison.OrdinalIgnoreCase) == true)
-            return versionFolder.Parent.FullName;
+            return versionFolder.Parent.Parent?.FullName
+                ?? throw new InvalidOperationException("測試報告的既有版本路徑無效。");
 
-        return Path.Combine(file.FilePath, file.DocumentId.ToString("N"));
+        return file.FilePath;
     }
 
     private static async Task<string> ComputeSha256Async(string fullPath)

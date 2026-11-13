@@ -267,6 +267,9 @@ public class ApparatusService : IApparatusService
         }
         if (await _db.EquipmentDeletionJobs.AsNoTracking().AnyAsync(x => x.EquipmentId == id))
             throw new InvalidOperationException("此設備 ID 已有永久刪除稽核紀錄，不可重複使用。");
+        var nonEquipmentFolder = moduleCode == "equipment"
+            ? null
+            : await GetApparatusFolderAsync(moduleCode, id);
 
         var entity = new Apparatus
         {
@@ -281,7 +284,7 @@ public class ApparatusService : IApparatusService
             ManufacturerNumber = request.ManufacturerNumber,
             VendorId = moduleCode == "equipment" ? request.VendorId : null,
             StorageFolderName = moduleCode == "equipment" && !string.IsNullOrWhiteSpace(request.ProductsId)
-                ? ManagedAssetFileStorage.SafeFolderName($"{request.Name.Trim()}_{request.ProductsId.Trim()}")
+                ? FormalBusinessPath.EquipmentFolder(request.ProductsId, request.Name)
                 : null,
             Brand = moduleCode == "equipment" ? selectedVendor?.Name : request.Brand,
             Model = request.Model,
@@ -314,7 +317,7 @@ public class ApparatusService : IApparatusService
 
         var folder = moduleCode == "equipment"
             ? "(managed equipment folder is created on approved archive)"
-            : await GetApparatusFolderAsync(moduleCode, id);
+            : nonEquipmentFolder!;
         if (moduleCode != "equipment") Directory.CreateDirectory(folder);
 
         await RebuildLatestRawDataAsync(moduleCode, id);
@@ -877,6 +880,11 @@ public class ApparatusService : IApparatusService
             throw new InvalidOperationException($"找不到資產根目錄設定：Category=AssetRootPath, Name={moduleCode}");
         }
 
+        if (!string.Equals(moduleCode, "equipment", StringComparison.OrdinalIgnoreCase) &&
+            DevFormalStorageGuard.IsAtOrBelow(rootPath, DevFormalStorageGuard.Root))
+            throw new InvalidOperationException(
+                $"資產分類 {moduleCode} 尚未核准正式三層業務目錄，已停止歸檔。");
+
         var folder = Path.Combine(rootPath, CleanFolderName(apparatusId));
 
         Console.WriteLine($"[ApparatusService] Resolve asset folder. moduleCode={moduleCode}, rootPath={rootPath}, folder={folder}");
@@ -1159,8 +1167,8 @@ public class ApparatusService : IApparatusService
     {
         if (string.IsNullOrWhiteSpace(apparatus.ProductsId))
             throw new InvalidOperationException("此設備缺少資產編號，請補齊後再正式歸檔附件；系統不會產生假資產編號。");
-        apparatus.StorageFolderName ??= ManagedAssetFileStorage.SafeFolderName(
-            $"{apparatus.Name}_{apparatus.ProductsId}");
+        apparatus.StorageFolderName ??= FormalBusinessPath.EquipmentFolder(
+            apparatus.ProductsId, apparatus.Name);
         await _db.SaveChangesAsync();
         var folder = await _managedStorage.EquipmentFolderAsync(apparatus.StorageFolderName);
         var archived = 0;

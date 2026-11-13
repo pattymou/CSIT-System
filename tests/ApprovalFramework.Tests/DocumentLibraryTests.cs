@@ -63,6 +63,16 @@ public sealed class DocumentLibraryTests
     }
 
     [Fact]
+    public void FormalBusinessPath_UsesReadableSafeSegmentsAndStableCollisionSuffix()
+    {
+        var id = Guid.Parse("9f2d1e1f-cbc9-4423-b592-3dd949cdbf21");
+
+        Assert.Equal("Model_A~9f2d1e1f", FormalBusinessPath.Segment("Model/A", id));
+        Assert.Equal("PROPERTY-9 - Analyzer",
+            FormalBusinessPath.EquipmentFolder("PROPERTY-9", "Analyzer"));
+    }
+
+    [Fact]
     public async Task Upload_WritesStagingFileAndPersistentPendingJob()
     {
         var stagingRoot = Path.Combine(Path.GetTempPath(), "csit-document-staging-tests", Guid.NewGuid().ToString("N"));
@@ -70,17 +80,16 @@ public sealed class DocumentLibraryTests
         try
         {
             var factory = new TestFactory();
-            var folderId = Guid.NewGuid();
+            var l1 = new DocumentFolder { Id = Guid.NewGuid(), Level = 1, Name = "技術文件",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+            var l2 = new DocumentFolder { Id = Guid.NewGuid(), ParentId = l1.Id, Level = 2, Name = "Wi-Fi",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+            var leaf = new DocumentFolder { Id = Guid.NewGuid(), ParentId = l2.Id, Level = 3, Name = "Wi-Fi7",
+                CreatedAt = DateTime.UtcNow, UpdatedAt = DateTime.UtcNow };
+            var folderId = leaf.Id;
             await using (var db = await factory.CreateDbContextAsync())
             {
-                db.DocumentFolders.Add(new DocumentFolder
-                {
-                    Id = folderId,
-                    Level = 3,
-                    Name = "L3",
-                    CreatedAt = DateTime.UtcNow,
-                    UpdatedAt = DateTime.UtcNow
-                });
+                db.DocumentFolders.AddRange(l1, l2, leaf);
                 await db.SaveChangesAsync();
             }
 
@@ -104,6 +113,8 @@ public sealed class DocumentLibraryTests
             var stored = await verify.DocumentLibraryFiles.SingleAsync(x => x.Id == result.Id);
             var job = await verify.DocumentProcessingJobs.SingleAsync(x => x.DocumentFileId == result.Id);
             Assert.Equal(DocumentStorageAreas.Staging, stored.StorageArea);
+            Assert.Equal(Path.Combine("技術文件", "Wi-Fi", "Wi-Fi7"),
+                Path.GetDirectoryName(stored.RelativePath));
             Assert.Equal(DocumentProcessingStatuses.Pending, job.Status);
             Assert.True(File.Exists(Path.Combine(stagingRoot, stored.RelativePath)));
             Assert.False(File.Exists(Path.Combine(libraryRoot, stored.RelativePath)));
