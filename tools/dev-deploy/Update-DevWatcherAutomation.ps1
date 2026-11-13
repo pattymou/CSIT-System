@@ -47,6 +47,7 @@ foreach ($restricted in @($automationRoot, $reviewRoot)) {
 $names = @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevMigrationReview.ps1',
     'Approve-DevMigrationReview.ps1', 'Initialize-DevManagedAssetStorage.ps1',
     'Test-DevNasAccess.ps1', 'Migrate-DevFormalStorageToNas.ps1',
+    'Set-DevNasCredential.ps1',
     'Restart-DevCurrent.ps1', 'Request-DevRuntimeMaintenance.ps1',
     'Request-DevM2MTokenVerification.ps1', 'Request-DevKmOutboxDispatch.ps1',
     'Request-DevKmOutboxRetry.ps1')

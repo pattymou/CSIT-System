@@ -3,6 +3,27 @@ namespace ApprovalFramework.Tests;
 public sealed class DevNasStorageMaintenanceTests
 {
     [Fact]
+    public void CredentialBootstrapUsesLocalServiceCredentialManagerAndMemoryOnlyTransport()
+    {
+        var script = Read("Set-DevNasCredential.ps1");
+        Assert.Contains("Read-Host 'NAS password", script);
+        Assert.Contains("non-admin NAS account limited to the DEV root", script);
+        Assert.Contains("-AsSecureString", script);
+        Assert.Contains("NamedPipeServerStream", script);
+        Assert.Contains("PipeSecurity", script);
+        Assert.Contains("S-1-5-19", script);
+        Assert.Contains("CRED_TYPE_DOMAIN_PASSWORD", script);
+        Assert.Contains("CRED_PERSIST_LOCAL_MACHINE", script);
+        Assert.Contains("CredWrite", script);
+        Assert.Contains("CredDelete", script);
+        Assert.Contains("NT AUTHORITY\\LOCAL SERVICE", script);
+        Assert.DoesNotContain("cmdkey", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("/pass:", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Export-Clixml", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Set-Content", script, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void AccessProbeUsesLocalServiceAndCleansUpWithoutChangingAcl()
     {
         var script = Read("Test-DevNasAccess.ps1");
