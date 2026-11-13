@@ -1,3 +1,5 @@
+using System.Diagnostics;
+
 namespace ApprovalFramework.Tests;
 
 public sealed class DevNasStorageMaintenanceTests
@@ -105,6 +107,22 @@ public sealed class DevNasStorageMaintenanceTests
     }
 
     [Fact]
+    public async Task BusinessHierarchyDatabaseSwitch_PreservesUnicodeAndFailsClosed()
+    {
+        var root = FindRepositoryRoot();
+        var output = await RunPowerShellAsync(root, Path.Combine(root, "tools", "dev-deploy",
+            "Test-DevNasHierarchyDatabaseSwitch.ps1"));
+
+        Assert.Contains("PASS four_kind_forward_sql_and_diagnostics", output);
+        Assert.Contains("PASS windows_powershell_native_stdin_utf8", output);
+        Assert.Contains("PASS old_value_mismatch_remains_fail_closed", output);
+        Assert.Contains("PASS verification_failure_aborts_transaction", output);
+        Assert.Contains("PASS four_kind_rollback_sql_reverses_paths", output);
+        Assert.Contains("PASS source_and_target_files_unchanged", output);
+        Assert.Contains("DEV_NAS_DB_SWITCH_TEST_PASS count=6", output);
+    }
+
+    [Fact]
     public void BusinessHierarchyRollbackIsEvidenceBoundHashVerifiedAndRetainsNewTargets()
     {
         var script = Read("Rollback-DevNasBusinessHierarchy.ps1");
@@ -169,5 +187,33 @@ public sealed class DevNasStorageMaintenanceTests
                !File.Exists(Path.Combine(directory.FullName, "SIT.DepartmentSystem.Web.csproj")))
             directory = directory.Parent;
         return directory?.FullName ?? throw new DirectoryNotFoundException("Repository root not found.");
+    }
+
+    private static async Task<string> RunPowerShellAsync(string root, string script)
+    {
+        var start = new ProcessStartInfo
+        {
+            FileName = "powershell.exe",
+            WorkingDirectory = root,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true
+        };
+        start.ArgumentList.Add("-NoProfile");
+        start.ArgumentList.Add("-NonInteractive");
+        start.ArgumentList.Add("-ExecutionPolicy");
+        start.ArgumentList.Add("Bypass");
+        start.ArgumentList.Add("-File");
+        start.ArgumentList.Add(script);
+
+        using var process = Process.Start(start) ??
+            throw new InvalidOperationException("PowerShell did not start.");
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
+        await process.WaitForExitAsync();
+        var output = await outputTask;
+        var error = await errorTask;
+        Assert.True(process.ExitCode == 0, $"{output}{Environment.NewLine}{error}");
+        return output;
     }
 }

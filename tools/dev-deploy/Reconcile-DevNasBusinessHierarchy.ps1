@@ -6,10 +6,12 @@ param(
     [switch] $Apply,
     [Parameter(Mandatory = $true, ParameterSetName = 'Apply')]
     [ValidatePattern('^[0-9a-f]{40}$')]
-    [string] $ApprovedApplyCommitSha
+    [string] $ApprovedApplyCommitSha,
+    [switch] $LoadFunctionsOnly
 )
 
 $ErrorActionPreference = 'Stop'
+$OutputEncoding = [Text.UTF8Encoding]::new($false)
 . (Join-Path $PSScriptRoot 'DevNasHierarchyEvidence.ps1')
 $devRoot = 'C:\ProgramData\CSIT-DEV'
 $runtimeFile = Join-Path $devRoot 'secrets\runtime.json'
@@ -438,20 +440,28 @@ function New-DatabaseSwitchSql($Manifest, [switch] $Rollback) {
             $_.Kind -in @('Document','Vendor','Equipment','CaseFile') }) {
         $old = if ($Rollback) { $item.NewDbValue } else { $item.DbValue }
         $new = if ($Rollback) { $item.DbValue } else { $item.NewDbValue }
-        $table = switch ($item.Kind) {
-            Document { "UPDATE document_files SET relative_path=$(Quote-Sql $new) WHERE id=$(Quote-Sql $item.Key)::uuid AND relative_path=$(Quote-Sql $old);" }
-            Vendor { "UPDATE vendor_files SET folder_path=$(Quote-Sql $new) WHERE id=$(Quote-Sql $item.Key)::uuid AND folder_path=$(Quote-Sql $old);" }
-            Equipment { "UPDATE apparatus_files SET `"FilePath`"=$(Quote-Sql $new) WHERE `"Id`"=$(Quote-Sql $item.Key)::uuid AND `"FilePath`"=$(Quote-Sql $old);" }
-            CaseFile { "UPDATE module_case_files SET file_path=$(Quote-Sql $new) WHERE id=$(Quote-Sql $item.Key)::uuid AND file_path=$(Quote-Sql $old);" }
+        $mapping = switch ($item.Kind) {
+            Document { [pscustomobject]@{
+                Table='document_files'; Field='relative_path'; IdField='id'
+            } }
+            Vendor { [pscustomobject]@{
+                Table='vendor_files'; Field='folder_path'; IdField='id'
+            } }
+            Equipment { [pscustomobject]@{
+                Table='apparatus_files'; Field='FilePath'; IdField='Id'
+            } }
+            CaseFile { [pscustomobject]@{
+                Table='module_case_files'; Field='file_path'; IdField='id'
+            } }
         }
-        $statements.Add($table)
-        $verification = switch ($item.Kind) {
-            Document { "SELECT 1 FROM document_files WHERE id=$(Quote-Sql $item.Key)::uuid AND relative_path=$(Quote-Sql $new)" }
-            Vendor { "SELECT 1 FROM vendor_files WHERE id=$(Quote-Sql $item.Key)::uuid AND folder_path=$(Quote-Sql $new)" }
-            Equipment { "SELECT 1 FROM apparatus_files WHERE `"Id`"=$(Quote-Sql $item.Key)::uuid AND `"FilePath`"=$(Quote-Sql $new)" }
-            CaseFile { "SELECT 1 FROM module_case_files WHERE id=$(Quote-Sql $item.Key)::uuid AND file_path=$(Quote-Sql $new)" }
-        }
-        $statements.Add("DO `$csit`$ BEGIN IF NOT EXISTS ($verification) THEN RAISE EXCEPTION 'DB path switch verification failed'; END IF; END `$csit`$;")
+        if (-not $mapping) { throw "Unknown manifest kind for DB path switch: $($item.Kind)" }
+        $quotedIdField = if ($mapping.IdField -ceq 'Id') { '"Id"' } else { $mapping.IdField }
+        $quotedField = if ($mapping.Field -ceq 'FilePath') { '"FilePath"' } else { $mapping.Field }
+        $predicate = "$quotedIdField=$(Quote-Sql $item.Key)::uuid"
+        $statements.Add("UPDATE $($mapping.Table) SET $quotedField=$(Quote-Sql $new) WHERE $predicate AND $quotedField=$(Quote-Sql $old);")
+        $verification = "SELECT 1 FROM $($mapping.Table) WHERE $predicate AND $quotedField=$(Quote-Sql $new)"
+        $failure = "DB path switch verification failed: Kind=$($item.Kind) Table=$($mapping.Table) RecordId=$($item.Key) Field=$($mapping.Field)"
+        $statements.Add("DO `$csit`$ BEGIN IF NOT EXISTS ($verification) THEN RAISE EXCEPTION $(Quote-Sql $failure); END IF; END `$csit`$;")
     }
     foreach ($equipment in $Manifest | Where-Object { $_.Kind -eq 'Equipment' } | Group-Object ParentKey) {
         $folder = $equipment.Group[0].StorageFolder
@@ -511,6 +521,8 @@ function Set-RuntimeRoots([switch] $Rollback) {
     Set-Acl -LiteralPath $temporary -AclObject (Get-Acl -LiteralPath $runtimeFile)
     Move-Item -LiteralPath $temporary -Destination $runtimeFile -Force
 }
+
+if ($LoadFunctionsOnly) { return }
 
 Assert-Administrator
 Assert-SeparateTechnicalRoot
