@@ -147,11 +147,71 @@ public sealed class DocumentLibraryFileDeletionTests
 
             Assert.Equal(DocumentLibraryFileDeletionStatuses.Pending, result.Status);
             Assert.Equal("KM_DELETION_DISABLED", result.ErrorCode);
+            Assert.Equal("KM 刪除功能未啟用，無法完成刪除", result.StatusDisplay);
             Assert.False(result.Completed);
             await using var db = setup.Factory.CreateDbContext();
             Assert.True(await db.DocumentLibraryFiles.AnyAsync(x => x.Id == setup.FileId));
             Assert.True(await db.KmIntegrationOutbox.AnyAsync(x => x.DocumentId == setup.FileId));
             Assert.True(File.Exists(setup.NasPath));
+        }
+        finally { setup.Dispose(); }
+    }
+
+    [Fact]
+    public async Task KmAcceptedThenAnalysisFailed_StillRequiresKmDeletionConfirmation()
+    {
+        var setup = await SetupAsync(withSentOutbox: true);
+        try
+        {
+            await using (var db = setup.Factory.CreateDbContext())
+            {
+                var outbox = await db.KmIntegrationOutbox.SingleAsync();
+                outbox.CallbackFailed("UNSUPPORTED_DOCUMENT_FORMAT", "Unsupported format.",
+                    DateTime.UtcNow);
+                await db.SaveChangesAsync();
+            }
+
+            var result = (await Service(setup, kmDeletionEnabled: false)
+                .RequestAsync(setup.FileId, "admin"))!;
+
+            Assert.Equal(DocumentLibraryFileDeletionStatuses.Pending, result.Status);
+            Assert.Equal("KM_DELETION_DISABLED", result.ErrorCode);
+            Assert.Equal("KM 刪除功能未啟用，無法完成刪除", result.StatusDisplay);
+            await using var verify = setup.Factory.CreateDbContext();
+            Assert.True(await verify.DocumentLibraryFiles.AnyAsync(x => x.Id == setup.FileId));
+            Assert.NotNull((await verify.KmIntegrationOutbox.SingleAsync()).KmJobId);
+        }
+        finally { setup.Dispose(); }
+    }
+
+    [Fact]
+    public async Task DeliveryOutcomeUnknown_DoesNotAllowLocalDeletion()
+    {
+        var setup = await SetupAsync();
+        try
+        {
+            await using (var db = setup.Factory.CreateDbContext())
+            {
+                var file = await db.DocumentLibraryFiles.Include(x => x.ProcessingJob)
+                    .SingleAsync(x => x.Id == setup.FileId);
+                var outbox = KmIntegrationOutbox.ForDocumentLibraryFile(
+                    file, file.ProcessingJob!, DateTime.UtcNow);
+                var lease = Guid.NewGuid();
+                outbox.Claim(lease, DateTime.UtcNow, TimeSpan.FromMinutes(1));
+                outbox.DeliveryFailed(lease, "TIMEOUT", "Delivery outcome is unknown.",
+                    DateTime.UtcNow.AddMinutes(1), DateTime.UtcNow);
+                db.KmIntegrationOutbox.Add(outbox);
+                await db.SaveChangesAsync();
+            }
+
+            var result = (await Service(setup, kmDeletionEnabled: false)
+                .RequestAsync(setup.FileId, "admin"))!;
+
+            Assert.Equal(DocumentLibraryFileDeletionStatuses.Pending, result.Status);
+            Assert.Equal("KM_DELETION_DISABLED", result.ErrorCode);
+            await using var verify = setup.Factory.CreateDbContext();
+            Assert.True(await verify.DocumentLibraryFiles.AnyAsync(x => x.Id == setup.FileId));
+            Assert.True(await verify.KmIntegrationOutbox.AnyAsync());
         }
         finally { setup.Dispose(); }
     }

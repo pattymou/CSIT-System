@@ -823,7 +823,8 @@ public sealed class DocumentLibraryService(
             DeletionRequestId = deletion?.Id,
             DeletionStatus = deletion?.Status,
             DeletionStatusDisplay = deletion is null
-                ? null : DocumentLibraryFileDeletionService.StatusDisplay(deletion.Status),
+                ? null : DocumentLibraryFileDeletionService.StatusDisplay(
+                    deletion.Status, deletion.LastErrorCode),
             DeletionError = deletion?.LastErrorMessage
         };
     }
@@ -1003,7 +1004,8 @@ public sealed class DocumentLibraryService(
         DeletionRequestId = deletion?.Id,
         DeletionStatus = deletion?.Status,
         DeletionStatusDisplay = deletion is null
-            ? null : DocumentLibraryFileDeletionService.StatusDisplay(deletion.Status),
+            ? null : DocumentLibraryFileDeletionService.StatusDisplay(
+                deletion.Status, deletion.LastErrorCode),
         DeletionError = deletion?.LastErrorMessage,
         ProcessingStatusCssClass = job?.Status switch
         {

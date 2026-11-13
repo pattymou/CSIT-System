@@ -429,11 +429,15 @@ public sealed class DocumentLibraryFileDeletionService(
     }
 
     private static DocumentLibraryFileDeletionResult ToResult(DocumentLibraryFileDeletionJob job) => new(
-        job.Id, job.DocumentFileId, job.Status, StatusDisplay(job.Status), job.LastErrorCode,
+        job.Id, job.DocumentFileId, job.Status, StatusDisplay(job.Status, job.LastErrorCode), job.LastErrorCode,
         job.LastErrorMessage, job.LastErrorRetryable == true,
         job.Status == DocumentLibraryFileDeletionStatuses.Completed);
 
-    public static string StatusDisplay(string status) => status switch
+    public static string StatusDisplay(string status, string? errorCode = null) =>
+        status == DocumentLibraryFileDeletionStatuses.Pending &&
+        errorCode == "KM_DELETION_DISABLED"
+            ? "KM 刪除功能未啟用，無法完成刪除"
+            : status switch
     {
         DocumentLibraryFileDeletionStatuses.Preparing => "刪除準備中",
         DocumentLibraryFileDeletionStatuses.Pending => "等待 KM 刪除確認",
