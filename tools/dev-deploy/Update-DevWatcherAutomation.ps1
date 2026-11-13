@@ -97,6 +97,41 @@ function New-DirectoryAcl([string] $Sddl) {
     return $acl
 }
 
+function Assert-ProtectedAutomationFileAcl([string] $Path) {
+    $acl = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    $ownerSid = ([Security.Principal.NTAccount]::new([string]$acl.Owner)).Translate(
+        [Security.Principal.SecurityIdentifier]).Value
+    $accessSddl = $acl.GetSecurityDescriptorSddlForm(
+        [Security.AccessControl.AccessControlSections]::Access)
+    $approvedAccessSddl = 'D:PAI(A;;FA;;;SY)(A;;FR;;;LS)(A;;FA;;;BA)'
+    if ($ownerSid -ne 'S-1-5-32-544' -or -not $acl.AreAccessRulesProtected -or
+        $accessSddl -ne $approvedAccessSddl) {
+        throw "The protected automation file ACL is not approved: $Path"
+    }
+    return $acl.Sddl
+}
+
+function Assert-ApprovedAutomationSources([string] $Commit, [string[]] $Names) {
+    foreach ($name in $Names) {
+        if ([string]::IsNullOrWhiteSpace($name) -or
+            [IO.Path]::GetFileName($name) -ne $name) {
+            throw "The approved automation whitelist contains an invalid name: $name"
+        }
+        $relativePath = 'tools/dev-deploy/' + $name
+        $treeEntry = @(git ls-tree $Commit -- $relativePath)
+        if ($LASTEXITCODE -ne 0 -or $treeEntry.Count -ne 1 -or
+            $treeEntry[0] -notmatch '^100644 blob ([0-9a-f]{40})\s') {
+            throw "The approved commit does not contain a regular automation source: $name"
+        }
+        $approvedBlob = $Matches[1]
+        $sourcePath = Join-Path $PSScriptRoot $name
+        $workingBlob = (git hash-object -- $sourcePath).Trim()
+        if ($LASTEXITCODE -ne 0 -or $workingBlob -ne $approvedBlob) {
+            throw "Automation source does not match the approved commit: $name"
+        }
+    }
+}
+
 function Write-EvidenceIntegrity([string] $Directory) {
     $prefix = [IO.Path]::GetFullPath($Directory).TrimEnd('\') + '\'
     $records = @(Get-ChildItem -LiteralPath $Directory -Recurse -Force -File |
@@ -123,6 +158,7 @@ $remoteSha = ((git ls-remote origin "refs/heads/$branch") -split '\s+')[0]
 if ($sha -notmatch '^[0-9a-f]{40}$' -or $remoteSha -ne $sha) {
     throw 'DEV watcher automation source is not the pushed branch head.'
 }
+Assert-ApprovedAutomationSources $sha $names
 if (Test-Path -LiteralPath $transitionFile) {
     throw 'DEV watcher automation cannot be updated during a NAS hierarchy transition.'
 }
@@ -136,20 +172,13 @@ $taskBeforeXml = Export-ScheduledTask -TaskName $taskName
 $taskSnapshot = Get-TaskSnapshot $task
 $automationRootSddl = (Get-Acl -LiteralPath $automationRoot).Sddl
 $reviewRootSddl = (Get-Acl -LiteralPath $reviewRoot).Sddl
+$newFileAclSddl = Assert-ProtectedAutomationFileAcl `
+    (Join-Path $automationRoot 'Watch-DevReady.ps1')
 
-try {
-    $watchLock = [IO.File]::Open((Join-Path $stateRoot 'watch.lock'),
-        [IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
-} catch [IO.IOException] {
-    throw 'The DEV watcher is active; automation was not updated.'
-}
-try {
-    $deployLock = [IO.File]::Open((Join-Path $stateRoot 'deploy.lock'),
-        [IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::None)
-} catch [IO.IOException] {
-    $watchLock.Dispose(); $watchLock = $null
-    throw 'A DEV deployment or maintenance operation is active; automation was not updated.'
-}
+$locks = Enter-DevAutomationLocks (Join-Path $stateRoot 'watch.lock') `
+    (Join-Path $stateRoot 'deploy.lock')
+$watchLock = $locks.Watch
+$deployLock = $locks.Deploy
 
 try {
     if ((Get-ProductionPid) -ne $productionBefore) {
@@ -178,7 +207,8 @@ try {
     } | ConvertTo-Json -Depth 5 |
         Set-Content -LiteralPath (Join-Path $backupRoot 'update-summary.json') -Encoding UTF8
 
-    $originalRecords = @(New-DevAutomationFileBackup $automationRoot $backupRoot $names)
+    $originalRecords = @(New-DevAutomationFileBackup $automationRoot $backupRoot $names `
+        $newFileAclSddl $PSScriptRoot)
     Assert-DevAutomationBackup $backupRoot $originalRecords
     $approvedRecords = @(Install-DevAutomationFiles $PSScriptRoot $automationRoot `
         $backupRoot $originalRecords)

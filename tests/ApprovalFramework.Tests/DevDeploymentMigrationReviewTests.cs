@@ -46,6 +46,8 @@ public sealed class DevDeploymentMigrationReviewTests
         Assert.Contains("The DEV watcher task definition changed", updater);
         Assert.Contains("watch.lock", updater);
         Assert.Contains("deploy.lock", updater);
+        Assert.Contains("git ls-tree", updater);
+        Assert.Contains("git hash-object", updater);
         Assert.Contains("Register-ScheduledTask", updater);
     }
 
@@ -60,8 +62,14 @@ public sealed class DevDeploymentMigrationReviewTests
         Assert.Contains("PASS partial_copy_failure_restored", output);
         Assert.Contains("PASS sha_mismatch_rejected_and_restored", output);
         Assert.Contains("PASS restore_failure_reported", output);
-        Assert.Contains("PASS exclusive_lock_conflict_rejected", output);
-        Assert.Contains("DEV_WATCHER_AUTOMATION_TRANSACTION_TEST_PASS count=5", output);
+        Assert.Contains("PASS approved_source_sha_change_rejected", output);
+        Assert.Contains("PASS mixed_new_file_install_acl_evidence_and_restore", output);
+        Assert.Contains("PASS mixed_partial_install_restored", output);
+        Assert.Contains("PASS changed_new_file_retained_and_restore_failed", output);
+        Assert.Contains("PASS unrelated_new_path_retained", output);
+        Assert.Contains("PASS watch_lock_conflict_rejected", output);
+        Assert.Contains("PASS deploy_lock_conflict_rejected", output);
+        Assert.Contains("DEV_WATCHER_AUTOMATION_TRANSACTION_TEST_PASS count=11", output);
 
         var recovery = File.ReadAllText(Path.Combine(root, "tools", "dev-deploy",
             "Restart-DevCurrent.ps1"));
