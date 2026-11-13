@@ -83,6 +83,15 @@ function Assert-DevRuntimeConfig {
         -not $connection.ContainsKey('Password')) {
         throw 'The runtime database is not the authorized DEV role and database.'
     }
+    $expectedNasRoot = '\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV'
+    $expectedDocumentRoot = Join-Path $expectedNasRoot 'DocumentLibrary'
+    $expectedRawRoot = Join-Path $expectedNasRoot 'RawData'
+    if ([string]$secrets.PSObject.Properties['DocumentStorage:RootPath'].Value -ne $expectedDocumentRoot -or
+        [string]$secrets.PSObject.Properties['RawData:NasRootPath'].Value -ne $expectedRawRoot -or
+        [string]$secrets.PSObject.Properties['DocumentStaging:RootPath'].Value -ne
+            'C:\ProgramData\CSIT-DEV\document-staging') {
+        throw 'DEV formal storage configuration is not the approved AI-NAS layout.'
+    }
     $script:devRuntimeConnection = $connection
     $base = Get-Content -LiteralPath $baseSettings -Raw | ConvertFrom-Json
     $baseConnection = [string] $base.ConnectionStrings.Postgres
@@ -91,12 +100,33 @@ function Assert-DevRuntimeConfig {
     }
     $env:PGPASSWORD = [string] $connection['Password']
     try {
-        $query = 'SELECT current_database(), current_user;'
-        $result = $query | & 'C:\Program Files\PostgreSQL\16\bin\psql.exe' -X -w -t -A -F ',' -v ON_ERROR_STOP=1 `
+        $query = @'
+SELECT current_database() || '|' || current_user;
+SELECT category || '|' || name || '|' || value FROM system_options
+WHERE is_enabled AND category IN ('AssetRootPath','ThreeLevelRootPath','TestReportRootPath')
+ORDER BY category,name;
+'@
+        $result = @($query | & 'C:\Program Files\PostgreSQL\16\bin\psql.exe' -X -w -t -A -v ON_ERROR_STOP=1 `
             -h ([string] $connection['Host']) -p ([string] $connection['Port']) `
-            -U ([string] $connection['Username']) -d ([string] $connection['Database'])
-        if ($LASTEXITCODE -ne 0 -or ($result -join '').Trim() -ne 'sit_department_system_dev,csit_runtime_dev') {
+            -U ([string] $connection['Username']) -d ([string] $connection['Database']) |
+            ForEach-Object { $_.Trim() } | Where-Object { $_ })
+        $expectedRoots = @(
+            'AssetRootPath|equipment|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\Assets\equipment',
+            'AssetRootPath|goods|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\Assets\goods',
+            'TestReportRootPath|default|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\TestReports',
+            'ThreeLevelRootPath|certification|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\ThreeLevel\certification',
+            'ThreeLevelRootPath|verification|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\ThreeLevel\verification')
+        if ($LASTEXITCODE -ne 0 -or $result.Count -ne 6 -or
+            $result[0] -ne 'sit_department_system_dev|csit_runtime_dev' -or
+            (($result[1..5] -join "`n") -cne ($expectedRoots -join "`n"))) {
             throw 'The DEV runtime database connectivity guard failed.'
+        }
+        foreach ($path in @($expectedDocumentRoot,$expectedRawRoot,
+                'C:\ProgramData\CSIT-DEV\document-staging') +
+            @($expectedRoots | ForEach-Object { ($_ -split '\|',3)[2] })) {
+            if (-not (Test-Path -LiteralPath $path -PathType Container)) {
+                throw "A required DEV storage root is unavailable: $path"
+            }
         }
     } finally {
         Remove-Item Env:PGPASSWORD -ErrorAction SilentlyContinue

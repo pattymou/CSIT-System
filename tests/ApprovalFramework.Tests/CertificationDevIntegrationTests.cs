@@ -20,6 +20,8 @@ namespace ApprovalFramework.Tests;
 [Collection("Dev approval integration")]
 public sealed class CertificationDevIntegrationTests
 {
+    private const string FormalStorageBase = @"\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV";
+
     [Theory]
     [InlineData("certification")]
     [InlineData("verification")]
@@ -33,11 +35,10 @@ public sealed class CertificationDevIntegrationTests
         Assert.True(connectionInfo.Host is "localhost" or "127.0.0.1");
         Assert.Equal("csit_runtime_dev", connectionInfo.Username);
 
-        const string storageBase = @"D:\CSIT_Dev_Data";
-        var stagingRoot = Path.Combine(storageBase, "ApprovalStaging");
-        var formalRoot = Path.Combine(storageBase, "ThreeLevel", moduleCode);
-        var reportRoot = Path.Combine(storageBase, "TestReports");
-        var rawRoot = Path.Combine(storageBase, "RawData");
+        const string stagingRoot = @"C:\ProgramData\CSIT-DEV\document-staging";
+        var formalRoot = Path.Combine(FormalStorageBase, "ThreeLevel", moduleCode);
+        var reportRoot = Path.Combine(FormalStorageBase, "TestReports");
+        var rawRoot = Path.Combine(FormalStorageBase, "RawData");
         Assert.True(Directory.Exists(stagingRoot) && Directory.Exists(formalRoot)
             && Directory.Exists(reportRoot) && Directory.Exists(rawRoot));
 
@@ -594,7 +595,7 @@ public sealed class CertificationDevIntegrationTests
         Assert.True(File.Exists(Path.Combine(file.FilePath, file.FileName)));
         Assert.NotNull(file.NasFilePath);
         Assert.True(File.Exists(file.NasFilePath));
-        Assert.StartsWith(Path.GetFullPath(@"D:\CSIT_Dev_Data"), Path.GetFullPath(file.FilePath),
+        Assert.StartsWith(Path.GetFullPath(FormalStorageBase), Path.GetFullPath(file.FilePath),
             StringComparison.OrdinalIgnoreCase);
         Assert.StartsWith(Path.GetFullPath(rawRoot), Path.GetFullPath(file.NasFilePath),
             StringComparison.OrdinalIgnoreCase);

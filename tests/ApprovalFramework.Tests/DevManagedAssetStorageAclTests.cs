@@ -12,15 +12,16 @@ public sealed class DevManagedAssetStorageAclTests
         var root = FindRepositoryRoot();
         var script = File.ReadAllText(Path.Combine(root, "tools", "dev-deploy",
             "Initialize-DevManagedAssetStorage.ps1"));
-        Assert.Contains("D:\\CSIT_Dev_Data\\Assets\\equipment", script);
+        Assert.Contains("\\\\AI-NAS\\Workspace_B\\CSIT_RAW_DATA_DEV\\Assets\\equipment", script);
         Assert.Contains("sit_department_system_dev", script);
         Assert.Contains("csit_runtime_dev", script);
         Assert.Contains("ApprovedEquipmentIds must exactly match every active deletion job", script);
-        Assert.Contains("Protected ACL descendants require separate review", script);
         Assert.Contains("DEV_MANAGED_STORAGE_ACL_AUDIT_ONLY", script);
-        Assert.Contains("DEV_MANAGED_STORAGE_ACL_APPLIED", script);
+        Assert.Contains("DEV_MANAGED_STORAGE_ACCESS_VERIFIED", script);
+        Assert.Contains("Test-DevNasAccess.ps1", script);
         Assert.Contains("RootSddl", script);
         Assert.Contains("RestoreBackup", script);
+        Assert.DoesNotContain("Set-Acl", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("Everyone", script, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(" /T", script, StringComparison.OrdinalIgnoreCase);
 

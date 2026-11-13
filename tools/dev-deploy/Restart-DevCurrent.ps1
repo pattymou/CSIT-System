@@ -320,12 +320,21 @@ function Assert-DevDependencies {
         -not $connection.ContainsKey('Password')) {
         throw 'The runtime database is not the authorized DEV role and database.'
     }
+    $expectedNasRoot = '\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV'
+    if ([string]$secrets.PSObject.Properties['DocumentStorage:RootPath'].Value -ne
+            (Join-Path $expectedNasRoot 'DocumentLibrary') -or
+        [string]$secrets.PSObject.Properties['RawData:NasRootPath'].Value -ne
+            (Join-Path $expectedNasRoot 'RawData') -or
+        [string]$secrets.PSObject.Properties['DocumentStaging:RootPath'].Value -ne
+            'C:\ProgramData\CSIT-DEV\document-staging') {
+        throw 'DEV formal storage configuration is not the approved AI-NAS layout.'
+    }
     $env:PGPASSWORD = [string]$connection['Password']
     try {
         $query = @'
 SELECT current_database() || '|' || current_user;
-SELECT value FROM system_options WHERE is_enabled = TRUE AND category IN
-('ApprovalStagingRoot','AssetRootPath','ThreeLevelRootPath') ORDER BY category, name;
+SELECT category || '|' || name || '|' || value FROM system_options WHERE is_enabled = TRUE AND category IN
+('AssetRootPath','ThreeLevelRootPath','TestReportRootPath') ORDER BY category, name;
 SELECT (SELECT count(*) FROM equipment_deletion_jobs WHERE status <> 'Completed') || '|' ||
        (SELECT count(*) FROM equipment_file_deletion_jobs WHERE status <> 'Completed');
 '@
@@ -340,7 +349,17 @@ SELECT (SELECT count(*) FROM equipment_deletion_jobs WHERE status <> 'Completed'
         if ($result[-1] -ne '0|0') {
             throw 'Active equipment deletion work blocks automatic DEV recovery.'
         }
-        $paths = @($result[1..($result.Count - 2)])
+        $expectedRoots = @(
+            'AssetRootPath|equipment|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\Assets\equipment',
+            'AssetRootPath|goods|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\Assets\goods',
+            'TestReportRootPath|default|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\TestReports',
+            'ThreeLevelRootPath|certification|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\ThreeLevel\certification',
+            'ThreeLevelRootPath|verification|\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\ThreeLevel\verification')
+        $actualRoots = @($result[1..($result.Count - 2)])
+        if (($actualRoots -join "`n") -cne ($expectedRoots -join "`n")) {
+            throw 'DEV SystemOptions formal roots are not the approved AI-NAS layout.'
+        }
+        $paths = @($actualRoots | ForEach-Object { ($_ -split '\|',3)[2] })
         foreach ($key in @('RawData:NasRootPath','DocumentStorage:RootPath','DocumentStaging:RootPath')) {
             $property = $secrets.PSObject.Properties[$key]
             if ($property -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {

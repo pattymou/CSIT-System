@@ -34,10 +34,10 @@ public sealed class AssetDevIntegrationTests
         Assert.True(connectionInfo.Host is "localhost" or "127.0.0.1");
         Assert.Equal("csit_runtime_dev", connectionInfo.Username);
 
-        const string storageBase = @"D:\CSIT_Dev_Data";
-        var stagingRoot = Path.Combine(storageBase, "ApprovalStaging");
-        var formalRoot = Path.Combine(storageBase, "Assets", moduleCode);
-        var rawRoot = Path.Combine(storageBase, "RawData");
+        const string formalStorageBase = @"\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV";
+        const string stagingRoot = @"C:\ProgramData\CSIT-DEV\document-staging";
+        var formalRoot = Path.Combine(formalStorageBase, "Assets", moduleCode);
+        var rawRoot = Path.Combine(formalStorageBase, "RawData");
         Assert.True(Directory.Exists(stagingRoot) && Directory.Exists(formalRoot) && Directory.Exists(rawRoot));
 
         var factory = new TestDbFactory(connection);

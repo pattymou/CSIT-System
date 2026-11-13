@@ -17,8 +17,7 @@ $evidenceRoot = Join-Path $devRoot 'maintenance'
 $psql = 'C:\Program Files\PostgreSQL\16\bin\psql.exe'
 $expectedDatabase = 'sit_department_system_dev'
 $expectedUser = 'csit_runtime_dev'
-$expectedStorageRoot = 'D:\CSIT_Dev_Data\Assets\equipment'
-$localServiceSid = 'S-1-5-19'
+$expectedStorageRoot = '\\AI-NAS\Workspace_B\CSIT_RAW_DATA_DEV\Assets\equipment'
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -135,15 +134,6 @@ ORDER BY name;
     }
 }
 
-function Test-LocalServiceModify([Security.AccessControl.FileSystemSecurity] $Acl) {
-    return @($Acl.Access | Where-Object {
-        $_.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
-        $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value -eq $localServiceSid -and
-        ($_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify) -eq
-            [Security.AccessControl.FileSystemRights]::Modify
-    }).Count -gt 0
-}
-
 function Assert-ApprovedActiveSet($Inventory) {
     $active = @($Inventory.Master.EquipmentId | Sort-Object -Unique)
     $approved = @($ApprovedEquipmentIds | ForEach-Object { $_.Trim() } |
@@ -161,24 +151,7 @@ $deletions = Get-ActiveDeletionInventory $connection
 $storage = Get-StorageInventory $connection
 
 if ($PSCmdlet.ParameterSetName -eq 'Restore') {
-    $maintenance = [IO.Path]::GetFullPath($evidenceRoot).TrimEnd('\') + '\'
-    $backupPath = [IO.Path]::GetFullPath($RestoreBackup)
-    if (-not $backupPath.StartsWith($maintenance, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'ACL backup must be inside the DEV maintenance directory.'
-    }
-    if ($deletions.Master.Count -ne 0) {
-        throw 'ACL restore is blocked while equipment deletion jobs are active.'
-    }
-    $backup = Get-Content -LiteralPath $backupPath -Raw | ConvertFrom-Json
-    if (-not ([string] $backup.StorageRoot).Equals($storage.Root,
-        [StringComparison]::OrdinalIgnoreCase) -or [string]::IsNullOrWhiteSpace($backup.RootSddl)) {
-        throw 'ACL backup does not match the current DEV equipment root.'
-    }
-    $acl = Get-Acl -LiteralPath $storage.Root
-    $acl.SetSecurityDescriptorSddlForm([string] $backup.RootSddl)
-    Set-Acl -LiteralPath $storage.Root -AclObject $acl
-    Write-Output ('DEV_MANAGED_STORAGE_ACL_RESTORED root=' + $storage.Root)
-    exit 0
+    throw 'NAS ACL restore is owned by the AI-NAS administrator and is never performed by CSIT DEV tooling.'
 }
 
 $report = [ordered]@{
@@ -189,7 +162,7 @@ $report = [ordered]@{
     OtherAssetRoots = $storage.OtherRoots
     ItemCount = $storage.ItemCount
     ProtectedPaths = $storage.ProtectedPaths
-    HasLocalServiceModify = Test-LocalServiceModify $storage.RootAcl
+    HasLocalServiceModify = $null
     ActiveDeletionJobs = $deletions.Master
     ActiveFileDeletionJobs = $deletions.Files
     RootSddl = $storage.RootAcl.Sddl
@@ -203,28 +176,13 @@ if (-not $Apply) {
 }
 
 Assert-ApprovedActiveSet $deletions
-if ($storage.ProtectedPaths.Count -ne 0) {
-    throw 'Protected ACL descendants require separate review; no ACL was changed.'
+$probe = Join-Path $PSScriptRoot 'Test-DevNasAccess.ps1'
+if (-not (Test-Path -LiteralPath $probe -PathType Leaf)) {
+    throw 'The controlled LOCAL SERVICE NAS probe is unavailable.'
 }
-New-Item -ItemType Directory -Path $evidenceRoot -Force | Out-Null
-$backupFile = Join-Path $evidenceRoot ('managed-equipment-storage-acl-before-' +
-    (Get-Date).ToUniversalTime().ToString('yyyyMMddHHmmss') + '.json')
-$report | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $backupFile -Encoding UTF8
-
-if (-not (Test-LocalServiceModify $storage.RootAcl)) {
-    $sid = [Security.Principal.SecurityIdentifier]::new($localServiceSid)
-    $rule = [Security.AccessControl.FileSystemAccessRule]::new($sid,
-        [Security.AccessControl.FileSystemRights]::Modify,
-        [Security.AccessControl.InheritanceFlags]'ContainerInherit, ObjectInherit',
-        [Security.AccessControl.PropagationFlags]::None,
-        [Security.AccessControl.AccessControlType]::Allow)
-    $storage.RootAcl.AddAccessRule($rule) | Out-Null
-    Set-Acl -LiteralPath $storage.Root -AclObject $storage.RootAcl
-}
-
-$verified = Get-Acl -LiteralPath $storage.Root
-if (-not (Test-LocalServiceModify $verified)) {
-    throw 'LOCAL SERVICE Modify verification failed after the ACL update.'
+$probeOutput = @(& $probe)
+if ($LASTEXITCODE -ne 0 -or $probeOutput -notcontains 'DEV_NAS_ACCESS_PASS') {
+    throw 'LOCAL SERVICE does not have verified list/write/read/delete access to the DEV NAS root.'
 }
 if ((Assert-ProductionGuard) -ne $productionPid) { throw 'Production PID changed during DEV ACL initialization.' }
-Write-Output ('DEV_MANAGED_STORAGE_ACL_APPLIED root=' + $storage.Root + ' backup=' + $backupFile)
+Write-Output ('DEV_MANAGED_STORAGE_ACCESS_VERIFIED root=' + $storage.Root)
