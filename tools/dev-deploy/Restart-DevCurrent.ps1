@@ -642,7 +642,7 @@ try {
     }
 
     $listeners = Get-DevListeners
-    $processes = Get-DevReleaseProcesses
+    $processes = @(Get-DevReleaseProcesses)
     $runtimeMatches = $false
     $healthPassed = $false
     if ($currentValid -and $listeners.Count -eq 1 -and $processes.Count -eq 1) {
@@ -745,6 +745,7 @@ try {
                 throw 'DEV maintenance PID or executable guard failed.'
             }
             Stop-Process -Id $oldPid -Force
+            Wait-Process -Id $oldPid -Timeout 15 -ErrorAction SilentlyContinue
             if (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {
                 throw 'DEV maintenance process did not stop.'
             }

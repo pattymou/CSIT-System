@@ -42,7 +42,31 @@ public sealed class DevDeploymentMigrationReviewTests
             "Update-DevWatcherAutomation.ps1"));
         Assert.Contains("Restart-DevCurrent.ps1", watcher);
         Assert.Contains("New-ScheduledTaskTrigger -AtStartup", installer);
-        Assert.Contains("New-ScheduledTaskTrigger -AtStartup", updater);
+        Assert.Contains("Export-ScheduledTask", updater);
+        Assert.Contains("The DEV watcher task definition changed", updater);
+        Assert.Contains("watch.lock", updater);
+        Assert.Contains("deploy.lock", updater);
+        Assert.Contains("Register-ScheduledTask", updater);
+    }
+
+    [Fact]
+    public async Task WatcherAutomationUpdate_IsTransactionalAndFailureInjectedRecoveryPasses()
+    {
+        var root = FindRepositoryRoot();
+        var output = await RunPowerShellAsync(root, Path.Combine(root, "tools", "dev-deploy",
+            "Test-DevWatcherAutomationTransaction.ps1"));
+
+        Assert.Contains("PASS backup_update_restore_round_trip", output);
+        Assert.Contains("PASS partial_copy_failure_restored", output);
+        Assert.Contains("PASS sha_mismatch_rejected_and_restored", output);
+        Assert.Contains("PASS restore_failure_reported", output);
+        Assert.Contains("PASS exclusive_lock_conflict_rejected", output);
+        Assert.Contains("DEV_WATCHER_AUTOMATION_TRANSACTION_TEST_PASS count=5", output);
+
+        var recovery = File.ReadAllText(Path.Combine(root, "tools", "dev-deploy",
+            "Restart-DevCurrent.ps1"));
+        Assert.Contains("$processes = @(Get-DevReleaseProcesses)", recovery);
+        Assert.Contains("Wait-Process -Id $oldPid -Timeout 15", recovery);
     }
 
     [Fact]
