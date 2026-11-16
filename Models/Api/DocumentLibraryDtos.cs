@@ -68,6 +68,12 @@ public sealed class DocumentArchiveStatusDto
     public string ArchiveStatusDisplay { get; set; } = string.Empty;
     public string ArchiveStatusTone { get; set; } = string.Empty;
     public string? ArchiveError { get; set; }
+    public string KmStatus { get; set; } = string.Empty;
+    public string KmStatusDisplay { get; set; } = string.Empty;
+    public string KmStatusTone { get; set; } = string.Empty;
+    public string? KmJobId { get; set; }
+    public bool MetadataAvailable { get; set; }
+    public string? ProcessingError { get; set; }
     public bool ContinueTracking { get; set; }
 }
 
@@ -126,6 +132,10 @@ public sealed class SystemDocumentFileDto
     public string? ArchiveError { get; set; }
     public string KmStatusDisplay { get; set; } = string.Empty;
     public string KmStatusTone { get; set; } = string.Empty;
+    public string KmStatus { get; set; } = string.Empty;
+    public string? KmJobId { get; set; }
+    public bool MetadataAvailable { get; set; }
+    public string? ProcessingError { get; set; }
     public string DownloadUrl { get; set; } = string.Empty;
     public string PreviewUrl { get; set; } = string.Empty;
     public bool CanDelete { get; set; }

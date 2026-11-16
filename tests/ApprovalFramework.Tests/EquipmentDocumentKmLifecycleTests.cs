@@ -14,6 +14,8 @@ public sealed class EquipmentDocumentKmLifecycleTests
 {
     [Theory]
     [InlineData("manual.pdf", "application/pdf", KmIntegrationEventTypes.EquipmentDocumentArchived)]
+    [InlineData("quote.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        KmIntegrationEventTypes.EquipmentDocumentArchived)]
     [InlineData("front.png", "image/png", KmIntegrationEventTypes.EquipmentAttachmentArchived)]
     public async Task EquipmentPdfAndImageUseV2AndAuthorizedContentRoute(
         string fileName, string contentType, string expectedEventType)
@@ -27,6 +29,7 @@ public sealed class EquipmentDocumentKmLifecycleTests
         Assert.Equal(expectedEventType, request.EventType);
         Assert.Equal(KmAnalysisSourceTypes.EquipmentAttachment, request.Source.Type);
         Assert.Equal(file.Id, request.Document.Id);
+        Assert.Null(request.Source.EquipmentId);
 
         var controller = new KmIntegrationController(factory,
             NullLogger<KmIntegrationController>.Instance);
@@ -78,7 +81,7 @@ public sealed class EquipmentDocumentKmLifecycleTests
         Assert.Equal(file.Id, request.EventId);
         Assert.Equal(file.Id, request.Document.Id);
         Assert.Equal(file.Id, request.Source.EntityId);
-        Assert.Equal("EQ-KM-001", request.Source.EquipmentId);
+        Assert.Null(request.Source.EquipmentId);
         Assert.Equal(KmAnalysisSourceTypes.EquipmentAttachment, request.Source.Type);
         Assert.Equal(1, request.Document.Version);
 
@@ -154,6 +157,41 @@ public sealed class EquipmentDocumentKmLifecycleTests
         Assert.Equal(KmIntegrationStatus.Sent,
             (await check.KmIntegrationOutbox.SingleAsync()).Status);
         Assert.Null((await check.ApparatusFiles.SingleAsync()).MetadataJson);
+    }
+
+    [Fact]
+    public async Task FailedEquipmentContractRequest_ReusesEventWithAuditAfterFormalRevalidation()
+    {
+        var factory = new TestDbFactory(Guid.NewGuid().ToString("N"));
+        var file = SeedDocument(factory, "quote.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        Guid outboxId;
+        await using (var db = factory.CreateDbContext())
+        {
+            var row = await db.KmIntegrationOutbox.SingleAsync();
+            outboxId = row.Id;
+            var lease = Guid.NewGuid();
+            row.Claim(lease, DateTime.UtcNow, TimeSpan.FromMinutes(1));
+            row.DeliveryFailed(lease, "HTTP_400", "KM rejected the document job.", null,
+                DateTime.UtcNow);
+            await db.SaveChangesAsync();
+        }
+        var mock = new EquipmentMockKmClient();
+        var worker = Worker(factory, mock, enabled: true);
+
+        var requeued = await worker.RequeueSingleVerificationAttachmentAsync(outboxId, file.Id);
+        var dispatched = await worker.ProcessSingleVerificationAttachmentAsync(outboxId, file.Id);
+
+        Assert.Equal(KmIntegrationStatus.Pending, requeued.Status);
+        Assert.Equal(KmIntegrationStatus.Sent, dispatched.Status);
+        Assert.Equal("equipment-job-1", dispatched.KmJobId);
+        Assert.Null(mock.LastRequest!.Source.EquipmentId);
+        await using var verify = factory.CreateDbContext();
+        Assert.Single(await verify.KmIntegrationOutbox.ToListAsync());
+        var audit = Assert.Single(await verify.KmIntegrationManualRetryAudits.ToListAsync());
+        Assert.Equal(file.Id, audit.EventId);
+        Assert.Equal("HTTP_400", audit.PreviousErrorCode);
+        Assert.Contains("contract recovery", audit.Reason, StringComparison.Ordinal);
     }
 
     private static ApparatusFile SeedDocument(TestDbFactory factory,

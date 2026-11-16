@@ -6,6 +6,8 @@
 .equipment-file-table .equipment-file-km-column { width: 16%; }
 .equipment-file-table .equipment-file-actions-column { width: 12%; }
 .equipment-file-table td { vertical-align: top; }
+.equipment-file-table td.action-cell { display: table-cell; }
+.action-cell-content { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }
 .equipment-file-table td:first-child { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .equipment-file-name { display: block; max-width: 100%; white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 .equipment-file-table small { display: block; margin-top: .25rem; color: var(--text-muted, #64748b); overflow-wrap: anywhere; }

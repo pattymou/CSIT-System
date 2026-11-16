@@ -8,6 +8,7 @@ using SIT.DepartmentSystem.Web.Entities;
 using SIT.DepartmentSystem.Web.Models.Config;
 using SIT.DepartmentSystem.Web.Services;
 using SIT.DepartmentSystem.Web.Services.Implementations;
+using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace ApprovalFramework.Tests;
 
@@ -23,13 +24,26 @@ public sealed class DocumentLibraryTests
     }
 
     [Fact]
-    public void StandardFileName_IsStableSafeAndPreservesExtension()
+    public void StandardFileName_IsReadableStableSafeAndPreservesExtension()
     {
         var id = Guid.Parse("9f2d1e1f-cbc9-4423-b592-3dd949cdbf21");
         var result = DocumentLibraryRules.CreateStandardFileName(
             "原始 文件.PDF", new DateTime(2026, 10, 21, 2, 30, 45, 123, DateTimeKind.Utc), id);
 
-        Assert.Equal("DOC-20261021023045123-9f2d1e1fcbc94423b5923dd949cdbf21.pdf", result);
+        Assert.Equal("原始 文件~9f2d1e1f.pdf", result);
+    }
+
+    [Theory]
+    [InlineData("CON.pdf", "_CON~9f2d1e1f.pdf")]
+    [InlineData("report: final?.XLSX", "report_ final_~9f2d1e1f.xlsx")]
+    [InlineData("...pdf", "document~9f2d1e1f.pdf")]
+    public void StandardFileName_SanitizesWindowsNames(string original, string expected)
+    {
+        var result = DocumentLibraryRules.CreateStandardFileName(original, DateTime.UtcNow,
+            Guid.Parse("9f2d1e1f-cbc9-4423-b592-3dd949cdbf21"));
+
+        Assert.Equal(expected, result);
+        Assert.True(result.Length <= DocumentLibraryRules.MaximumStoredFileNameLength);
     }
 
     [Fact]
@@ -45,6 +59,57 @@ public sealed class DocumentLibraryTests
         Assert.True(DocumentLibraryRules.IsPreviewableImage(null, "photo.JPEG"));
         Assert.False(DocumentLibraryRules.IsPreviewableImage("application/pdf", "report.pdf"));
         Assert.False(DocumentLibraryRules.IsPreviewableImage("image/svg+xml", "unsafe.svg"));
+    }
+
+    [Fact]
+    public async Task FileStatusBatch_TracksKmAfterArchiveAndStopsAtCompletedMetadata()
+    {
+        var factory = new TestFactory();
+        var folder = Folder(3);
+        var file = Document(folder.Id);
+        file.StorageArea = DocumentStorageAreas.Library;
+        var now = DateTime.UtcNow;
+        var job = PendingJob(file.Id);
+        job.DocumentFile = file;
+        job.Status = DocumentProcessingStatuses.Processing;
+        job.ArchiveStatus = DocumentArchiveStatuses.Completed;
+        job.ArchivedAt = now;
+        job.ArchiveSha256 = file.Sha256;
+        file.ProcessingJob = job;
+        var outbox = KmIntegrationOutbox.ForDocumentLibraryFile(file, job, now);
+        var lease = Guid.NewGuid();
+        outbox.Claim(lease, now, TimeSpan.FromMinutes(1));
+        outbox.Sent(lease, "KM-DOC-STATUS", now);
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.DocumentFolders.Add(folder);
+            db.DocumentLibraryFiles.Add(file);
+            db.DocumentProcessingJobs.Add(job);
+            db.KmIntegrationOutbox.Add(outbox);
+            await db.SaveChangesAsync();
+        }
+        var service = new DocumentLibraryService(factory,
+            Options.Create(new DocumentStorageOptions { RootPath = Path.GetTempPath() }),
+            Options.Create(new DocumentStagingOptions { RootPath = Path.GetTempPath() }),
+            new AllowWrite(), Options.Create(new KmIntegrationOptions { Enabled = true }));
+
+        var processing = Assert.Single(await service.GetArchiveStatusesAsync([file.Id]));
+        Assert.True(processing.ContinueTracking);
+        Assert.Equal(DocumentProcessingStatuses.Processing, processing.KmStatus);
+        Assert.Equal("KM-DOC-STATUS", processing.KmJobId);
+        Assert.False(processing.MetadataAvailable);
+
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            var stored = await db.DocumentProcessingJobs.SingleAsync();
+            stored.Status = DocumentProcessingStatuses.Completed;
+            stored.MetadataJson = "{\"document\":{}}";
+            await db.SaveChangesAsync();
+        }
+        var completed = Assert.Single(await service.GetArchiveStatusesAsync([file.Id]));
+        Assert.False(completed.ContinueTracking);
+        Assert.True(completed.MetadataAvailable);
+        Assert.Equal(DocumentProcessingStatuses.Completed, completed.KmStatus);
     }
 
     [Fact]

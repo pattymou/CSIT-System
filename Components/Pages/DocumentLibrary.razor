@@ -23,6 +23,34 @@
     </div>
 }
 
+@if (_metadataFileName is not null)
+{
+    <div class="metadata-dialog-backdrop" role="dialog" aria-modal="true" aria-label="KM Metadata" @onclick="CloseMetadata">
+        <section class="metadata-dialog" @onclick:stopPropagation="true">
+            <header><div><strong>查看 Metadata</strong><small>@_metadataFileName</small></div><button type="button" aria-label="關閉 Metadata" @onclick="CloseMetadata">×</button></header>
+            <div class="metadata-dialog-body">
+                @if (_metadataLoading)
+                {
+                    <div class="document-empty">讀取分析資料中…</div>
+                }
+                else if (!string.IsNullOrWhiteSpace(_metadataError))
+                {
+                    <div class="metadata-empty">@_metadataError</div>
+                }
+                else if (_metadataDetail is not null)
+                {
+                    <div class="metadata-summary">KM Job：@_metadataDetail.KmJobId · Schema：@_metadataDetail.MetadataSchemaVersion · 分析時間：@_metadataDetail.AnalyzedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</div>
+                    @foreach (var section in MetadataSections(_metadataDetail.Result))
+                    {
+                        <section class="metadata-section"><h3>@section.Label</h3><pre>@PrettyJson(section.Value)</pre></section>
+                    }
+                    <details class="metadata-raw"><summary>原始 JSON</summary><pre>@PrettyJson(_metadataDetail.Result)</pre></details>
+                }
+            </div>
+        </section>
+    </div>
+}
+
 <AppMessageDialog Visible="@(_deleteCandidate is not null)"
                   Title="確認刪除文件"
                   Message="@DeleteConfirmationMessage"
@@ -231,13 +259,17 @@
                                                 </div>
                                             </td>
                                             <td><AttachmentStatusPill Status="@Status(file.ArchiveStatusDisplay, file.ArchiveStatusTone)" Title="@file.ArchiveError" /></td>
-                                            <td><AttachmentStatusPill Status="@Status(file.KmStatusDisplay, file.KmStatusTone)" /></td>
+                                            <td><AttachmentStatusPill Status="@Status(file.KmStatusDisplay, file.KmStatusTone)" Title="@file.ProcessingError" /></td>
                                             <td>@file.SourceModule</td>
                                             <td>@DisplayUploader(file.UploadedBy)</td>
                                             <td>@FormatSize(file.FileSize)</td>
                                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
                                             <td class="document-action-cell">
                                                 <a class="download-link" href="@file.DownloadUrl">下載</a>
+                                                @if (file.MetadataAvailable && file.KmStatus == DocumentProcessingStatuses.Completed && file.FileId.HasValue)
+                                                {
+                                                    <button type="button" class="metadata-view" @onclick="() => ShowMetadataAsync(file.FileId.Value, file.FileName)">查看 Metadata</button>
+                                                }
                                                 @if (!string.IsNullOrWhiteSpace(file.SourceManagementUrl))
                                                 {
                                                     <a class="source-link" href="@file.SourceManagementUrl"
@@ -300,6 +332,10 @@
                                             <td><code title="@file.Sha256">@file.Sha256[..12]…</code></td>
                                             <td class="document-action-cell">
                                                 <a class="download-link" href="@($"/api/document-library/files/{file.Id}/download")">下載</a>
+                                                @if (file.MetadataAvailable && file.ProcessingStatus == DocumentProcessingStatuses.Completed)
+                                                {
+                                                    <button type="button" class="metadata-view" @onclick="() => ShowMetadataAsync(file.Id, file.OriginalFileName)">查看 Metadata</button>
+                                                }
                                                 @if (_canDelete && file.CanDelete)
                                                 {
                                                     <button type="button" class="document-delete"
@@ -346,6 +382,10 @@
     private bool _systemDocumentsLoading = true;
     private string? _previewUrl;
     private string? _previewName;
+    private string? _metadataFileName;
+    private bool _metadataLoading;
+    private string? _metadataError;
+    private KmAnalysisResultDetail? _metadataDetail;
     private readonly HashSet<Guid> _trackedFileIds = [];
     private readonly HashSet<Guid> _uploadTrackedIds = [];
     private readonly Dictionary<Guid, DateTime> _trackingStartedAt = [];
@@ -361,7 +401,7 @@
     private long _messageVersion;
     private long _uploadResultsVersion;
     private long _progressVersion;
-    private static readonly TimeSpan StatusPollingInterval = TimeSpan.FromSeconds(10);
+    private static readonly TimeSpan StatusPollingInterval = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan StatusTrackingLimit = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan SuccessMessageLifetime = TimeSpan.FromSeconds(6);
     private static readonly TimeSpan SuccessResultLifetime = TimeSpan.FromSeconds(8);
@@ -408,6 +448,7 @@
 
     private async Task SelectFolderAsync(DocumentFolderDto folder)
     {
+        CloseMetadata();
         await CancelStatusTrackingAsync();
         await CancelDeletionPollingAsync();
         var selectionVersion = _selectionVersion;
@@ -433,6 +474,7 @@
 
     private async Task SelectSystemFolderAsync(SystemDocumentFolderDto folder)
     {
+        CloseMetadata();
         await CancelStatusTrackingAsync();
         await CancelDeletionPollingAsync();
         _selectedFolder = null;
@@ -519,6 +561,10 @@
             ArchiveError = file.ArchiveError,
             KmStatusDisplay = file.KmStatusDisplay,
             KmStatusTone = file.KmStatusTone,
+            KmStatus = file.ProcessingStatus,
+            KmJobId = file.KmJobId,
+            MetadataAvailable = file.MetadataAvailable,
+            ProcessingError = file.ProcessingError,
             DownloadUrl = $"/api/document-library/files/{file.Id}/download",
             PreviewUrl = $"/api/document-library/files/{file.Id}/preview"
         });
@@ -529,15 +575,14 @@
     {
         if (_selectedFolder is not null)
         {
-            foreach (var file in _files.Where(x => x.ArchiveStatus is DocumentArchiveStatuses.Pending or
-                         DocumentArchiveStatuses.Archiving or DocumentArchiveStatuses.Failed))
+            foreach (var file in _files.Where(x => ShouldTrack(x.ArchiveStatus, x.ProcessingStatus)))
                 AddTrackedFile(file.Id, file.ArchiveStatus, uploaded: false);
         }
         else if (_selectedSystemFolder is not null)
         {
             foreach (var file in _selectedSystemFolder.Files.Where(x => x.FileId.HasValue &&
-                         x.ArchiveStatus is DocumentArchiveStatuses.Pending or DocumentArchiveStatuses.Archiving or
-                             DocumentArchiveStatuses.Failed))
+                         x.SourceKey.StartsWith("document-library:", StringComparison.Ordinal) &&
+                         ShouldTrack(x.ArchiveStatus, x.KmStatus)))
                 AddTrackedFile(file.FileId!.Value, file.ArchiveStatus, uploaded: false);
         }
         TrackVisibleDeletions();
@@ -568,6 +613,12 @@
         }
         if (_trackedFileIds.Add(fileId)) _trackingStartedAt[fileId] = DateTime.UtcNow;
     }
+
+    private static bool ShouldTrack(string archiveStatus, string kmStatus) =>
+        archiveStatus is DocumentArchiveStatuses.Pending or DocumentArchiveStatuses.Archiving or
+            DocumentArchiveStatuses.Failed ||
+        archiveStatus == DocumentArchiveStatuses.Completed &&
+        kmStatus is not (DocumentProcessingStatuses.Completed or DocumentProcessingStatuses.Failed);
 
     private void EnsureStatusPolling()
     {
@@ -662,6 +713,12 @@
             custom.ArchiveStatusDisplay = status.ArchiveStatusDisplay;
             custom.ArchiveStatusTone = status.ArchiveStatusTone;
             custom.ArchiveError = status.ArchiveError;
+            custom.ProcessingStatus = status.KmStatus;
+            custom.KmStatusDisplay = status.KmStatusDisplay;
+            custom.KmStatusTone = status.KmStatusTone;
+            custom.KmJobId = status.KmJobId;
+            custom.MetadataAvailable = status.MetadataAvailable;
+            custom.ProcessingError = status.ProcessingError;
         }
         var system = _selectedSystemFolder?.Files.FirstOrDefault(x => x.FileId == status.FileId);
         if (system is null) return;
@@ -669,6 +726,12 @@
         system.ArchiveStatusDisplay = status.ArchiveStatusDisplay;
         system.ArchiveStatusTone = status.ArchiveStatusTone;
         system.ArchiveError = status.ArchiveError;
+        system.KmStatus = status.KmStatus;
+        system.KmStatusDisplay = status.KmStatusDisplay;
+        system.KmStatusTone = status.KmStatusTone;
+        system.KmJobId = status.KmJobId;
+        system.MetadataAvailable = status.MetadataAvailable;
+        system.ProcessingError = status.ProcessingError;
     }
 
     private async Task RefreshTrackedStatusesAsync()
@@ -1032,6 +1095,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        CloseMetadata();
         ClearMessage();
         ClearUploadResults();
         DismissUploadProgress();
@@ -1048,6 +1112,78 @@
         DocumentLibraryRules.IsPreviewableImage(contentType, fileName);
     private void OpenPreview(string url, string name) { _previewUrl = url; _previewName = name; }
     private void ClosePreview() { _previewUrl = null; _previewName = null; }
+    private async Task ShowMetadataAsync(Guid fileId, string fileName)
+    {
+        _metadataFileName = fileName;
+        _metadataLoading = true;
+        _metadataError = null;
+        _metadataDetail = null;
+        var selectionVersion = _selectionVersion;
+        try
+        {
+            var page = await Api.GetAsync<KmAnalysisResultPage>(
+                $"/api/administration/km-analysis/results?sourceType={KmAnalysisSourceTypes.DocumentLibraryFile}&sourceEntityId={fileId:D}&page=1&pageSize=10");
+            if (selectionVersion != _selectionVersion || _metadataFileName != fileName) return;
+            foreach (var candidate in page.Items.Where(x =>
+                         x.SourceType == KmAnalysisSourceTypes.DocumentLibraryFile &&
+                         x.SourceEntityId == fileId && x.Status == "Completed"))
+            {
+                var detail = await Api.GetAsync<KmAnalysisResultDetail>(
+                    $"/api/administration/km-analysis/results/{candidate.Id:D}");
+                if (selectionVersion != _selectionVersion || _metadataFileName != fileName) return;
+                if (detail.SourceEntityId == fileId &&
+                    detail.SourceType == KmAnalysisSourceTypes.DocumentLibraryFile &&
+                    detail.SupersededAt is null)
+                {
+                    _metadataDetail = detail;
+                    break;
+                }
+            }
+            if (_metadataDetail is null)
+            {
+                _metadataError = "此文件目前沒有可用的 KM 分析資料。";
+                return;
+            }
+            if (_metadataDetail.SourceEntityId != fileId ||
+                _metadataDetail.SourceType != KmAnalysisSourceTypes.DocumentLibraryFile)
+            {
+                _metadataDetail = null;
+                _metadataError = "KM 分析資料與此文件不一致。";
+            }
+        }
+        catch (Exception ex)
+        {
+            if (selectionVersion == _selectionVersion)
+                _metadataError = $"無法讀取 KM 分析資料：{ex.Message}";
+        }
+        finally
+        {
+            if (selectionVersion == _selectionVersion) _metadataLoading = false;
+        }
+    }
+    private void CloseMetadata()
+    {
+        _metadataFileName = null;
+        _metadataLoading = false;
+        _metadataError = null;
+        _metadataDetail = null;
+    }
+    private static IReadOnlyList<MetadataSection> MetadataSections(global::System.Text.Json.JsonElement result)
+    {
+        var definitions = new[]
+        {
+            ("Document", "document"), ("Technical", "technical"),
+            ("Extraction", "extraction"), ("Indexing", "indexing"),
+            ("Warnings", "warnings")
+        };
+        return definitions.Select(x => result.TryGetProperty(x.Item2, out var value)
+            ? new MetadataSection(x.Item1, value.Clone())
+            : new MetadataSection(x.Item1, null)).ToList();
+    }
+    private static string PrettyJson(global::System.Text.Json.JsonElement? value) => value.HasValue
+        ? global::System.Text.Json.JsonSerializer.Serialize(value.Value,
+            new global::System.Text.Json.JsonSerializerOptions { WriteIndented = true })
+        : "無資料";
     private static string DocumentPreviewUrl(Guid id) => $"/api/document-library/files/{id}/preview";
     private static string DisplayDescription(string? value) => string.IsNullOrWhiteSpace(value) ? "未填寫說明" : value;
     private static string DisplayUploader(string? value) => string.IsNullOrWhiteSpace(value) ? "—" : value;
@@ -1059,6 +1195,7 @@
         file.ArchiveError ?? file.ProcessingError ?? file.ProcessingStatusDisplay;
 
     private sealed record UploadResultNotice(Guid Id, DocumentUploadResultDto Result);
+    private sealed record MetadataSection(string Label, global::System.Text.Json.JsonElement? Value);
     private sealed record DeletionCandidate(Guid FileId, string FileName, string? UploadedBy,
         DateTime UploadedAt, string ArchiveStatus, string KmStatus);
 }

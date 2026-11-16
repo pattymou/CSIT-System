@@ -72,6 +72,39 @@ public sealed class KmV2DocumentJobClientTests
         Assert.Null(result.JobId);
     }
 
+    [Fact]
+    public async Task ClientErrorPreservesSafeHttpReasonAndRedactsCredentials()
+    {
+        using var http = new HttpClient(new Handler(_ => Task.FromResult(
+            new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = JsonContent.Create(new
+                {
+                    detail = new
+                    {
+                        code = "INVALID_CSIT_CONTRACT",
+                        errors = new[] { new
+                        {
+                            field = "source.equipmentId",
+                            type = "uuid_parsing",
+                            expected = "Input should be a valid UUID; token=do-not-show"
+                        } }
+                    }
+                })
+            })));
+
+        var result = await Client(http, 2).SubmitDocumentJobAsync(Request(), default);
+
+        Assert.False(result.Accepted);
+        Assert.False(result.Retryable);
+        Assert.Equal("HTTP_400", result.ErrorCode);
+        Assert.Contains("HTTP 400", result.ErrorMessage);
+        Assert.Contains("INVALID_CSIT_CONTRACT", result.ErrorMessage);
+        Assert.Contains("source.equipmentId", result.ErrorMessage);
+        Assert.Contains("token=[redacted]", result.ErrorMessage);
+        Assert.DoesNotContain("do-not-show", result.ErrorMessage);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.TooManyRequests)]
     [InlineData(HttpStatusCode.ServiceUnavailable)]

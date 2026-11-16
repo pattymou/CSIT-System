@@ -42,7 +42,7 @@ public sealed class KmSyncWorker(
         return count;
     }
 
-    /// <summary>Dispatch exactly one approved verification attachment without scanning the queue.</summary>
+    /// <summary>Dispatch exactly one approved recovery event without scanning the queue.</summary>
     public async Task<KmSingleDispatchResult> ProcessSingleVerificationAttachmentAsync(
         Guid outboxId, Guid eventId, CancellationToken cancellationToken = default)
     {
@@ -67,10 +67,8 @@ public sealed class KmSyncWorker(
         {
             throw new KmSingleDispatchException("Database", exception.Message);
         }
-        if (row is null || row.EventId != eventId ||
-            row.EventType != KmIntegrationEventTypes.VerificationApplicationAttachmentArchived ||
-            row.SourceEntityType != KmIntegrationSourceEntityTypes.VerificationApplicationFile)
-            throw new KmSingleDispatchException("Validation", "The requested outbox row is not the specified verification attachment event.");
+        if (row is null || row.EventId != eventId || !IsControlledSingleEvent(row))
+            throw new KmSingleDispatchException("Validation", "The requested outbox row is not a supported controlled recovery event.");
         var now = DateTime.UtcNow;
         if (row.Status is not (KmIntegrationStatus.Pending or KmIntegrationStatus.Failed) ||
             row.RetryCount >= options.MaxRetryCount ||
@@ -100,7 +98,7 @@ public sealed class KmSyncWorker(
     }
 
     /// <summary>
-    /// Requeues one previously failed verification attachment after an HTTP 401.
+    /// Requeues one previously failed, explicitly supported recovery event.
     /// The row is locked, the formal source is revalidated, and an audit record is
     /// written in the same transaction. No second outbox event is created.
     /// </summary>
@@ -128,10 +126,8 @@ public sealed class KmSyncWorker(
         {
             throw new KmSingleDispatchException("Database", exception.Message);
         }
-        if (row is null || row.EventId != eventId ||
-            row.EventType != KmIntegrationEventTypes.VerificationApplicationAttachmentArchived ||
-            row.SourceEntityType != KmIntegrationSourceEntityTypes.VerificationApplicationFile)
-            throw new KmSingleDispatchException("Validation", "The requested outbox row is not the specified verification attachment event.");
+        if (row is null || row.EventId != eventId || !IsControlledSingleEvent(row))
+            throw new KmSingleDispatchException("Validation", "The requested outbox row is not a supported controlled recovery event.");
 
         var now = DateTime.UtcNow;
         if (await db.KmIntegrationOutbox.AsNoTracking().AnyAsync(x =>
@@ -139,17 +135,24 @@ public sealed class KmSyncWorker(
                 cancellationToken))
             throw new KmSingleDispatchException("Validation", "A KM job already exists for the requested event.");
 
-        // Reuse the exact formal attachment validation used by the real v2 dispatch;
-        // this checks Accepted, NAS path/size/SHA256 and deletion holds before requeue.
-        var request = await BuildVerificationAttachmentRequestAsync(db, row, options, cancellationToken);
+        // Reuse the exact formal validation used by real v2 dispatch. This checks approval,
+        // NAS path/size/SHA256 and deletion holds before requeueing the same EventId.
+        var equipment = row.EventType is KmIntegrationEventTypes.EquipmentDocumentArchived or
+            KmIntegrationEventTypes.EquipmentAttachmentArchived;
+        var request = equipment
+            ? await BuildEquipmentRequestAsync(db, row, options, cancellationToken)
+            : await BuildVerificationAttachmentRequestAsync(db, row, options, cancellationToken);
         if (request is null)
             throw new KmSingleDispatchException("Validation",
-                "Accepted and formally archived verification attachment validation failed.");
+                "Approved and formally archived source validation failed.");
         var audit = KmIntegrationManualRetryAudit.Create(
-            row, "DEV_GATE1_WATCHER", "Gate 1 approved recovery after KM HTTP_401; no KM job exists.", now);
+            row, "DEV_CONTROLLED_WATCHER", equipment
+                ? "Approved equipment v2 contract recovery after KM HTTP_400; no KM job exists."
+                : "Gate 1 approved recovery after KM HTTP_401; no KM job exists.", now);
         try
         {
-            row.RequeueVerificationAttachmentAfterUnauthorized(now, options.MaxRetryCount);
+            if (equipment) row.RequeueEquipmentAfterContractFix(now, options.MaxRetryCount);
+            else row.RequeueVerificationAttachmentAfterUnauthorized(now, options.MaxRetryCount);
         }
         catch (InvalidOperationException exception)
         {
@@ -162,6 +165,13 @@ public sealed class KmSyncWorker(
         return new KmSingleDispatchResult(row.Id, row.EventId, row.Status, row.KmJobId,
             row.LastErrorCode);
     }
+
+    private static bool IsControlledSingleEvent(KmIntegrationOutbox row) =>
+        row.EventType == KmIntegrationEventTypes.VerificationApplicationAttachmentArchived &&
+        row.SourceEntityType == KmIntegrationSourceEntityTypes.VerificationApplicationFile ||
+        (row.EventType is KmIntegrationEventTypes.EquipmentDocumentArchived or
+            KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
+        row.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile;
 
     private async Task<(Guid Id, Guid Lease)?> ClaimNextAsync(KmIntegrationOptions options,
         CancellationToken cancellationToken)
@@ -822,7 +832,7 @@ public sealed class KmSyncWorker(
                 null,
                 null,
                 file.Apparatus.VendorId,
-                file.Apparatus.Id),
+                null),
             originalName!,
             file.ContentType,
             file.FileSize,

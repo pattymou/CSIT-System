@@ -5,6 +5,7 @@ namespace SIT.DepartmentSystem.Web.Services;
 public static partial class DocumentLibraryRules
 {
     public const int MaximumLevel = 3;
+    public const int MaximumStoredFileNameLength = 240;
     private static readonly HashSet<string> PreviewImageExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tif", ".tiff", ".heic"
@@ -44,9 +45,24 @@ public static partial class DocumentLibraryRules
 
     public static string CreateStandardFileName(string originalFileName, DateTime utcNow, Guid id)
     {
-        var extension = Path.GetExtension(originalFileName);
+        _ = utcNow; // Kept for source compatibility with the existing staging call sites.
+        var normalized = NormalizeOriginalFileName(originalFileName);
+        var extension = Path.GetExtension(normalized);
         if (extension.Length > 20 || !SafeExtension().IsMatch(extension)) extension = string.Empty;
-        return $"DOC-{utcNow:yyyyMMddHHmmssfff}-{id:N}{extension.ToLowerInvariant()}";
+        extension = extension.ToLowerInvariant();
+
+        var stem = extension.Length == 0 ? normalized : normalized[..^extension.Length];
+        stem = InvalidStoredFileNameCharacters().Replace(stem, "_");
+        stem = RepeatedWhitespace().Replace(stem, " ").Trim().TrimEnd('.', ' ');
+        if (string.IsNullOrWhiteSpace(stem)) stem = "document";
+        if (ReservedWindowsNames().IsMatch(stem)) stem = "_" + stem;
+
+        var suffix = "~" + id.ToString("N")[..8];
+        var maximumStemLength = MaximumStoredFileNameLength - suffix.Length - extension.Length;
+        if (stem.Length > maximumStemLength)
+            stem = stem[..maximumStemLength].TrimEnd('.', ' ');
+        if (string.IsNullOrWhiteSpace(stem)) stem = "document";
+        return stem + suffix + extension;
     }
 
     public static bool IsPreviewableImage(string? contentType, string fileName) =>
@@ -55,4 +71,13 @@ public static partial class DocumentLibraryRules
 
     [GeneratedRegex(@"^\.[A-Za-z0-9]+$")]
     private static partial Regex SafeExtension();
+
+    [GeneratedRegex(@"[<>:\""/\\|?*\x00-\x1F]")]
+    private static partial Regex InvalidStoredFileNameCharacters();
+
+    [GeneratedRegex(@"\s+")]
+    private static partial Regex RepeatedWhitespace();
+
+    [GeneratedRegex(@"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$", RegexOptions.IgnoreCase)]
+    private static partial Regex ReservedWindowsNames();
 }

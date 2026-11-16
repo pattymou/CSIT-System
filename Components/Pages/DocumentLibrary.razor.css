@@ -10,9 +10,14 @@
 .download-link { display:inline-block; white-space:nowrap; }
 .document-action-cell { min-width:138px; white-space:normal; }
 .document-delete,.source-link{display:inline-block;margin:4px 0 0 5px;padding:7px 10px;border-radius:8px;text-decoration:none;white-space:nowrap}
+.metadata-view{display:inline-block;margin:4px 0 0 5px;padding:7px 10px;border:1px solid rgba(103,232,249,.28);border-radius:8px;color:#a5f3fc;background:rgba(8,145,178,.13);cursor:pointer;white-space:nowrap}
 .document-delete{border:1px solid rgba(251,113,133,.38);color:#fecdd3;background:rgba(190,24,93,.2);cursor:pointer}
 .document-delete:disabled{cursor:not-allowed;opacity:.5}.source-link{border:1px solid rgba(103,232,249,.28);color:#a5f3fc;background:rgba(8,145,178,.13)}
 .deletion-state{display:block!important;margin-top:7px!important;color:#fcd34d!important;white-space:normal}
+.metadata-dialog-backdrop{position:fixed;inset:0;z-index:2100;display:grid;place-items:center;padding:24px;background:rgba(0,0,0,.78)}
+.metadata-dialog{width:min(980px,96vw);max-height:92vh;display:flex;flex-direction:column;border:1px solid rgba(104,180,210,.35);border-radius:14px;overflow:hidden;background:#071b27;box-shadow:0 24px 80px rgba(0,0,0,.55)}
+.metadata-dialog>header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px 18px;border-bottom:1px solid rgba(104,180,210,.2);color:#edfaff}.metadata-dialog>header strong,.metadata-dialog>header small{display:block}.metadata-dialog>header small{margin-top:3px;color:#8fb4c9;overflow-wrap:anywhere}.metadata-dialog>header button{border:0;background:transparent;color:#fff;font-size:28px;cursor:pointer}
+.metadata-dialog-body{padding:18px;overflow:auto}.metadata-summary{margin-bottom:14px;color:#8fb4c9;font-size:12px;overflow-wrap:anywhere}.metadata-section{margin:0 0 14px}.metadata-section h3{margin:0;padding:8px 11px;border-radius:8px 8px 0 0;color:#9ce3ff;background:rgba(54,181,229,.1);font-size:14px}.metadata-section pre,.metadata-raw pre{max-height:300px;margin:0;padding:12px;overflow:auto;color:#d9f4ff;background:rgba(0,0,0,.24);white-space:pre-wrap;overflow-wrap:anywhere}.metadata-raw summary{padding:9px 0;color:#9ce3ff;cursor:pointer}.metadata-empty{padding:28px;border:1px dashed rgba(104,180,210,.25);border-radius:10px;color:#9bbdcc;text-align:center}
 .system-document-table .system-file-name-column { width:27%; }
 .system-document-table .system-file-archive-column { width:14%; }
 .system-document-table .system-file-km-column { width:13%; }

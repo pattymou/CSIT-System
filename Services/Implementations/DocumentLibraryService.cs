@@ -292,17 +292,32 @@ public sealed class DocumentLibraryService(
             .Select(x => new
             {
                 x.Id,
+                JobId = x.ProcessingJob == null ? (Guid?)null : x.ProcessingJob.Id,
                 ArchiveStatus = x.ProcessingJob == null
                     ? DocumentArchiveStatuses.NotStarted
                     : x.ProcessingJob.ArchiveStatus,
                 ArchiveError = x.ProcessingJob == null ? null : x.ProcessingJob.ArchiveLastError,
-                ArchiveNextRetryAt = x.ProcessingJob == null ? null : x.ProcessingJob.ArchiveNextRetryAt
+                ArchiveNextRetryAt = x.ProcessingJob == null ? null : x.ProcessingJob.ArchiveNextRetryAt,
+                KmStatus = x.ProcessingJob == null ? string.Empty : x.ProcessingJob.Status,
+                ProcessingError = x.ProcessingJob == null
+                    ? null : x.ProcessingJob.KmErrorMessage ?? x.ProcessingJob.LastError,
+                MetadataAvailable = x.ProcessingJob != null && x.ProcessingJob.MetadataJson != null &&
+                    x.ProcessingJob.MetadataJson != string.Empty
             })
             .ToListAsync(cancellationToken);
+
+        var jobIds = rows.Where(x => x.JobId.HasValue).Select(x => x.JobId!.Value).ToArray();
+        var kmJobIds = await db.KmIntegrationOutbox.AsNoTracking()
+            .Where(x => jobIds.Contains(x.EventId) &&
+                x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded)
+            .ToDictionaryAsync(x => x.EventId, x => x.KmJobId, cancellationToken);
 
         return rows.Select(x =>
         {
             var presentation = DocumentArchivePresentation(x.ArchiveStatus);
+            var km = AttachmentStatusPresentation.Km(
+                x.ArchiveStatus == DocumentArchiveStatuses.Completed,
+                configuredKm.Enabled, x.KmStatus);
             return new DocumentArchiveStatusDto
             {
                 FileId = x.Id,
@@ -310,9 +325,17 @@ public sealed class DocumentLibraryService(
                 ArchiveStatusDisplay = presentation.Text,
                 ArchiveStatusTone = presentation.Tone,
                 ArchiveError = x.ArchiveError,
+                KmStatus = x.KmStatus,
+                KmStatusDisplay = km.Text,
+                KmStatusTone = km.Tone,
+                KmJobId = x.JobId.HasValue ? kmJobIds.GetValueOrDefault(x.JobId.Value) : null,
+                MetadataAvailable = x.MetadataAvailable,
+                ProcessingError = x.ProcessingError,
                 ContinueTracking = x.ArchiveStatus is DocumentArchiveStatuses.Pending or
                     DocumentArchiveStatuses.Archiving ||
-                    x.ArchiveStatus == DocumentArchiveStatuses.Failed && x.ArchiveNextRetryAt.HasValue
+                    x.ArchiveStatus == DocumentArchiveStatuses.Failed && x.ArchiveNextRetryAt.HasValue ||
+                    x.ArchiveStatus == DocumentArchiveStatuses.Completed && configuredKm.Enabled &&
+                    x.KmStatus is not (DocumentProcessingStatuses.Completed or DocumentProcessingStatuses.Failed)
             };
         }).ToList();
     }
@@ -817,6 +840,10 @@ public sealed class DocumentLibraryService(
             ArchiveError = dto.ArchiveError,
             KmStatusDisplay = dto.KmStatusDisplay,
             KmStatusTone = dto.KmStatusTone,
+            KmStatus = dto.ProcessingStatus,
+            KmJobId = dto.KmJobId,
+            MetadataAvailable = dto.MetadataAvailable,
+            ProcessingError = dto.ProcessingError,
             DownloadUrl = download,
             PreviewUrl = $"/api/document-library/files/{file.Id}/preview",
             CanDelete = deletion is null,

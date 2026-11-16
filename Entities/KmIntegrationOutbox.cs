@@ -264,6 +264,28 @@ public sealed class KmIntegrationOutbox
         // original failure and the explicit recovery reason.
     }
 
+    /// <summary>
+    /// Requeues one equipment attachment rejected before acceptance by the v2 contract.
+    /// The caller must revalidate the formal file and corrected request before invoking this.
+    /// </summary>
+    public void RequeueEquipmentAfterContractFix(DateTime now, int maxRetryCount)
+    {
+        if (Status != KmIntegrationStatus.Failed || LastErrorCode != "HTTP_400" ||
+            !(string.Equals(LastErrorMessage, "KM rejected the document job.", StringComparison.Ordinal) ||
+              LastErrorMessage?.Contains("source.equipmentId", StringComparison.OrdinalIgnoreCase) == true) ||
+            KmJobId is not null || SentAt is not null || LeaseToken is not null ||
+            LeaseExpiresAt is not null || NextRetryAt is not null || RetryCount >= maxRetryCount ||
+            EventType is not (KmIntegrationEventTypes.EquipmentDocumentArchived or
+                KmIntegrationEventTypes.EquipmentAttachmentArchived) ||
+            SourceEntityType != KmIntegrationSourceEntityTypes.ApparatusFile ||
+            EventId != SourceEntityId || DocumentId != SourceEntityId || Version != 1)
+            throw new InvalidOperationException(
+                "The equipment attachment is not eligible for the approved HTTP_400 contract recovery.");
+        Status = KmIntegrationStatus.Pending;
+        UpdatedAt = now;
+        // Preserve the prior error and retry history; the append-only audit records recovery authority.
+    }
+
     public void CallbackProcessing(DateTime now)
     {
         if (Status is not (KmIntegrationStatus.Sent or KmIntegrationStatus.Processing))

@@ -46,16 +46,30 @@ public sealed class AttachmentTableUiConsistencyTests
     }
 
     [Fact]
+    public void EquipmentActionsKeepNativeTableCellAndUseInnerFlexContainer()
+    {
+        var table = Read("Components", "Shared", "EquipmentFileTable.razor");
+        var css = Read("Components", "Shared", "EquipmentFileTable.razor.css");
+
+        Assert.Contains("<td class=\"action-cell\"><div class=\"action-cell-content\">", table);
+        Assert.Contains(".equipment-file-table td.action-cell { display: table-cell; }", css);
+        Assert.Contains(".action-cell-content { display: flex;", css);
+    }
+
+    [Fact]
     public void DocumentLibraryArchiveRefresh_UsesOneBoundedBatchAndPreservesExistingRows()
     {
         var source = Read("Components", "Pages", "DocumentLibrary.razor");
 
-        Assert.Contains("TimeSpan.FromSeconds(10)", source);
+        Assert.Contains("TimeSpan.FromSeconds(5)", source);
         Assert.Contains("PeriodicTimer(StatusPollingInterval)", source);
         Assert.Contains("/api/document-library/file-statuses", source);
         Assert.Contains("new DocumentArchiveStatusBatchRequest { FileIds = ids.ToList() }", source);
         Assert.Contains("_trackedFileIds.Take(100).ToArray()", source);
         Assert.Contains("ApplyArchiveStatus(status)", source);
+        Assert.Contains("custom.KmJobId = status.KmJobId", source);
+        Assert.Contains("custom.MetadataAvailable = status.MetadataAvailable", source);
+        Assert.Contains("ShouldTrack(x.ArchiveStatus, x.ProcessingStatus)", source);
         Assert.Contains("await CancelStatusTrackingAsync();", source);
         Assert.Contains("@implements IAsyncDisposable", source);
     }
@@ -81,6 +95,23 @@ public sealed class AttachmentTableUiConsistencyTests
         Assert.Contains("_uploadTrackedIds.Any(_trackedFileIds.Contains)", source);
         Assert.Contains("自動追蹤已暫停。", source);
         Assert.Contains("RefreshTrackedStatusesAsync", source);
+    }
+
+    [Fact]
+    public void DocumentLibraryMetadata_UsesAuthorizedAnalysisApiAndRealSections()
+    {
+        var source = Read("Components", "Pages", "DocumentLibrary.razor");
+
+        Assert.Contains("sourceEntityId={fileId:D}", source);
+        Assert.Contains("/api/administration/km-analysis/results/{candidate.Id:D}", source);
+        Assert.Contains("detail.SupersededAt is null", source);
+        Assert.Contains("(\"Document\", \"document\")", source);
+        Assert.Contains("(\"Technical\", \"technical\")", source);
+        Assert.Contains("(\"Extraction\", \"extraction\")", source);
+        Assert.Contains("(\"Indexing\", \"indexing\")", source);
+        Assert.Contains("(\"Warnings\", \"warnings\")", source);
+        Assert.Contains("此文件目前沒有可用的 KM 分析資料。", source);
+        Assert.Contains("原始 JSON", source);
     }
 
     private static string Read(params string[] path) =>

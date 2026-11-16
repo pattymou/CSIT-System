@@ -1,6 +1,8 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.Options;
 
 namespace SIT.DepartmentSystem.Web.Services.KmIntegration;
@@ -236,8 +238,14 @@ public sealed class KmIntegrationClient(
             }
             var retryable = (int)response.StatusCode >= 500 ||
                 response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.RequestTimeout;
+            var safeReason = retryable ? null : await ReadSafeRejectionReasonAsync(
+                response.Content, timeout.Token);
+            var messageText = retryable
+                ? "KM is temporarily unavailable."
+                : $"KM rejected the document job (HTTP {(int)response.StatusCode})" +
+                  (string.IsNullOrWhiteSpace(safeReason) ? "." : $": {safeReason}");
             return KmDeliveryResult.Failure(retryable, "HTTP_" + (int)response.StatusCode,
-                retryable ? "KM is temporarily unavailable." : "KM rejected the document job.");
+                messageText);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
@@ -247,6 +255,57 @@ public sealed class KmIntegrationClient(
         {
             return KmDeliveryResult.Failure(true, "CONNECTION", "KM document job connection failed.");
         }
+    }
+
+    private static async Task<string?> ReadSafeRejectionReasonAsync(
+        HttpContent content, CancellationToken cancellationToken)
+    {
+        string body;
+        try { body = await content.ReadAsStringAsync(cancellationToken); }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested) { return null; }
+        if (string.IsNullOrWhiteSpace(body)) return null;
+        body = body.Length > 16_384 ? body[..16_384] : body;
+        var values = new List<string>();
+        try
+        {
+            using var json = JsonDocument.Parse(body);
+            CollectSafeReasons(json.RootElement, values);
+        }
+        catch (JsonException)
+        {
+            if (!body.TrimStart().StartsWith('<')) values.Add(body);
+        }
+        var reason = string.Join("; ", values.Where(x => !string.IsNullOrWhiteSpace(x))
+            .Select(x => x.Trim()).Distinct(StringComparer.OrdinalIgnoreCase).Take(4));
+        if (string.IsNullOrWhiteSpace(reason)) return null;
+        reason = Regex.Replace(reason, @"(?i)bearer\s+\S+", "Bearer [redacted]");
+        reason = Regex.Replace(reason,
+            @"(?i)(authorization|token|secret|password|client_secret)\s*[:=]\s*[^,;\s]+",
+            "$1=[redacted]");
+        reason = new string(reason.Where(c => !char.IsControl(c)).Take(360).ToArray());
+        return string.IsNullOrWhiteSpace(reason) ? null : reason;
+    }
+
+    private static void CollectSafeReasons(JsonElement value, List<string> values)
+    {
+        if (values.Count >= 4) return;
+        if (value.ValueKind == JsonValueKind.String)
+        {
+            values.Add(value.GetString() ?? string.Empty);
+            return;
+        }
+        if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray()) CollectSafeReasons(item, values);
+            return;
+        }
+        if (value.ValueKind != JsonValueKind.Object) return;
+        foreach (var property in value.EnumerateObject().Where(x =>
+                     x.NameEquals("detail") || x.NameEquals("message") || x.NameEquals("msg") ||
+                     x.NameEquals("error") || x.NameEquals("errors") || x.NameEquals("title") ||
+                     x.NameEquals("code") || x.NameEquals("field") || x.NameEquals("type") ||
+                     x.NameEquals("expected")))
+            CollectSafeReasons(property.Value, values);
     }
 
     public async Task<KmMetadataChangeDeliveryResult> SubmitMetadataChangeAsync(
