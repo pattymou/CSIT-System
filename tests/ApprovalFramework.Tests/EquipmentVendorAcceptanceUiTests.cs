@@ -119,6 +119,38 @@ public sealed class EquipmentVendorAcceptanceUiTests
     }
 
     [Fact]
+    public void EquipmentView_PollsKmStatusAndRetriesCompletedMetadataWithoutReloadingThePage()
+    {
+        var view = Read("Components", "Pages", "ApparatusView.razor");
+        var metadata = Read("Components", "Shared", "EquipmentMetadataSummary.razor");
+
+        Assert.Contains("@implements IAsyncDisposable", view);
+        Assert.Contains("KmPollingInterval = TimeSpan.FromSeconds(5)", view);
+        Assert.Contains("PeriodicTimer(KmPollingInterval)", view);
+        Assert.Contains("HasPendingKmAttachments", view);
+        Assert.Contains("viewVersion != _viewVersion", view);
+        Assert.Contains("cancellationToken.IsCancellationRequested", view);
+        Assert.Contains("GetAsync<List<ApparatusFileDto>>", view);
+        Assert.Contains("/{Uri.EscapeDataString(id)}/files", view);
+        Assert.Contains("_item.Files = refreshedFiles", view);
+        Assert.Contains("FileStateFingerprint", view);
+        Assert.Contains("CancelPageWork()", view);
+        Assert.Contains("public async ValueTask DisposeAsync()", view);
+        Assert.DoesNotContain("var refreshed = await Api.GetAsync<ApparatusDetailDto>", view);
+
+        Assert.Contains("@implements IAsyncDisposable", metadata);
+        Assert.Contains("MaximumMetadataRetryCount = 6", metadata);
+        Assert.Contains("MetadataRetryInterval = TimeSpan.FromSeconds(5)", metadata);
+        Assert.Contains("RetryMissingResultsAsync", metadata);
+        Assert.Contains("metadataVersion != _metadataVersion", metadata);
+        Assert.Contains("detail.SourceSha256, file.Sha256", metadata);
+        Assert.Contains("x.Version == file.KmVersion", metadata);
+        Assert.Contains("LoadMissingResultsAsync", metadata);
+        Assert.Contains("CancelMetadataWork()", metadata);
+        Assert.Contains("public async ValueTask DisposeAsync()", metadata);
+    }
+
+    [Fact]
     public void EquipmentEdit_UsesSingleVendorSelector_AutomaticOwnership_AndScopedViewSpacing()
     {
         var edit = Read("Components", "Pages", "ApparatusEdit.razor");

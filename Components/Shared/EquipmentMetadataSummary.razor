@@ -4,6 +4,7 @@
 @using SIT.DepartmentSystem.Web.Services
 @using SIT.DepartmentSystem.Web.Services.KmIntegration
 @inject BrowserApiClient Api
+@implements IAsyncDisposable
 
 @if (_selected is not null)
 {
@@ -172,6 +173,12 @@
     private string? _error;
     private bool _loading;
     private KmResult? _selected;
+    private CancellationTokenSource? _metadataCts;
+    private Task? _metadataRetryTask;
+    private int _metadataVersion;
+    private bool _disposed;
+    private const int MaximumMetadataRetryCount = 6;
+    private static readonly TimeSpan MetadataRetryInterval = TimeSpan.FromSeconds(5);
     private bool HasCompletedKmFile => Files.Any(x => x.KmStatus == KmIntegrationStatus.Completed.ToString());
 
     protected override async Task OnParametersSetAsync()
@@ -179,34 +186,122 @@
         var fingerprint = string.Join('|', Files.OrderBy(x => x.Id).Select(x =>
             $"{x.Id:N}:{x.FileName}:{x.KmStatus}:{x.MetadataJson?.Length ?? 0}"));
         if (fingerprint == _fingerprint) return;
+        _metadataVersion++;
+        CancelMetadataWork();
+        _metadataCts = new CancellationTokenSource();
+        var metadataVersion = _metadataVersion;
+        var cancellationToken = _metadataCts.Token;
         _fingerprint = fingerprint;
         _results.Clear();
         _selected = null;
         _error = null;
+        _loading = false;
         var completed = Files.Where(x => x.KmStatus == KmIntegrationStatus.Completed.ToString()).ToList();
         if (completed.Count == 0) return;
         _loading = true;
         try
         {
-            foreach (var file in completed)
+            await LoadMissingResultsAsync(completed, metadataVersion, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
+        catch (Exception ex) { if (metadataVersion == _metadataVersion) _error = ex.Message; }
+        finally { if (metadataVersion == _metadataVersion) _loading = false; }
+        if (!cancellationToken.IsCancellationRequested && metadataVersion == _metadataVersion &&
+            completed.Any(file => _results.All(x => x.File.Id != file.Id)))
+            _metadataRetryTask = RetryMissingResultsAsync(completed, metadataVersion, cancellationToken);
+    }
+
+    private async Task<bool> LoadMissingResultsAsync(IReadOnlyList<ApparatusFileDto> completed,
+        int metadataVersion, CancellationToken cancellationToken)
+    {
+        var changed = false;
+        foreach (var file in completed.Where(file => _results.All(x => x.File.Id != file.Id)))
+        {
+            var page = await Api.GetAsync<KmAnalysisResultPage>(
+                $"/api/administration/km-analysis/results?sourceType={KmAnalysisSourceTypes.EquipmentAttachment}&sourceEntityId={file.Id:D}&page=1&pageSize=10",
+                cancellationToken);
+            foreach (var candidate in page.Items.Where(x => x.SourceType == KmAnalysisSourceTypes.EquipmentAttachment &&
+                         x.SourceEntityId == file.Id && x.Status == "Completed" && x.Version == file.KmVersion))
             {
-                var page = await Api.GetAsync<KmAnalysisResultPage>(
-                    $"/api/administration/km-analysis/results?sourceType={KmAnalysisSourceTypes.EquipmentAttachment}&sourceEntityId={file.Id:D}&page=1&pageSize=10");
-                foreach (var candidate in page.Items.Where(x => x.SourceType == KmAnalysisSourceTypes.EquipmentAttachment &&
-                             x.SourceEntityId == file.Id && x.Status == "Completed"))
+                var detail = await Api.GetAsync<KmAnalysisResultDetail>(
+                    $"/api/administration/km-analysis/results/{candidate.Id:D}", cancellationToken);
+                if (cancellationToken.IsCancellationRequested || metadataVersion != _metadataVersion) return changed;
+                if (detail.SourceType == KmAnalysisSourceTypes.EquipmentAttachment && detail.SourceEntityId == file.Id &&
+                    detail.Version == file.KmVersion && detail.SupersededAt is null &&
+                    string.Equals(detail.SourceSha256, file.Sha256, StringComparison.OrdinalIgnoreCase))
                 {
-                    var detail = await Api.GetAsync<KmAnalysisResultDetail>($"/api/administration/km-analysis/results/{candidate.Id:D}");
-                    if (detail.SourceType == KmAnalysisSourceTypes.EquipmentAttachment && detail.SourceEntityId == file.Id &&
-                        detail.SupersededAt is null)
+                    _results.Add(new(file, detail, EquipmentKmMetadataProjection.Project(detail.Result)));
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        return changed;
+    }
+
+    private async Task RetryMissingResultsAsync(IReadOnlyList<ApparatusFileDto> completed,
+        int metadataVersion, CancellationToken cancellationToken)
+    {
+        try
+        {
+            for (var attempt = 0; attempt < MaximumMetadataRetryCount &&
+                 completed.Any(file => _results.All(x => x.File.Id != file.Id)); attempt++)
+            {
+                await Task.Delay(MetadataRetryInterval, cancellationToken);
+                try
+                {
+                    var hadError = _error is not null;
+                    var changed = await LoadMissingResultsAsync(completed, metadataVersion, cancellationToken);
+                    if (cancellationToken.IsCancellationRequested || metadataVersion != _metadataVersion) return;
+                    _error = null;
+                    if (changed || hadError) await InvokeAsync(StateHasChanged);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
+                catch (JSDisconnectedException) { return; }
+                catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested) { return; }
+                catch (Exception ex)
+                {
+                    if (metadataVersion == _metadataVersion)
                     {
-                        _results.Add(new(file, detail, EquipmentKmMetadataProjection.Project(detail.Result)));
-                        break;
+                        _error = ex.Message;
+                        await InvokeAsync(StateHasChanged);
                     }
                 }
             }
         }
-        catch (Exception ex) { _error = ex.Message; }
-        finally { _loading = false; }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested || _disposed) { }
+        finally
+        {
+            if (metadataVersion == _metadataVersion) _metadataRetryTask = null;
+        }
+    }
+
+    private void CancelMetadataWork()
+    {
+        var source = _metadataCts;
+        _metadataCts = null;
+        if (source is not null)
+        {
+            source.Cancel();
+            source.Dispose();
+        }
+        _metadataRetryTask = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _metadataVersion++;
+        var task = _metadataRetryTask;
+        CancelMetadataWork();
+        if (task is null) return;
+        try { await task; }
+        catch (OperationCanceledException) { }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
     }
 
     private IReadOnlyList<(ApparatusFileDto File, EquipmentMetadataSuggestion Result)> LegacySuggestions =>

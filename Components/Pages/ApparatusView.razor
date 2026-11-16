@@ -2,6 +2,7 @@
 @page "/assets/{ModuleCode}/{Id}"
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode @(new InteractiveServerRenderMode(prerender: false))
+@implements IAsyncDisposable
 @using SIT.DepartmentSystem.Web.Services.Interfaces
 @using SIT.DepartmentSystem.Web.Entities
 @inject BrowserApiClient Api
@@ -237,6 +238,11 @@ else
     private ApparatusDetailDto? _item;
     private string? _message;
     private bool _reloadRequested;
+    private CancellationTokenSource? _pageCts;
+    private Task? _kmPollingTask;
+    private int _viewVersion;
+    private bool _disposed;
+    private static readonly TimeSpan KmPollingInterval = TimeSpan.FromSeconds(5);
     private EquipmentDeletionPreviewDto? _deletePreview;
     private bool _showDeleteDialog;
     private bool _deleteWorking;
@@ -249,6 +255,9 @@ else
 
     protected override void OnParametersSet()
     {
+        _viewVersion++;
+        CancelPageWork();
+        _pageCts = new CancellationTokenSource();
         _reloadRequested = true;
         _item = null;
         _message = null;
@@ -258,24 +267,33 @@ else
     {
         if (!_reloadRequested) return;
         _reloadRequested = false;
-
-        await LoadMenuTitle(); // ⭐ 新增
+        var viewVersion = _viewVersion;
+        var moduleCode = EffectiveModuleCode;
+        var id = Id;
+        var cancellationToken = _pageCts?.Token ?? CancellationToken.None;
 
         try
         {
-            _item = await Api.GetAsync<ApparatusDetailDto>(
-                $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(Id)}");
+            var title = await LoadMenuTitle(moduleCode);
+            var item = await Api.GetAsync<ApparatusDetailDto>(
+                $"/api/assets/{Uri.EscapeDataString(moduleCode)}/{Uri.EscapeDataString(id)}",
+                cancellationToken);
+            if (cancellationToken.IsCancellationRequested || viewVersion != _viewVersion) return;
+            PageTitle = title;
+            _item = item;
+            EnsureKmPolling(viewVersion, moduleCode, id, cancellationToken);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
         catch (Exception ex)
         {
-            _message = $"載入資料失敗：{ex.Message}";
+            if (viewVersion == _viewVersion) _message = $"載入資料失敗：{ex.Message}";
         }
 
-        StateHasChanged();
+        if (viewVersion == _viewVersion) StateHasChanged();
     }
 
     // ⭐ 核心：抓「子選單名稱」
-    private async Task LoadMenuTitle()
+    private async Task<string> LoadMenuTitle(string moduleCode)
     {
         try
         {
@@ -285,31 +303,108 @@ else
                 x.Code.Equals("department", StringComparison.OrdinalIgnoreCase));
 
             if (dept == null)
-            {
-                PageTitle = $"資產管理 - {EffectiveModuleCode}";
-                return;
-            }
+                return $"資產管理 - {moduleCode}";
 
             var items = await MenuService.GetItemsBySectionAsync(dept.Id);
 
             var menu = items.FirstOrDefault(x =>
                 x.TemplateType == "Asset" &&
-                string.Equals(x.ModuleCode, EffectiveModuleCode, StringComparison.OrdinalIgnoreCase));
+                string.Equals(x.ModuleCode, moduleCode, StringComparison.OrdinalIgnoreCase));
 
-            if (menu != null)
-            {
-                PageTitle = menu.Title; // ⭐ 重點：用子選單名稱
-                return;
-            }
+            if (menu != null) return menu.Title;
 
             // fallback
-            PageTitle = $"資產管理 - {EffectiveModuleCode}";
+            return $"資產管理 - {moduleCode}";
         }
         catch (Exception ex)
         {
-            PageTitle = $"資產管理 - {EffectiveModuleCode}";
             Console.WriteLine($"[Apparatus] LoadMenuTitle error: {ex.Message}");
+            return $"資產管理 - {moduleCode}";
         }
+    }
+
+    private void EnsureKmPolling(int viewVersion, string moduleCode, string id,
+        CancellationToken cancellationToken)
+    {
+        if (!string.Equals(moduleCode, "equipment", StringComparison.OrdinalIgnoreCase) ||
+            !HasPendingKmAttachments(_item?.Files) || _kmPollingTask is { IsCompleted: false }) return;
+        _kmPollingTask = PollKmStatusesAsync(viewVersion, moduleCode, id, cancellationToken);
+    }
+
+    private async Task PollKmStatusesAsync(int viewVersion, string moduleCode, string id,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(KmPollingInterval);
+            while (HasPendingKmAttachments(_item?.Files) &&
+                   await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                try
+                {
+                    var refreshedFiles = await Api.GetAsync<List<ApparatusFileDto>>(
+                        $"/api/assets/{Uri.EscapeDataString(moduleCode)}/{Uri.EscapeDataString(id)}/files",
+                        cancellationToken);
+                    if (cancellationToken.IsCancellationRequested || viewVersion != _viewVersion) return;
+                    if (FileStateFingerprint(_item?.Files) != FileStateFingerprint(refreshedFiles))
+                    {
+                        await InvokeAsync(() =>
+                        {
+                            if (cancellationToken.IsCancellationRequested || viewVersion != _viewVersion || _item is null) return;
+                            _item.Files = refreshedFiles;
+                            StateHasChanged();
+                        });
+                    }
+                    if (!HasPendingKmAttachments(refreshedFiles)) return;
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
+                catch (JSDisconnectedException) { return; }
+                catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested) { return; }
+                catch { /* A later tick may recover from a transient status read failure. */ }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested || _disposed) { }
+        finally
+        {
+            if (viewVersion == _viewVersion) _kmPollingTask = null;
+        }
+    }
+
+    private static bool HasPendingKmAttachments(IReadOnlyList<ApparatusFileDto>? files) =>
+        files?.Any(file => file.IsKmEligibleDocument &&
+            (!file.HasKmSchedule && file.KmEnabled ||
+             file.HasKmSchedule && file.KmStatus is not (nameof(KmIntegrationStatus.Completed) or nameof(KmIntegrationStatus.Failed)))) == true;
+
+    private static string FileStateFingerprint(IReadOnlyList<ApparatusFileDto>? files) =>
+        files is null ? string.Empty : string.Join('|', files.OrderBy(x => x.Id).Select(x =>
+            $"{x.Id:N}:{x.ArchiveStatus}:{x.IsFormalArchiveVerified}:{x.HasKmSchedule}:{x.KmEnabled}:{x.KmStatus}:{x.KmError}:{x.MetadataVersion}:{x.MetadataJson?.Length ?? 0}"));
+
+    private void CancelPageWork()
+    {
+        var source = _pageCts;
+        _pageCts = null;
+        if (source is not null)
+        {
+            source.Cancel();
+            source.Dispose();
+        }
+        _kmPollingTask = null;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        _viewVersion++;
+        var task = _kmPollingTask;
+        CancelPageWork();
+        if (task is null) return;
+        try { await task; }
+        catch (OperationCanceledException) { }
+        catch (JSDisconnectedException) { }
+        catch (ObjectDisposedException) { }
     }
 
     private void Edit()
