@@ -50,7 +50,7 @@ public sealed class ManagedAssetFileStorage(AppDbContext db)
             FormalBusinessPath.VendorInformation, stableFolderName);
 
     public static string StoredFileName(Guid id, string originalFileName) =>
-        id.ToString("N") + Path.GetExtension(originalFileName).ToLowerInvariant();
+        FormalStoredFileNameRules.Create(originalFileName, id);
 
     public async Task<string> ArchiveAsync(Stream source, string folder, string storedFileName,
         CancellationToken cancellationToken = default)
