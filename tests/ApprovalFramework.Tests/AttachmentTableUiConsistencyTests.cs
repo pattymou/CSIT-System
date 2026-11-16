@@ -39,10 +39,26 @@ public sealed class AttachmentTableUiConsistencyTests
         var supervisorCss = Read("Components", "Pages", "SupervisorReviewCenter.razor.css");
 
         Assert.Contains(".custom-document-table { min-width:0; table-layout:fixed; }", documentCss);
-        Assert.Contains(".custom-document-table { min-width:980px; }", documentCss);
+        Assert.Contains(".custom-document-table { min-width:880px; }", documentCss);
         Assert.Contains(".approval-review-layout", supervisorCss);
         Assert.Contains("width: 100%;", supervisorCss);
         Assert.Contains(".approval-review-table { min-width: 920px; }", supervisorCss);
+    }
+
+    [Fact]
+    public void DocumentLibraryCustomFileList_ShowsOnlyOriginalNameAndHidesHash()
+    {
+        var source = Read("Components", "Pages", "DocumentLibrary.razor");
+        var css = Read("Components", "Pages", "DocumentLibrary.razor.css");
+        var customTable = source[source.IndexOf("<table class=\"document-table custom-document-table\"", StringComparison.Ordinal)..];
+
+        Assert.Contains("@file.OriginalFileName", customTable);
+        Assert.DoesNotContain("@file.StandardFileName", customTable);
+        Assert.DoesNotContain("<th>SHA256</th>", customTable);
+        Assert.DoesNotContain("@file.Sha256", customTable);
+        Assert.DoesNotContain("custom-file-sha-column", customTable);
+        Assert.Contains("colspan=\"7\"", customTable);
+        Assert.Contains(".custom-document-table .document-file-details strong { white-space:normal; overflow-wrap:anywhere; word-break:break-word; }", css);
     }
 
     [Fact]

@@ -297,12 +297,12 @@
                     {
                     <div class="document-table-wrap">
                         <table class="document-table custom-document-table">
-                            <colgroup><col class="custom-file-name-column" /><col class="custom-file-archive-column" /><col class="custom-file-km-column" /><col class="custom-file-size-column" /><col class="custom-file-uploader-column" /><col class="custom-file-time-column" /><col class="custom-file-sha-column" /><col class="custom-file-action-column" /></colgroup>
-                            <thead><tr><th>原始檔名</th><th>正式入庫</th><th>KM 分析</th><th>大小</th><th>上傳者</th><th>上傳時間</th><th>SHA256</th><th>操作</th></tr></thead>
+                            <colgroup><col class="custom-file-name-column" /><col class="custom-file-archive-column" /><col class="custom-file-km-column" /><col class="custom-file-size-column" /><col class="custom-file-uploader-column" /><col class="custom-file-time-column" /><col class="custom-file-action-column" /></colgroup>
+                            <thead><tr><th>原始檔名</th><th>正式入庫</th><th>KM 分析</th><th>大小</th><th>上傳者</th><th>上傳時間</th><th>操作</th></tr></thead>
                             <tbody>
                                 @if (_files.Count == 0)
                                 {
-                                    <tr><td colspan="8" class="document-empty">此資料夾尚無文件。</td></tr>
+                                    <tr><td colspan="7" class="document-empty">此資料夾尚無文件。</td></tr>
                                 }
                                 else
                                 {
@@ -321,7 +321,7 @@
                                                     {
                                                         <span class="document-type-icon" aria-hidden="true">📄</span>
                                                     }
-                                                    <span class="document-file-details"><strong>@file.OriginalFileName</strong><small>@file.StandardFileName</small></span>
+                                                    <span class="document-file-details"><strong>@file.OriginalFileName</strong></span>
                                                 </div>
                                             </td>
                                             <td><AttachmentStatusPill Status="@Status(file.ArchiveStatusDisplay, file.ArchiveStatusTone)" Title="@file.ArchiveError" /></td>
@@ -329,7 +329,6 @@
                                             <td>@FormatSize(file.FileSize)</td>
                                             <td>@DisplayUploader(file.UploadedBy)</td>
                                             <td>@file.UploadedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
-                                            <td><code title="@file.Sha256">@file.Sha256[..12]…</code></td>
                                             <td class="document-action-cell">
                                                 <a class="download-link" href="@($"/api/document-library/files/{file.Id}/download")">下載</a>
                                                 @if (file.MetadataAvailable && file.ProcessingStatus == DocumentProcessingStatuses.Completed)

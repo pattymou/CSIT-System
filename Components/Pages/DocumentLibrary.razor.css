@@ -7,6 +7,7 @@
 .system-document-table,
 .custom-document-table { min-width:0; table-layout:fixed; }
 .document-file-cell { min-width:0; }
+.custom-document-table .document-file-details strong { white-space:normal; overflow-wrap:anywhere; word-break:break-word; }
 .download-link { display:inline-block; white-space:nowrap; }
 .document-action-cell { min-width:138px; white-space:normal; }
 .document-delete,.source-link{display:inline-block;margin:4px 0 0 5px;padding:7px 10px;border-radius:8px;text-decoration:none;white-space:nowrap}
@@ -26,15 +27,14 @@
 .system-document-table .system-file-size-column { width:7%; }
 .system-document-table .system-file-time-column { width:10%; }
 .system-document-table .system-file-action-column { width:12%; }
-.custom-document-table .custom-file-name-column { width:27%; }
-.custom-document-table .custom-file-archive-column { width:14%; }
-.custom-document-table .custom-file-km-column { width:13%; }
+.custom-document-table .custom-file-name-column { width:30%; }
+.custom-document-table .custom-file-archive-column { width:13%; }
+.custom-document-table .custom-file-km-column { width:12%; }
 .custom-document-table .custom-file-size-column { width:7%; }
-.custom-document-table .custom-file-uploader-column { width:12%; }
+.custom-document-table .custom-file-uploader-column { width:11%; }
 .custom-document-table .custom-file-time-column { width:12%; }
-.custom-document-table .custom-file-sha-column { width:8%; }
-.custom-document-table .custom-file-action-column { width:12%; }
+.custom-document-table .custom-file-action-column { width:15%; }
 @media(max-width:900px) {
-    .system-document-table,
-    .custom-document-table { min-width:980px; }
+    .system-document-table { min-width:980px; }
+    .custom-document-table { min-width:880px; }
 }
