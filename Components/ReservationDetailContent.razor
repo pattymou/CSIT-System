@@ -87,6 +87,7 @@
                     @foreach (var equipment in requirementGroup)
                     {
                         <tr><td class="equipment-name">@ReservationUi.Display(equipment.ApparatusName)</td><td>@ReservationUi.Display(equipment.ProductsId)</td><td>@ReservationUi.Display(equipment.Kind)</td><td>@ReservationUi.Display(equipment.Brand) / @ReservationUi.Display(equipment.Model)</td><td>@ReservationUi.Display(equipment.Number)</td><td>@ReservationUi.Display(equipment.Place)</td><td>@ReservationUi.Display(equipment.Custodian)</td></tr>
+                        <tr class="reservation-equipment-analysis-row"><td colspan="7"><SIT.DepartmentSystem.Web.Components.Shared.EquipmentMetadataSummary ApparatusId="equipment.ApparatusId" Compact="true" /></td></tr>
                     }
                 }
             </tbody>

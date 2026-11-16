@@ -40,7 +40,7 @@ public sealed class KmMetadataAdministrationUiTests
     }
 
     [Fact]
-    public void GeneralPagesHideTechnicalMetadataButEquipmentKeepsSuggestions()
+    public void GeneralPagesHideTechnicalMetadataButEquipmentShowsAggregateAnalysis()
     {
         var documents = Read("Components", "Pages", "DocumentLibrary.razor");
         var equipment = Read("Components", "Shared", "EquipmentMetadataSummary.razor");
@@ -49,10 +49,13 @@ public sealed class KmMetadataAdministrationUiTests
         Assert.DoesNotContain("ShowMetadataAsync", documents);
         Assert.DoesNotContain("查看完整 Metadata", equipment);
         Assert.DoesNotContain("原始 JSON", equipment);
-        Assert.Contains("文件摘要", equipment);
-        Assert.Contains("設備規格建議", equipment);
-        Assert.Contains("設備能力與限制", equipment);
-        Assert.Contains("EquipmentKmMetadataProjection.Project", equipment);
+        Assert.Contains("設備綜合分析", equipment);
+        Assert.Contains("設備概述", equipment);
+        Assert.Contains("技術規格", equipment);
+        Assert.Contains("測試能力", equipment);
+        Assert.Contains("來源證據", equipment);
+        Assert.Contains("/api/equipment-aggregate-analysis?", equipment);
+        Assert.DoesNotContain("EquipmentKmMetadataProjection.Project", equipment);
     }
 
     private static string Read(params string[] path) =>

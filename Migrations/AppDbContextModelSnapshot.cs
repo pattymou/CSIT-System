@@ -912,6 +912,201 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         });
                 });
 
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentAggregateAnalysisCallbackReceipt", b =>
+                {
+                    b.Property<Guid>("CallbackId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("callback_id");
+
+                    b.Property<string>("PayloadSha256")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("payload_sha256");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.HasKey("CallbackId");
+
+                    b.HasIndex("RequestId");
+
+                    b.ToTable("equipment_aggregate_analysis_callbacks", (string)null);
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentAggregateAnalysisRequest", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AnalysisVersion")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("analysis_version");
+
+                    b.Property<string>("ApparatusId")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("apparatus_id");
+
+                    b.Property<DateTime?>("CompletedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("completed_at");
+
+                    b.Property<string>("FailureCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("failure_code");
+
+                    b.Property<string>("FailureMessage")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("failure_message");
+
+                    b.Property<string>("ManifestHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("manifest_hash");
+
+                    b.Property<string>("ModuleCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("module_code");
+
+                    b.Property<DateTime>("RequestedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("requested_at");
+
+                    b.Property<string>("SourceDocumentsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("source_documents_json");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("status");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("updated_at");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Status", "UpdatedAt");
+
+                    b.HasIndex("ApparatusId", "ModuleCode", "ManifestHash", "AnalysisVersion")
+                        .IsUnique();
+
+                    b.ToTable("equipment_aggregate_analysis_requests", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_equipment_aggregate_request_manifest", "length(manifest_hash) = 64");
+
+                            t.HasCheckConstraint("ck_equipment_aggregate_request_status", "status IN ('Pending','Completed','Failed','Superseded')");
+                        });
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentAggregateAnalysisSnapshot", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<string>("AnalysisVersion")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("analysis_version");
+
+                    b.Property<DateTime>("AnalyzedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("analyzed_at");
+
+                    b.Property<string>("ApparatusId")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("apparatus_id");
+
+                    b.Property<string>("ManifestHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("manifest_hash");
+
+                    b.Property<string>("ModuleCode")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)")
+                        .HasColumnName("module_code");
+
+                    b.Property<DateTime>("ReceivedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("received_at");
+
+                    b.Property<Guid>("RequestId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("request_id");
+
+                    b.Property<string>("ResultJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("result_json");
+
+                    b.Property<string>("ReviewNote")
+                        .HasMaxLength(2000)
+                        .HasColumnType("character varying(2000)")
+                        .HasColumnName("review_note");
+
+                    b.Property<string>("ReviewStatus")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasColumnName("review_status");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at");
+
+                    b.Property<string>("ReviewedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("reviewed_by");
+
+                    b.Property<string>("SourceDocumentsJson")
+                        .IsRequired()
+                        .HasColumnType("jsonb")
+                        .HasColumnName("source_documents_json");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RequestId")
+                        .IsUnique();
+
+                    b.HasIndex("ApparatusId", "ModuleCode", "ReceivedAt");
+
+                    b.ToTable("equipment_aggregate_analysis_snapshots", null, t =>
+                        {
+                            t.HasCheckConstraint("ck_equipment_aggregate_snapshot_manifest", "length(manifest_hash) = 64");
+
+                            t.HasCheckConstraint("ck_equipment_aggregate_snapshot_review", "review_status IN ('PendingVerification','Verified','Rejected')");
+                        });
+                });
+
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentDeletionJob", b =>
                 {
                     b.Property<Guid>("Id")
@@ -9321,6 +9516,24 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .IsRequired();
 
                     b.Navigation("DocumentFile");
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentAggregateAnalysisCallbackReceipt", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.EquipmentAggregateAnalysisRequest", null)
+                        .WithMany()
+                        .HasForeignKey("RequestId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentAggregateAnalysisSnapshot", b =>
+                {
+                    b.HasOne("SIT.DepartmentSystem.Web.Entities.EquipmentAggregateAnalysisRequest", null)
+                        .WithOne()
+                        .HasForeignKey("SIT.DepartmentSystem.Web.Entities.EquipmentAggregateAnalysisSnapshot", "RequestId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("SIT.DepartmentSystem.Web.Entities.EquipmentFileDeletionCallbackReceipt", b =>

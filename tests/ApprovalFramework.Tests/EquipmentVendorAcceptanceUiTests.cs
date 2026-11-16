@@ -92,16 +92,17 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.Contains("href=\"@photo.ImageUrl\"", view);
         Assert.Contains("api/assets/files/{fileId:guid}/image",
             Read("Controllers", "ApparatusController.cs"));
-        Assert.Contains("C. AI／KM 根據設備文件擷取建議", metadata);
-        Assert.Contains("尚無 KM 分析結果", metadata);
+        Assert.Contains("設備綜合分析", metadata);
+        Assert.Contains("尚無設備綜合分析", metadata);
         Assert.Contains("TechnicalSpecifications", metadata);
-        Assert.Contains("CapabilitySummary", metadata);
-        Assert.Contains("EvidenceText", metadata);
-        Assert.Contains("/api/administration/km-analysis/results?sourceType=", metadata);
-        Assert.Contains("EquipmentKmMetadataProjection.Project", metadata);
+        Assert.Contains("TestCapabilities", metadata);
+        Assert.Contains("EvidenceIds", metadata);
+        Assert.Contains("/api/equipment-aggregate-analysis?", metadata);
+        Assert.DoesNotContain("/api/administration/km-analysis/results?sourceType=", metadata);
+        Assert.DoesNotContain("EquipmentKmMetadataProjection.Project", metadata);
         Assert.DoesNotContain("查看完整 Metadata", metadata);
         Assert.DoesNotContain("原始 JSON", metadata);
-        Assert.Contains("KM 分析已完成，未擷取到可填入設備規格的建議。", metadata);
+        Assert.Contains("不會自動覆寫設備主檔或預約資源能力", metadata);
         Assert.DoesNotContain("KM 正式派送目前停用", metadata);
         Assert.Contains(">下載</a>", files);
         Assert.DoesNotContain(">檢視</a>", files);
@@ -119,7 +120,7 @@ public sealed class EquipmentVendorAcceptanceUiTests
     }
 
     [Fact]
-    public void EquipmentView_PollsKmStatusAndRetriesCompletedMetadataWithoutReloadingThePage()
+    public void EquipmentView_PollsFileStatusAndLoadsAggregateAnalysisByManifestEndpoint()
     {
         var view = Read("Components", "Pages", "ApparatusView.razor");
         var metadata = Read("Components", "Shared", "EquipmentMetadataSummary.razor");
@@ -138,16 +139,14 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.Contains("public async ValueTask DisposeAsync()", view);
         Assert.DoesNotContain("var refreshed = await Api.GetAsync<ApparatusDetailDto>", view);
 
-        Assert.Contains("@implements IAsyncDisposable", metadata);
-        Assert.Contains("MaximumMetadataRetryCount = 6", metadata);
-        Assert.Contains("MetadataRetryInterval = TimeSpan.FromSeconds(5)", metadata);
-        Assert.Contains("RetryMissingResultsAsync", metadata);
-        Assert.Contains("metadataVersion != _metadataVersion", metadata);
-        Assert.Contains("detail.SourceSha256, file.Sha256", metadata);
-        Assert.Contains("x.Version == file.KmVersion", metadata);
-        Assert.Contains("LoadMissingResultsAsync", metadata);
-        Assert.Contains("CancelMetadataWork()", metadata);
-        Assert.Contains("public async ValueTask DisposeAsync()", metadata);
+        Assert.Contains("protected override async Task OnParametersSetAsync()", metadata);
+        Assert.Contains("Api.GetAsync<EquipmentAggregateAnalysisView>", metadata);
+        Assert.Contains("/api/equipment-aggregate-analysis?", metadata);
+        Assert.Contains("Uri.EscapeDataString(ApparatusId)", metadata);
+        Assert.Contains("Uri.EscapeDataString(ModuleCode)", metadata);
+        Assert.Contains("_view.IsStale", metadata);
+        Assert.DoesNotContain("RetryMissingResultsAsync", metadata);
+        Assert.DoesNotContain("EquipmentKmMetadataProjection.Project", metadata);
     }
 
     [Fact]

@@ -1,309 +1,70 @@
-@using System.Text.Json
-@using SIT.DepartmentSystem.Web.Entities
-@using SIT.DepartmentSystem.Web.Models.Api
 @using SIT.DepartmentSystem.Web.Services
 @using SIT.DepartmentSystem.Web.Services.KmIntegration
 @inject BrowserApiClient Api
-@implements IAsyncDisposable
 
-<div class="form-card equipment-metadata-summary">
-    <div class="case-card-head"><div><div class="case-kicker">KM / AI SUGGESTIONS</div><h3>C. AI／KM 根據設備文件擷取建議</h3></div></div>
-    @if (_loading)
-    {
-        <div class="record-empty-box"><strong>讀取 KM 分析結果中...</strong><span>正在取得目前使用者有權查看的設備附件 Metadata。</span></div>
-    }
-    else if (!string.IsNullOrWhiteSpace(_error))
-    {
-        <div class="record-empty-box"><strong>無法讀取 KM 分析結果</strong><span>@_error</span></div>
-    }
-    else if (_results.Count == 0 && LegacySuggestions.Count == 0)
-    {
-        <div class="record-empty-box">
-            <strong>@(HasCompletedKmFile ? "KM 分析已完成，但目前沒有可用的 Metadata 結果" : "尚無 KM 分析結果")</strong>
-            <span>完成分析後會在此顯示 KM 實際回傳內容；系統不會自行產生規格或覆寫設備主檔。</span>
-        </div>
-    }
+<div class="form-card equipment-metadata-summary @(Compact ? "equipment-metadata-compact" : null)">
+    <div class="case-card-head"><div><div class="case-kicker">KM / CONSOLIDATED ANALYSIS</div><h3>設備綜合分析</h3></div>
+        @if (_view is not null) { <span class="record-status-pill">@StatusText(_view.Status)</span> }
+    </div>
+    @if (_loading) { <div class="record-empty-box"><strong>讀取設備綜合分析中...</strong></div> }
+    else if (_error is not null) { <div class="record-empty-box"><strong>無法讀取設備綜合分析</strong><span>@_error</span></div> }
+    else if (_view is null) { <div class="record-empty-box"><strong>尚無設備綜合分析</strong></div> }
     else
     {
-        @foreach (var item in _results)
+        <div class="metadata-inline-values"><span>有效來源：@_view.EligibleDocumentCount 份</span>
+            @if (_view.PendingDocumentCount > 0) { <span>其他待處理文件：@_view.PendingDocumentCount 份</span> }
+            <span>Manifest：@ShortHash(_view.ManifestHash)</span>
+            @if (_view.AnalyzedAt.HasValue) { <span>分析時間：@_view.AnalyzedAt.Value.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</span> }
+        </div>
+        @if (_view.IsStale) { <div class="aggregate-stale"><strong>待更新</strong><span>文件集合已改變；以下為上一版快照，不代表目前文件集合。</span></div> }
+        @if (_view.Result is null)
         {
-            <article class="equipment-km-result" @key="item.Detail.Id">
-                <div class="equipment-km-result-head">
-                    <div><strong>@item.File.FileName</strong><small>KM Job：@item.Detail.KmJobId · Schema：@item.Detail.MetadataSchemaVersion</small></div>
-                </div>
-
-                <section>
-                    <h4>文件摘要</h4>
-                    @if (!string.IsNullOrWhiteSpace(item.View.Document.Title)) { <strong>@item.View.Document.Title</strong> }
-                    @if (!string.IsNullOrWhiteSpace(item.View.Document.Summary))
-                    {
-                        <p class="metadata-document-summary">@item.View.Document.Summary</p>
-                    }
-                    else { <span class="metadata-empty">KM 未提供文件摘要。</span> }
-                    <div class="metadata-inline-values">
-                        @if (!string.IsNullOrWhiteSpace(item.View.Document.DocumentType)) { <span>類型：@item.View.Document.DocumentType</span> }
-                        @if (!string.IsNullOrWhiteSpace(item.View.Document.Language)) { <span>語言：@item.View.Document.Language</span> }
-                        @if (!string.IsNullOrWhiteSpace(item.View.Document.DocumentDate)) { <span>日期：@item.View.Document.DocumentDate</span> }
-                    </div>
-                    @if (item.View.Document.Keywords.Count > 0)
-                    {
-                        <div class="metadata-inline-values"><span>關鍵字：@string.Join("、", item.View.Document.Keywords)</span></div>
-                    }
-                </section>
-
-                <section>
-                    <h4>擷取資訊</h4>
-                    <div class="metadata-inline-values">
-                        @if (!string.IsNullOrWhiteSpace(item.View.Extraction.SourceFormat)) { <span>格式：@item.View.Extraction.SourceFormat</span> }
-                        @if (!string.IsNullOrWhiteSpace(item.View.Extraction.Method)) { <span>方式：@item.View.Extraction.Method</span> }
-                        @if (item.View.Extraction.OcrUsed.HasValue) { <span>OCR：@(item.View.Extraction.OcrUsed.Value ? "是" : "否")</span> }
-                        @if (item.View.Extraction.PageCount.HasValue) { <span>頁數：@item.View.Extraction.PageCount</span> }
-                        @if (item.View.Extraction.ExtractedCharacterCount.HasValue) { <span>擷取字元：@item.View.Extraction.ExtractedCharacterCount</span> }
-                        @if (item.View.Extraction.SheetNames.Count > 0) { <span>工作表：@string.Join("、", item.View.Extraction.SheetNames)</span> }
-                    </div>
-                </section>
-
-                <section>
-                    <h4>技術資訊</h4>
-                    @if (item.View.Technical.Count == 0)
-                    {
-                        <span class="metadata-empty">KM 未提供技術資訊。</span>
-                    }
-                    else
-                    {
-                        <div class="metadata-spec-grid">
-                            @foreach (var group in item.View.Technical)
-                            {
-                                <div><span>@group.Label</span><strong>@string.Join("、", group.Values)</strong></div>
-                            }
-                        </div>
-                    }
-                </section>
-
-                <section>
-                    <h4>設備規格建議</h4>
-                    @if (item.View.Specifications.Count == 0)
-                    {
-                        <span class="metadata-empty">KM 分析已完成，未擷取到可填入設備規格的建議。</span>
-                    }
-                    else
-                    {
-                        <div class="metadata-spec-grid">
-                            @foreach (var specification in item.View.Specifications)
-                            {
-                                <div>
-                                    <span>@specification.Field</span><strong>@specification.Value</strong>
-                                    @foreach (var evidence in specification.Evidence) { <small>@evidence</small> }
-                                </div>
-                            }
-                        </div>
-                    }
-                </section>
-
-                <section>
-                    <h4>設備能力與限制</h4>
-                    @if (!string.IsNullOrWhiteSpace(item.View.CapabilitySummary))
-                    {
-                        <p class="metadata-document-summary">@item.View.CapabilitySummary</p>
-                    }
-                    else { <span class="metadata-empty">KM 未提供設備能力摘要。</span> }
-                    @if (item.View.Limitations.Count > 0)
-                    {
-                        <ul>@foreach (var limitation in item.View.Limitations) { <li>@limitation</li> }</ul>
-                    }
-                    else { <span class="metadata-empty">KM 未提供設備限制。</span> }
-                </section>
-                @if (item.View.Evidence.Count > 0)
-                {
-                    <section><h4>來源證據</h4><ul>@foreach (var evidence in item.View.Evidence) { <li>@evidence</li> }</ul></section>
-                }
-                @if (item.View.Warnings.Count > 0)
-                {
-                    <section><h4>KM 警告</h4><ul>@foreach (var warning in item.View.Warnings) { <li>@warning</li> }</ul></section>
-                }
-                <small class="metadata-note">僅呈現 KM 回傳內容；建議不會自動覆寫設備主檔，仍須人工確認。</small>
-            </article>
+            <div class="record-empty-box"><strong>@EmptyTitle(_view.Status)</strong><span>@EmptyDescription(_view.Status)</span></div>
         }
-
-        @foreach (var suggestion in LegacySuggestions)
+        else
         {
-            <article class="equipment-km-result legacy-metadata" @key="suggestion.File.Id">
-                <div class="equipment-km-result-head"><div><strong>@suggestion.File.FileName</strong><small>舊版設備 Metadata</small></div></div>
-                <section><h4>設備規格建議</h4>
-                    @if (suggestion.Result.TechnicalSpecifications.Count == 0) { <span class="metadata-empty">尚無技術規格建議。</span> }
-                    else { <div class="metadata-spec-grid">@foreach (var spec in suggestion.Result.TechnicalSpecifications) { <div><span>@spec.Field</span><strong>@spec.Value</strong><small>@LegacyEvidenceText(spec.Evidence)</small></div> }</div> }
-                </section>
-                @if (!string.IsNullOrWhiteSpace(suggestion.Result.CapabilitySummary)) { <section><h4>能力</h4><p>@suggestion.Result.CapabilitySummary</p></section> }
-                @if (suggestion.Result.Limitations.Count > 0) { <section><h4>限制</h4><ul>@foreach (var value in suggestion.Result.Limitations) { <li>@value</li> }</ul></section> }
-                <small class="metadata-note">舊版建議同樣不會自動覆寫設備主檔。</small>
-            </article>
+            <section><h4>設備概述</h4>
+                @if (string.IsNullOrWhiteSpace(_view.Result.Overview)) { <span class="metadata-empty">KM 未提供設備概述。</span> }
+                else { <p class="metadata-document-summary">@_view.Result.Overview</p> }
+            </section>
+            <section><h4>技術規格</h4>
+                @if (_view.Result.TechnicalSpecifications.Count == 0) { <span class="metadata-empty">KM 未提供技術規格。</span> }
+                else { <div class="metadata-spec-grid">@foreach (var x in _view.Result.TechnicalSpecifications) { <div><span>@x.Name</span><strong>@x.Value @x.Unit</strong><small>證據：@string.Join("、", x.EvidenceIds)</small></div> }</div> }
+            </section>
+            <section><h4>測試能力</h4>
+                @if (_view.Result.TestCapabilities.Count == 0) { <span class="metadata-empty">KM 未提供測試能力。</span> }
+                else { <div class="metadata-spec-grid">@foreach (var x in _view.Result.TestCapabilities) { <div><strong>@x.Name</strong>@if (x.Description is not null) { <span>@x.Description</span> }<small>證據：@string.Join("、", x.EvidenceIds)</small></div> }</div> }
+            </section>
+            <section><h4>限制</h4>@if (_view.Result.Limitations.Count == 0) { <span class="metadata-empty">KM 未提供設備限制。</span> } else { <ul>@foreach (var x in _view.Result.Limitations) { <li>@x</li> }</ul> }</section>
+            <section><h4>衝突</h4>@if (_view.Result.Conflicts.Count == 0) { <span class="metadata-empty">KM 未回報跨文件衝突。</span> } else { <ul>@foreach (var x in _view.Result.Conflicts) { <li><strong>@x.Field：</strong>@x.Description <small>（@string.Join("、", x.EvidenceIds)）</small></li> }</ul> }</section>
+            <section><h4>來源證據</h4>
+                @if (_view.Result.Evidence.Count == 0) { <span class="metadata-empty">KM 未提供來源證據，因此不會形成正式建議。</span> }
+                else { <div class="metadata-evidence-list">@foreach (var x in _view.Result.Evidence) { <div class="metadata-evidence"><strong>@x.EvidenceId</strong><span>@x.Description</span>@if (x.Location is not null) { <small>@x.Location</small> }<small>FileId：@x.FileId</small></div> }</div> }
+            </section>
+            @if (_view.Result.Warnings.Count > 0) { <section><h4>KM 警告</h4><ul>@foreach (var x in _view.Result.Warnings) { <li>@x</li> }</ul></section> }
+            <small class="metadata-note">僅呈現 KM 對有效文件集合回傳的快照；不會自動覆寫設備主檔或預約資源能力。</small>
         }
     }
 </div>
 
 @code {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { PropertyNameCaseInsensitive = true };
-    [Parameter] public IReadOnlyList<ApparatusFileDto> Files { get; set; } = [];
-
-    private readonly List<KmResult> _results = [];
-    private string? _fingerprint;
-    private string? _error;
+    [Parameter, EditorRequired] public string ApparatusId { get; set; } = string.Empty;
+    [Parameter] public string ModuleCode { get; set; } = "equipment";
+    [Parameter] public bool Compact { get; set; }
+    private EquipmentAggregateAnalysisView? _view;
+    private string? _key, _error;
     private bool _loading;
-    private CancellationTokenSource? _metadataCts;
-    private Task? _metadataRetryTask;
-    private int _metadataVersion;
-    private bool _disposed;
-    private const int MaximumMetadataRetryCount = 6;
-    private static readonly TimeSpan MetadataRetryInterval = TimeSpan.FromSeconds(5);
-    private bool HasCompletedKmFile => Files.Any(x => x.KmStatus == KmIntegrationStatus.Completed.ToString());
-
     protected override async Task OnParametersSetAsync()
     {
-        var fingerprint = string.Join('|', Files.OrderBy(x => x.Id).Select(x =>
-            $"{x.Id:N}:{x.FileName}:{x.KmStatus}:{x.MetadataJson?.Length ?? 0}"));
-        if (fingerprint == _fingerprint) return;
-        _metadataVersion++;
-        CancelMetadataWork();
-        _metadataCts = new CancellationTokenSource();
-        var metadataVersion = _metadataVersion;
-        var cancellationToken = _metadataCts.Token;
-        _fingerprint = fingerprint;
-        _results.Clear();
-        _error = null;
-        _loading = false;
-        var completed = Files.Where(x => x.KmStatus == KmIntegrationStatus.Completed.ToString()).ToList();
-        if (completed.Count == 0) return;
-        _loading = true;
-        try
-        {
-            await LoadMissingResultsAsync(completed, metadataVersion, cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
-        catch (Exception ex) { if (metadataVersion == _metadataVersion) _error = ex.Message; }
-        finally { if (metadataVersion == _metadataVersion) _loading = false; }
-        if (!cancellationToken.IsCancellationRequested && metadataVersion == _metadataVersion &&
-            completed.Any(file => _results.All(x => x.File.Id != file.Id)))
-            _metadataRetryTask = RetryMissingResultsAsync(completed, metadataVersion, cancellationToken);
+        var key = $"{ModuleCode}:{ApparatusId}";
+        if (_key == key) return;
+        _key = key; _view = null; _error = null; _loading = true;
+        try { _view = await Api.GetAsync<EquipmentAggregateAnalysisView>($"/api/equipment-aggregate-analysis?apparatusId={Uri.EscapeDataString(ApparatusId)}&moduleCode={Uri.EscapeDataString(ModuleCode)}"); }
+        catch (Exception ex) { _error = ex.Message; }
+        finally { _loading = false; }
     }
-
-    private async Task<bool> LoadMissingResultsAsync(IReadOnlyList<ApparatusFileDto> completed,
-        int metadataVersion, CancellationToken cancellationToken)
-    {
-        var changed = false;
-        foreach (var file in completed.Where(file => _results.All(x => x.File.Id != file.Id)))
-        {
-            var page = await Api.GetAsync<KmAnalysisResultPage>(
-                $"/api/administration/km-analysis/results?sourceType={KmAnalysisSourceTypes.EquipmentAttachment}&sourceEntityId={file.Id:D}&page=1&pageSize=10",
-                cancellationToken);
-            foreach (var candidate in page.Items.Where(x => x.SourceType == KmAnalysisSourceTypes.EquipmentAttachment &&
-                         x.SourceEntityId == file.Id && x.Status == "Completed" && x.Version == file.KmVersion))
-            {
-                var detail = await Api.GetAsync<KmAnalysisResultDetail>(
-                    $"/api/administration/km-analysis/results/{candidate.Id:D}", cancellationToken);
-                if (cancellationToken.IsCancellationRequested || metadataVersion != _metadataVersion) return changed;
-                if (detail.SourceType == KmAnalysisSourceTypes.EquipmentAttachment && detail.SourceEntityId == file.Id &&
-                    detail.Version == file.KmVersion && detail.SupersededAt is null &&
-                    string.Equals(detail.SourceSha256, file.Sha256, StringComparison.OrdinalIgnoreCase))
-                {
-                    _results.Add(new(file, detail, EquipmentKmMetadataProjection.Project(detail.Result)));
-                    changed = true;
-                    break;
-                }
-            }
-        }
-        return changed;
-    }
-
-    private async Task RetryMissingResultsAsync(IReadOnlyList<ApparatusFileDto> completed,
-        int metadataVersion, CancellationToken cancellationToken)
-    {
-        try
-        {
-            for (var attempt = 0; attempt < MaximumMetadataRetryCount &&
-                 completed.Any(file => _results.All(x => x.File.Id != file.Id)); attempt++)
-            {
-                await Task.Delay(MetadataRetryInterval, cancellationToken);
-                try
-                {
-                    var hadError = _error is not null;
-                    var changed = await LoadMissingResultsAsync(completed, metadataVersion, cancellationToken);
-                    if (cancellationToken.IsCancellationRequested || metadataVersion != _metadataVersion) return;
-                    _error = null;
-                    if (changed || hadError) await InvokeAsync(StateHasChanged);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
-                catch (JSDisconnectedException) { return; }
-                catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested) { return; }
-                catch (Exception ex)
-                {
-                    if (metadataVersion == _metadataVersion)
-                    {
-                        _error = ex.Message;
-                        await InvokeAsync(StateHasChanged);
-                    }
-                }
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
-        catch (JSDisconnectedException) { }
-        catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested || _disposed) { }
-        finally
-        {
-            if (metadataVersion == _metadataVersion) _metadataRetryTask = null;
-        }
-    }
-
-    private void CancelMetadataWork()
-    {
-        var source = _metadataCts;
-        _metadataCts = null;
-        if (source is not null)
-        {
-            source.Cancel();
-            source.Dispose();
-        }
-        _metadataRetryTask = null;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (_disposed) return;
-        _disposed = true;
-        _metadataVersion++;
-        var task = _metadataRetryTask;
-        CancelMetadataWork();
-        if (task is null) return;
-        try { await task; }
-        catch (OperationCanceledException) { }
-        catch (JSDisconnectedException) { }
-        catch (ObjectDisposedException) { }
-    }
-
-    private IReadOnlyList<(ApparatusFileDto File, EquipmentMetadataSuggestion Result)> LegacySuggestions =>
-        Files.Where(file => !_results.Any(x => x.File.Id == file.Id) && !string.IsNullOrWhiteSpace(file.MetadataJson))
-            .Select(file => (File: file, Result: ParseLegacy(file.MetadataJson)))
-            .Where(x => x.Result is not null).Select(x => (x.File, x.Result!)).ToList();
-
-    private static EquipmentMetadataSuggestion? ParseLegacy(string? json)
-    {
-        try
-        {
-            var result = JsonSerializer.Deserialize<EquipmentMetadataSuggestion>(json!, JsonOptions);
-            return result is null || result.TechnicalSpecifications is null || result.Limitations is null || result.Evidence is null ||
-                result.TechnicalSpecifications.Any(x => x is null || x.Evidence is null) ? null : result;
-        }
-        catch (JsonException) { return null; }
-    }
-
-    private static string LegacyEvidenceText(EquipmentMetadataEvidence evidence)
-    {
-        var values = new List<string>();
-        if (!string.IsNullOrWhiteSpace(evidence.SourceFileName)) values.Add($"文件：{evidence.SourceFileName}");
-        if (evidence.Page.HasValue) values.Add($"頁碼：{evidence.Page}");
-        if (!string.IsNullOrWhiteSpace(evidence.Section)) values.Add($"段落：{evidence.Section}");
-        if (!string.IsNullOrWhiteSpace(evidence.Excerpt)) values.Add($"證據：{evidence.Excerpt}");
-        return string.Join("；", values);
-    }
-
-    private sealed record KmResult(ApparatusFileDto File, KmAnalysisResultDetail Detail, EquipmentKmMetadataView View);
+    private static string StatusText(string status) => status switch { "Completed" => "分析完成", "Stale" => "待更新", "Pending" => "等待 KM", "Failed" => "分析失敗", "NoEligibleDocuments" => "無有效文件", "FeatureDisabled" => "流程尚未啟用", _ => status };
+    private static string EmptyTitle(string status) => status switch { "NoEligibleDocuments" => "目前沒有可供綜合分析的有效文件", "FeatureDisabled" => "KM 設備綜合分析流程尚未啟用", "Failed" => "本次 KM 設備綜合分析失敗", _ => "設備綜合分析尚未完成" };
+    private static string EmptyDescription(string status) => status switch { "FeatureDisabled" => "Feature Flag 保持關閉；CSIT 不會用單檔結果拼湊或產生假綜合分析。", "NoEligibleDocuments" => "只納入正式入庫、未進入刪除流程且具有有效 KM 單檔分析結果的文件。", _ => "完成後會顯示 KM 回傳快照；既有單檔 KM 工作不會重新派送。" };
+    private static string ShortHash(string hash) => hash.Length <= 12 ? hash : hash[..12];
 }

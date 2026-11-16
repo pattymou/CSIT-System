@@ -272,6 +272,7 @@ builder.Services.Configure<KmIntegrationOptions>(builder.Configuration.GetSectio
 builder.Services.Configure<KmDeletionOptions>(builder.Configuration.GetSection(KmDeletionOptions.SectionName));
 builder.Services.Configure<KmIntegrationAuthOptions>(builder.Configuration.GetSection(KmIntegrationAuthOptions.SectionName));
 builder.Services.Configure<KmIntegrationM2MOptions>(builder.Configuration.GetSection(KmIntegrationM2MOptions.SectionName));
+builder.Services.Configure<EquipmentAggregateAnalysisOptions>(builder.Configuration.GetSection(EquipmentAggregateAnalysisOptions.SectionName));
 builder.Services.PostConfigure<KmIntegrationM2MOptions>(options =>
     options.Authority = builder.Configuration["SharedIdentity:Authority"]);
 builder.Services.AddSingleton<IAuthorizationHandler, KmServicePrincipalHandler>();
@@ -313,6 +314,7 @@ builder.Services.AddScoped<KmSyncDiagnostics>();
 builder.Services.AddScoped<KmQueueQueryService>();
 builder.Services.AddScoped<KmAnalysisCallbackService>();
 builder.Services.AddScoped<KmAnalysisQueryService>();
+builder.Services.AddScoped<EquipmentAggregateAnalysisService>();
 builder.Services.AddScoped<KmMetadataChangeQueueService>();
 builder.Services.AddScoped<KmMetadataChangeCallbackService>();
 builder.Services.AddScoped<KmMetadataChangeWorker>();

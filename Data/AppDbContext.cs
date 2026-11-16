@@ -77,6 +77,9 @@ public class AppDbContext : DbContext
     public DbSet<KmAnalysisReviewRevision> KmAnalysisReviewRevisions => Set<KmAnalysisReviewRevision>();
     public DbSet<KmMetadataChange> KmMetadataChanges => Set<KmMetadataChange>();
     public DbSet<KmMetadataChangeCallbackReceipt> KmMetadataChangeCallbacks => Set<KmMetadataChangeCallbackReceipt>();
+    public DbSet<EquipmentAggregateAnalysisRequest> EquipmentAggregateAnalysisRequests => Set<EquipmentAggregateAnalysisRequest>();
+    public DbSet<EquipmentAggregateAnalysisSnapshot> EquipmentAggregateAnalysisSnapshots => Set<EquipmentAggregateAnalysisSnapshot>();
+    public DbSet<EquipmentAggregateAnalysisCallbackReceipt> EquipmentAggregateAnalysisCallbacks => Set<EquipmentAggregateAnalysisCallbackReceipt>();
 
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
@@ -156,6 +159,7 @@ public class AppDbContext : DbContext
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ConfigureKmAnalysis();
+        modelBuilder.ConfigureEquipmentAggregateAnalysis();
         modelBuilder.ConfigureKmMetadataChanges();
         modelBuilder.ConfigureTestCatalog();
         modelBuilder.ConfigureVerificationApplicationRouting();
