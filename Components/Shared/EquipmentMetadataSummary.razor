@@ -16,6 +16,10 @@
             <span>Manifest：@ShortHash(_view.ManifestHash)</span>
             @if (_view.AnalyzedAt.HasValue) { <span>分析時間：@_view.AnalyzedAt.Value.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</span> }
         </div>
+        @if (_view.PendingDocumentCount > 0)
+        {
+            <div class="aggregate-pending-coverage"><strong>分析尚未涵蓋全部文件</strong><span>目前有 @_view.PendingDocumentCount 份文件仍在等待 KM 單檔分析；完成後將依新的文件集合更新綜合分析。</span></div>
+        }
         @if (_view.IsStale) { <div class="aggregate-stale"><strong>待更新</strong><span>文件集合已改變；以下為上一版快照，不代表目前文件集合。</span></div> }
         @if (_view.Result is null)
         {
@@ -51,17 +55,24 @@
     [Parameter, EditorRequired] public string ApparatusId { get; set; } = string.Empty;
     [Parameter] public string ModuleCode { get; set; } = "equipment";
     [Parameter] public bool Compact { get; set; }
+    [Parameter] public string RefreshKey { get; set; } = string.Empty;
     private EquipmentAggregateAnalysisView? _view;
     private string? _key, _error;
     private bool _loading;
+    private int _loadVersion;
     protected override async Task OnParametersSetAsync()
     {
-        var key = $"{ModuleCode}:{ApparatusId}";
+        var key = $"{ModuleCode}:{ApparatusId}:{RefreshKey}";
         if (_key == key) return;
+        var loadVersion = ++_loadVersion;
         _key = key; _view = null; _error = null; _loading = true;
-        try { _view = await Api.GetAsync<EquipmentAggregateAnalysisView>($"/api/equipment-aggregate-analysis?apparatusId={Uri.EscapeDataString(ApparatusId)}&moduleCode={Uri.EscapeDataString(ModuleCode)}"); }
-        catch (Exception ex) { _error = ex.Message; }
-        finally { _loading = false; }
+        try
+        {
+            var view = await Api.GetAsync<EquipmentAggregateAnalysisView>($"/api/equipment-aggregate-analysis?apparatusId={Uri.EscapeDataString(ApparatusId)}&moduleCode={Uri.EscapeDataString(ModuleCode)}");
+            if (loadVersion == _loadVersion) _view = view;
+        }
+        catch (Exception ex) { if (loadVersion == _loadVersion) _error = ex.Message; }
+        finally { if (loadVersion == _loadVersion) _loading = false; }
     }
     private static string StatusText(string status) => status switch { "Completed" => "分析完成", "Stale" => "待更新", "Pending" => "等待 KM", "Failed" => "分析失敗", "NoEligibleDocuments" => "無有效文件", "FeatureDisabled" => "流程尚未啟用", _ => status };
     private static string EmptyTitle(string status) => status switch { "NoEligibleDocuments" => "目前沒有可供綜合分析的有效文件", "FeatureDisabled" => "KM 設備綜合分析流程尚未啟用", "Failed" => "本次 KM 設備綜合分析失敗", _ => "設備綜合分析尚未完成" };

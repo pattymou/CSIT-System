@@ -16,6 +16,8 @@
 .equipment-km-result ul { margin:.4rem 0 0; padding-left:1.25rem; }
 .aggregate-stale { display:flex; gap:.6rem; align-items:baseline; margin-top:.9rem; padding:.75rem; border:1px solid rgba(251,191,36,.4); border-radius:9px; background:rgba(120,53,15,.18); color:#fde68a; }
 .aggregate-stale span { color:#fcd34d; font-size:.82rem; }
+.aggregate-pending-coverage { display:flex; gap:.6rem; align-items:baseline; margin-top:.9rem; padding:.75rem; border:1px solid rgba(56,189,248,.35); border-radius:9px; background:rgba(7,89,133,.16); color:#bae6fd; }
+.aggregate-pending-coverage span { color:#7dd3fc; font-size:.82rem; }
 .metadata-evidence-list { display:grid; gap:.65rem; }
 .equipment-metadata-compact { margin:.35rem 0; padding:1rem; }
 .equipment-metadata-compact .case-kicker { display:none; }

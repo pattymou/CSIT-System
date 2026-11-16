@@ -135,6 +135,7 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.Contains("/{Uri.EscapeDataString(id)}/files", view);
         Assert.Contains("_item.Files = refreshedFiles", view);
         Assert.Contains("FileStateFingerprint", view);
+        Assert.Contains("RefreshKey=\"FileStateFingerprint(_item.Files)\"", view);
         Assert.Contains("CancelPageWork()", view);
         Assert.Contains("public async ValueTask DisposeAsync()", view);
         Assert.DoesNotContain("var refreshed = await Api.GetAsync<ApparatusDetailDto>", view);
@@ -144,6 +145,11 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.Contains("/api/equipment-aggregate-analysis?", metadata);
         Assert.Contains("Uri.EscapeDataString(ApparatusId)", metadata);
         Assert.Contains("Uri.EscapeDataString(ModuleCode)", metadata);
+        Assert.Contains("[Parameter] public string RefreshKey", metadata);
+        Assert.Contains("{ModuleCode}:{ApparatusId}:{RefreshKey}", metadata);
+        Assert.Contains("loadVersion == _loadVersion", metadata);
+        Assert.Contains("分析尚未涵蓋全部文件", metadata);
+        Assert.Contains("仍在等待 KM 單檔分析", metadata);
         Assert.Contains("_view.IsStale", metadata);
         Assert.DoesNotContain("RetryMissingResultsAsync", metadata);
         Assert.DoesNotContain("EquipmentKmMetadataProjection.Project", metadata);

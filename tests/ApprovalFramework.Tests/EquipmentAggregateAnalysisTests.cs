@@ -112,6 +112,37 @@ public sealed class EquipmentAggregateAnalysisTests
     }
 
     [Fact]
+    public async Task PendingDocument_PreservesSnapshotAndDoesNotCreateDuplicateRequest()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options;
+        await using var db = new AppDbContext(options);
+        var completed = SeedDocument(db, "EQ-PENDING", "manual.pdf", ShaA, "KM-1");
+        await db.SaveChangesAsync();
+        var service = new EquipmentAggregateAnalysisService(db,
+            Options.Create(new EquipmentAggregateAnalysisOptions { Enabled = true, AnalysisVersion = "1.0" }),
+            TimeProvider.System);
+
+        await service.GetAsync("EQ-PENDING", "equipment", default);
+        var request = Assert.Single(await db.EquipmentAggregateAnalysisRequests.ToListAsync());
+        var callback = new EquipmentAggregateAnalysisCallback("1.0", Guid.NewGuid(), request.Id,
+            "equipment", "EQ-PENDING", request.ManifestHash, "1.0", "Completed",
+            Result(completed.File.Id, completed.AnalysisResultId), null, DateTimeOffset.UtcNow);
+        await service.ApplyCallbackAsync(callback, Hash(JsonSerializer.Serialize(callback)), default);
+
+        SeedPendingDocument(db, "EQ-PENDING", "new-spec.pdf", ShaB);
+        await db.SaveChangesAsync();
+        var firstRead = (await service.GetAsync("EQ-PENDING", "equipment", default))!;
+        var secondRead = (await service.GetAsync("EQ-PENDING", "equipment", default))!;
+
+        Assert.Equal("Completed", firstRead.Status);
+        Assert.Equal(1, firstRead.PendingDocumentCount);
+        Assert.Equal("Consolidated tester", firstRead.Result!.Overview);
+        Assert.Equal(firstRead.ManifestHash, secondRead.ManifestHash);
+        Assert.Single(await db.EquipmentAggregateAnalysisRequests.ToListAsync());
+    }
+
+    [Fact]
     public void Migration_CreatesIndependentAggregateTablesAndKeepsSingleFileContract()
     {
         var root = FindRoot();
@@ -154,6 +185,22 @@ public sealed class EquipmentAggregateAnalysisTests
             file.Id, file.Id, 1, file.Id, kmJobId, sha, "2.0", ValidSingleFileResult(),
             now, now, now, 1, new string('c', 64)));
         return (file, analysisId);
+    }
+
+    private static ApparatusFile SeedPendingDocument(AppDbContext db, string apparatusId,
+        string fileName, string sha)
+    {
+        var equipment = db.Apparatuses.Local.Single(x => x.Id == apparatusId);
+        var file = new ApparatusFile
+        {
+            Id = Guid.NewGuid(), ApparatusId = apparatusId, Apparatus = equipment, FileName = fileName,
+            OriginalFileName = fileName, FilePath = "formal", ContentType = "application/pdf",
+            FileSize = 10, Sha256 = sha, ArchiveStatus = FileArchiveStatuses.Archived,
+            ArchiveUpdatedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow
+        };
+        equipment.Files.Add(file);
+        db.ApparatusFiles.Add(file);
+        return file;
     }
 
     private static EquipmentAggregateAnalysisResult Result(Guid fileId, Guid analysisResultId) => new(

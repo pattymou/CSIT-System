@@ -254,7 +254,7 @@ public sealed class EquipmentAggregateAnalysisService(
                 .Append(item.Sha256).Append('|').Append(item.KmJobId).Append('|')
                 .Append(item.AnalysisResultId.ToString("N")).Append('\n');
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString()))).ToLowerInvariant();
-        return new(hash, documents, files.Count - documents.Count);
+        return new(hash, documents, files.Count(x => !deleting.Contains(x.Id)) - documents.Count);
     }
 
     private static bool ValidResult(EquipmentAggregateAnalysisResult result,
