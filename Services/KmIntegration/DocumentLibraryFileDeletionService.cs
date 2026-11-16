@@ -204,7 +204,16 @@ public sealed class DocumentLibraryFileDeletionService(
                         x.EventType == KmIntegrationEventTypes.DocumentLibraryFileUploaded &&
                         x.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
                         x.SourceEntityId == job.DocumentFileId).ToListAsync(cancellationToken);
-                    db.KmIntegrationOutbox.RemoveRange(outboxes);
+                    var outboxIds = outboxes.Select(x => x.Id).ToArray();
+                    var auditedOutboxIds = await db.KmAnalysisCallbackReceipts
+                        .Where(x => outboxIds.Contains(x.OutboxId))
+                        .Select(x => x.OutboxId)
+                        .Union(db.KmDocumentAnalysisResults
+                            .Where(x => outboxIds.Contains(x.OutboxId))
+                            .Select(x => x.OutboxId))
+                        .ToHashSetAsync(cancellationToken);
+                    db.KmIntegrationOutbox.RemoveRange(
+                        outboxes.Where(x => !auditedOutboxIds.Contains(x.Id)));
                     if (processing is not null) db.DocumentProcessingJobs.Remove(processing);
                     db.DocumentLibraryFiles.Remove(file);
                     job.MarkDatabaseCleanupCompleted(DateTime.UtcNow);

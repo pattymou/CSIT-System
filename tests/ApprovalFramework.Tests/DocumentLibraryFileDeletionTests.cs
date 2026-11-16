@@ -96,6 +96,25 @@ public sealed class DocumentLibraryFileDeletionTests
         try
         {
             await WriteCopiesAsync(setup, nas: true, staging: true);
+            await using (var seed = setup.Factory.CreateDbContext())
+            {
+                var outbox = await seed.KmIntegrationOutbox.SingleAsync();
+                var callbackId = Guid.NewGuid();
+                seed.KmAnalysisCallbackReceipts.Add(new KmAnalysisCallbackReceipt
+                {
+                    CallbackId = callbackId, OutboxId = outbox.Id,
+                    Endpoint = "analysis", Status = "Completed",
+                    PayloadSha256 = new string('a', 64), ReceivedAt = DateTime.UtcNow
+                });
+                seed.KmDocumentAnalysisResults.Add(KmDocumentAnalysisResult.Create(
+                    Guid.NewGuid(), callbackId, outbox,
+                    KmIntegrationSourceEntityTypes.DocumentLibraryFile, setup.FileId,
+                    setup.FileId, 1, outbox.EventId, outbox.KmJobId!,
+                    Convert.ToHexString(SHA256.HashData(setup.Bytes)).ToLowerInvariant(),
+                    "1.0", "{}", DateTime.UtcNow, DateTime.UtcNow, DateTime.UtcNow,
+                    1, new string('a', 64)));
+                await seed.SaveChangesAsync();
+            }
             var service = Service(setup, kmDeletionEnabled: true);
             var requested = (await service.RequestAsync(setup.FileId, "leader"))!;
             Assert.Equal(DocumentLibraryFileDeletionStatuses.Pending, requested.Status);
@@ -129,6 +148,9 @@ public sealed class DocumentLibraryFileDeletionTests
             Assert.Equal(DocumentLibraryFileDeletionStatuses.Completed, job.Status);
             Assert.NotNull(job.KmVerifiedAt);
             Assert.Single(await db.DocumentLibraryFileDeletionCallbacks.ToListAsync());
+            Assert.Single(await db.KmIntegrationOutbox.ToListAsync());
+            Assert.Single(await db.KmAnalysisCallbackReceipts.ToListAsync());
+            Assert.Single(await db.KmDocumentAnalysisResults.ToListAsync());
             Assert.False(File.Exists(setup.NasPath));
             Assert.False(File.Exists(setup.StagingPath));
         }
