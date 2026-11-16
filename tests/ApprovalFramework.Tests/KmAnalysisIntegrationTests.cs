@@ -237,6 +237,31 @@ public sealed class KmAnalysisIntegrationTests
     }
 
     [Fact]
+    public async Task AdminMetadataQuery_FiltersFileJobWarningAndMissingSummary_AndRejectsStaff()
+    {
+        var factory = new Factory();
+        var outbox = await SeedVendorAsync(factory, "quality-report.pdf", ShaA, "KM-ADMIN-QUALITY");
+        using var metadata = JsonDocument.Parse(Metadata("Quality report").GetRawText()
+            .Replace("\"warnings\":[]", "\"warnings\":[\"Missing author\"]"));
+        await new KmAnalysisCallbackService(factory).ApplyDocumentStatusAsync(
+            Completed(outbox, KmAnalysisSourceTypes.VendorFile, ShaA, "Quality report") with
+            { Result = metadata.RootElement.Clone() });
+        var service = new KmAnalysisQueryService(factory);
+
+        var page = await service.ListAdminAsync(AdminUser(), KmAnalysisSourceTypes.VendorFile,
+            "quality-report", "admin-quality", true, true, 1, 25);
+
+        var item = Assert.Single(page.Items);
+        Assert.Equal("quality-report.pdf", item.FileName);
+        Assert.Equal("KM-ADMIN-QUALITY", item.KmJobId);
+        Assert.Equal(1, item.WarningCount);
+        Assert.True(item.MissingSummary);
+        Assert.NotNull(await service.GetAdminAsync(AdminUser(), item.Id));
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.ListAdminAsync(
+            User("staff", true), null, null, null, null, null, 1, 25));
+    }
+
+    [Fact]
     public void MetadataContract_RegistersFiveSources_AndRejectsChunks()
     {
         Assert.Equal(5, KmAnalysisSourceTypes.All.Distinct().Count());
@@ -513,6 +538,10 @@ public sealed class KmAnalysisIntegrationTests
         new[] { new Claim("account", account), new Claim(SystemAuthorization.AccessScopeClaim,
             SystemAuthorization.AccessScopes.CsitStaff), new Claim(SystemAuthorization.DataAccessLevelClaim,
             editor ? SystemAuthorization.DataAccessLevels.Editor : SystemAuthorization.DataAccessLevels.ReadOnly) }, "test"));
+
+    private static ClaimsPrincipal AdminUser() => new(new ClaimsIdentity(
+        [new Claim("account", "admin"), new Claim(ClaimTypes.NameIdentifier, "admin"),
+         new Claim(ClaimTypes.Role, "Admin")], "test"));
 
     private static void Set(object target, string property, object? value) =>
         target.GetType().GetProperty(property, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)!

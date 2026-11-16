@@ -114,20 +114,16 @@ public sealed class AttachmentTableUiConsistencyTests
     }
 
     [Fact]
-    public void DocumentLibraryMetadata_UsesAuthorizedAnalysisApiAndRealSections()
+    public void DocumentLibraryMetadata_IsHiddenFromGeneralFileLists()
     {
         var source = Read("Components", "Pages", "DocumentLibrary.razor");
 
-        Assert.Contains("sourceEntityId={fileId:D}", source);
-        Assert.Contains("/api/administration/km-analysis/results/{candidate.Id:D}", source);
-        Assert.Contains("detail.SupersededAt is null", source);
-        Assert.Contains("(\"Document\", \"document\")", source);
-        Assert.Contains("(\"Technical\", \"technical\")", source);
-        Assert.Contains("(\"Extraction\", \"extraction\")", source);
-        Assert.Contains("(\"Indexing\", \"indexing\")", source);
-        Assert.Contains("(\"Warnings\", \"warnings\")", source);
-        Assert.Contains("此文件目前沒有可用的 KM 分析資料。", source);
-        Assert.Contains("原始 JSON", source);
+        Assert.DoesNotContain("ShowMetadataAsync", source);
+        Assert.DoesNotContain("/api/administration/km-analysis/results", source);
+        Assert.DoesNotContain("查看 Metadata", source);
+        Assert.DoesNotContain("原始 JSON", source);
+        Assert.Contains("AttachmentStatusPill", source);
+        Assert.Contains("download", source);
     }
 
     private static string Read(params string[] path) =>

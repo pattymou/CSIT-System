@@ -1,0 +1,354 @@
+@page "/administration/km-metadata"
+@using global::System.Text.Json
+@using SIT.DepartmentSystem.Web.Services
+@using SIT.DepartmentSystem.Web.Services.KmIntegration
+@attribute [Authorize(Policy = SystemAuthorization.Policies.AdminOnly)]
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+@implements IAsyncDisposable
+@inject BrowserApiClient Api
+@inject IJSRuntime JS
+
+<PageTitle>KM 分析檢視</PageTitle>
+
+<div class="kmm-heading">
+    <div>
+        <div class="kmm-kicker">ADMINISTRATION / KM METADATA</div>
+        <h1>KM 分析檢視</h1>
+        <p>集中檢查 CSIT 已儲存的 KM 分析品質與原始 JSON；本頁僅提供讀取功能。</p>
+    </div>
+</div>
+
+<section class="kmm-filters" aria-label="KM 分析篩選">
+    <label>來源模組
+        <select @bind="_sourceType">
+            <option value="">全部來源</option>
+            @foreach (var source in KmAnalysisSourceTypes.All)
+            {
+                <option value="@source">@SourceLabel(source)</option>
+            }
+        </select>
+    </label>
+    <label>文件名稱
+        <input @bind="_fileName" @bind:event="oninput" placeholder="輸入部分檔名" />
+    </label>
+    <label>KM JobId
+        <input @bind="_kmJobId" @bind:event="oninput" placeholder="輸入部分 JobId" />
+    </label>
+    <label>警告
+        <select @bind="_warningFilter">
+            <option value="">全部</option>
+            <option value="true">有警告</option>
+            <option value="false">無警告</option>
+        </select>
+    </label>
+    <label>文件摘要
+        <select @bind="_summaryFilter">
+            <option value="">全部</option>
+            <option value="true">缺少摘要</option>
+            <option value="false">已有摘要</option>
+        </select>
+    </label>
+    <button type="button" class="kmm-primary" @onclick="SearchAsync" disabled="@_loading">
+        @(_loading ? "查詢中…" : "查詢")
+    </button>
+</section>
+
+@if (!string.IsNullOrWhiteSpace(_error))
+{
+    <div class="kmm-message kmm-error" role="alert">@_error</div>
+}
+else if (_page is null)
+{
+    <div class="kmm-message">正在載入 KM 分析結果…</div>
+}
+else
+{
+    <div class="kmm-meta"><span>共 @_page.TotalCount 筆</span><span>第 @_page.Page / @TotalPages 頁</span></div>
+    <div class="kmm-table-wrap">
+        <table class="kmm-table">
+            <thead>
+                <tr>
+                    <th>文件名稱</th><th>來源模組</th><th>KM JobId</th><th>分析時間</th>
+                    <th>Schema</th><th>警告</th><th>摘要</th><th>操作</th>
+                </tr>
+            </thead>
+            <tbody>
+                @if (_page.Items.Count == 0)
+                {
+                    <tr><td colspan="8" class="kmm-empty">目前沒有符合條件的分析結果。</td></tr>
+                }
+                else
+                {
+                    @foreach (var item in _page.Items)
+                    {
+                        <tr @key="item.Id">
+                            <td class="kmm-file">@item.FileName</td>
+                            <td>@SourceLabel(item.SourceType)</td>
+                            <td class="kmm-job">@item.KmJobId</td>
+                            <td>@item.AnalyzedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</td>
+                            <td>@item.MetadataSchemaVersion</td>
+                            <td><span class="@WarningClass(item.WarningCount)">@item.WarningCount</span></td>
+                            <td>@(item.MissingSummary ? "缺少" : "已有")</td>
+                            <td><button type="button" class="kmm-view" @onclick="() => ShowDetailAsync(item.Id)">查看</button></td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    </div>
+    <div class="kmm-pagination">
+        <button type="button" @onclick="PreviousPageAsync" disabled="@(_loading || _page.Page <= 1)">上一頁</button>
+        <span>第 @_page.Page / @TotalPages 頁</span>
+        <button type="button" @onclick="NextPageAsync" disabled="@(_loading || _page.Page >= TotalPages)">下一頁</button>
+    </div>
+}
+
+@if (_detailId.HasValue)
+{
+    <div class="kmm-backdrop" @onclick="CloseDetail">
+        <section class="kmm-dialog" role="dialog" aria-modal="true" aria-labelledby="kmm-detail-title" @onclick:stopPropagation>
+            <header>
+                <div><small>KM METADATA</small><h2 id="kmm-detail-title">分析結果</h2></div>
+                <button type="button" class="kmm-close" aria-label="關閉" @onclick="CloseDetail">×</button>
+            </header>
+            @if (_detailLoading)
+            {
+                <div class="kmm-message">正在載入完整 Metadata…</div>
+            }
+            else if (!string.IsNullOrWhiteSpace(_detailError))
+            {
+                <div class="kmm-message kmm-error">@_detailError</div>
+            }
+            else if (_detail is not null)
+            {
+                <div class="kmm-detail-meta">
+                    <span>來源：@SourceLabel(_detail.SourceType)</span><span>KM Job：@_detail.KmJobId</span>
+                    <span>Schema：@_detail.MetadataSchemaVersion</span>
+                    <span>分析時間：@_detail.AnalyzedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss")</span>
+                </div>
+                <div class="kmm-sections">
+                    @foreach (var section in MetadataSections(_detail.Result))
+                    {
+                        <section class="kmm-section">
+                            <h3>@section.Label</h3>
+                            @if (section.Value.HasValue)
+                            {
+                                <pre>@PrettyJson(section.Value.Value)</pre>
+                            }
+                            else
+                            {
+                                <div class="kmm-missing">此 Metadata 區段未提供。</div>
+                            }
+                        </section>
+                    }
+                </div>
+                <details class="kmm-raw" open>
+                    <summary>完整原始 JSON</summary>
+                    <div class="kmm-raw-actions">
+                        <button type="button" class="kmm-view" @onclick="CopyRawJsonAsync">複製 JSON</button>
+                        @if (!string.IsNullOrWhiteSpace(_copyStatus)) { <span>@_copyStatus</span> }
+                    </div>
+                    <pre>@PrettyJson(_detail.Result)</pre>
+                </details>
+            }
+        </section>
+    </div>
+}
+
+@code {
+    private const int PageSize = 25;
+    private readonly CancellationTokenSource _lifetime = new();
+    private CancellationTokenSource? _loadCancellation;
+    private CancellationTokenSource? _detailCancellation;
+    private KmMetadataAdminPage? _page;
+    private KmAnalysisResultDetail? _detail;
+    private Guid? _detailId;
+    private string _sourceType = string.Empty;
+    private string _fileName = string.Empty;
+    private string _kmJobId = string.Empty;
+    private string _warningFilter = string.Empty;
+    private string _summaryFilter = string.Empty;
+    private string? _error;
+    private string? _detailError;
+    private string? _copyStatus;
+    private int _pageNumber = 1;
+    private long _loadVersion;
+    private long _detailVersion;
+    private bool _loading;
+    private bool _detailLoading;
+    private bool _disposed;
+
+    private int TotalPages => _page is null ? 1 : Math.Max(1,
+        (int)Math.Ceiling(_page.TotalCount / (double)_page.PageSize));
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (firstRender) await LoadAsync();
+    }
+
+    private async Task SearchAsync()
+    {
+        _pageNumber = 1;
+        await LoadAsync();
+    }
+
+    private async Task LoadAsync()
+    {
+        if (_disposed) return;
+        var version = Interlocked.Increment(ref _loadVersion);
+        _loadCancellation?.Cancel();
+        _loadCancellation?.Dispose();
+        _loadCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        var cancellationToken = _loadCancellation.Token;
+        _loading = true;
+        _error = null;
+        StateHasChanged();
+        try
+        {
+            var query = new List<string>
+            {
+                $"page={_pageNumber}", $"pageSize={PageSize}"
+            };
+            AddQuery(query, "sourceType", _sourceType);
+            AddQuery(query, "fileName", _fileName);
+            AddQuery(query, "kmJobId", _kmJobId);
+            AddQuery(query, "hasWarnings", _warningFilter);
+            AddQuery(query, "missingSummary", _summaryFilter);
+            var result = await Api.GetAsync<KmMetadataAdminPage>(
+                $"/api/administration/km-metadata/results?{string.Join('&', query)}", cancellationToken);
+            if (version != _loadVersion || cancellationToken.IsCancellationRequested) return;
+            _page = result;
+            if (_pageNumber > TotalPages)
+            {
+                _pageNumber = TotalPages;
+                await LoadAsync();
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (Exception)
+        {
+            if (version == _loadVersion) _error = "無法讀取 KM 分析結果，請稍後再試。";
+        }
+        finally
+        {
+            if (version == _loadVersion)
+            {
+                _loading = false;
+                if (!_disposed) StateHasChanged();
+            }
+        }
+    }
+
+    private async Task ShowDetailAsync(Guid id)
+    {
+        var version = Interlocked.Increment(ref _detailVersion);
+        _detailCancellation?.Cancel();
+        _detailCancellation?.Dispose();
+        _detailCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+        var cancellationToken = _detailCancellation.Token;
+        _detailId = id;
+        _detail = null;
+        _detailError = null;
+        _copyStatus = null;
+        _detailLoading = true;
+        try
+        {
+            var detail = await Api.GetAsync<KmAnalysisResultDetail>(
+                $"/api/administration/km-metadata/results/{id:D}", cancellationToken);
+            if (version == _detailVersion && !cancellationToken.IsCancellationRequested) _detail = detail;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (Exception)
+        {
+            if (version == _detailVersion) _detailError = "無法讀取此筆完整 Metadata。";
+        }
+        finally
+        {
+            if (version == _detailVersion)
+            {
+                _detailLoading = false;
+                if (!_disposed) StateHasChanged();
+            }
+        }
+    }
+
+    private void CloseDetail()
+    {
+        Interlocked.Increment(ref _detailVersion);
+        _detailCancellation?.Cancel();
+        _detailCancellation?.Dispose();
+        _detailCancellation = null;
+        _detailId = null;
+        _detail = null;
+        _detailError = null;
+        _copyStatus = null;
+    }
+
+    private async Task CopyRawJsonAsync()
+    {
+        if (_detail is null) return;
+        try
+        {
+            await JS.InvokeVoidAsync("navigator.clipboard.writeText", PrettyJson(_detail.Result));
+            _copyStatus = "已複製";
+        }
+        catch (JSException) { _copyStatus = "瀏覽器無法複製，請手動選取 JSON。"; }
+    }
+
+    private async Task PreviousPageAsync()
+    {
+        if (_pageNumber <= 1) return;
+        _pageNumber--;
+        await LoadAsync();
+    }
+
+    private async Task NextPageAsync()
+    {
+        if (_pageNumber >= TotalPages) return;
+        _pageNumber++;
+        await LoadAsync();
+    }
+
+    private static void AddQuery(ICollection<string> query, string name, string? value)
+    {
+        if (!string.IsNullOrWhiteSpace(value))
+            query.Add($"{name}={Uri.EscapeDataString(value.Trim())}");
+    }
+
+    private static string SourceLabel(string sourceType) => sourceType switch
+    {
+        KmAnalysisSourceTypes.TestReport => "測試報告",
+        KmAnalysisSourceTypes.DocumentLibraryFile => "文件專區",
+        KmAnalysisSourceTypes.VerificationApplicationAttachment => "驗證附件",
+        KmAnalysisSourceTypes.VendorFile => "廠商文件",
+        KmAnalysisSourceTypes.EquipmentAttachment => "設備附件",
+        _ => sourceType
+    };
+
+    private static string WarningClass(int count) => count > 0 ? "kmm-warning has-warning" : "kmm-warning";
+    private static string PrettyJson(JsonElement value) => JsonSerializer.Serialize(value,
+        new JsonSerializerOptions { WriteIndented = true });
+    private static IReadOnlyList<MetadataSection> MetadataSections(JsonElement result) =>
+        new[]
+        {
+            ("Document", "document"), ("Technical", "technical"),
+            ("Extraction", "extraction"), ("Indexing", "indexing"),
+            ("SourceSpecific", "sourceSpecific"), ("Warnings", "warnings")
+        }.Select(definition => result.TryGetProperty(definition.Item2, out var value)
+            ? new MetadataSection(definition.Item1, value.Clone())
+            : new MetadataSection(definition.Item1, null)).ToList();
+
+    public ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _lifetime.Cancel();
+        _loadCancellation?.Cancel();
+        _detailCancellation?.Cancel();
+        _loadCancellation?.Dispose();
+        _detailCancellation?.Dispose();
+        _lifetime.Dispose();
+        return ValueTask.CompletedTask;
+    }
+
+    private sealed record MetadataSection(string Label, JsonElement? Value);
+}

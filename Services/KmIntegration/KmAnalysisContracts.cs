@@ -50,6 +50,13 @@ public sealed record KmAnalysisResultListItem(
 public sealed record KmAnalysisResultPage(
     IReadOnlyList<KmAnalysisResultListItem> Items, int Page, int PageSize, int TotalCount);
 
+public sealed record KmMetadataAdminListItem(
+    Guid Id, string FileName, string SourceType, string KmJobId, DateTime AnalyzedAt,
+    string MetadataSchemaVersion, int WarningCount, bool MissingSummary);
+
+public sealed record KmMetadataAdminPage(
+    IReadOnlyList<KmMetadataAdminListItem> Items, int Page, int PageSize, int TotalCount);
+
 public sealed record KmAnalysisReviewRevisionDto(
     Guid Id, int Revision, string Decision, JsonElement? CorrectionsJson, string? Reason,
     string ReviewedBy, DateTime ReviewedAt);

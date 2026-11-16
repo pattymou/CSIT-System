@@ -35,8 +35,7 @@
             @foreach (var item in _items
                          .Where(x => x.SectionId == block.Id)
                          .Where(x => x.IsEnabled)
-                         .Where(x => !x.AdminOnly || _isAdmin
-                             || (IsAdministrationSection(block) && _canAccessAdministration))
+                         .Where(x => !x.AdminOnly || _isAdmin)
                          .OrderBy(x => x.SortOrder)
                          .ThenBy(x => x.Title))
             {
@@ -104,5 +103,25 @@
             var items = await MenuService.GetItemsBySectionAsync(block.Id);
             _items.AddRange(items);
         }
+        AddBuiltInAdministrationItems();
+    }
+
+    private void AddBuiltInAdministrationItems()
+    {
+        var section = _sections.FirstOrDefault(IsAdministrationSection);
+        if (section is null || _items.Any(x => string.Equals(x.RoutePath,
+                "/administration/km-metadata", StringComparison.OrdinalIgnoreCase))) return;
+        _items.Add(new MenuItemDto
+        {
+            Id = Guid.Parse("57a1b27c-36d1-4e33-9de8-fcb72e2f1eb2"),
+            SectionId = section.Id,
+            Code = "km-metadata",
+            Title = "KM 分析檢視",
+            RoutePath = "/administration/km-metadata",
+            Icon = "◇",
+            SortOrder = 900,
+            IsEnabled = true,
+            AdminOnly = true
+        });
     }
 }

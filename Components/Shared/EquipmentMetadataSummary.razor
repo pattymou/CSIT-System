@@ -6,28 +6,6 @@
 @inject BrowserApiClient Api
 @implements IAsyncDisposable
 
-@if (_selected is not null)
-{
-    <div class="equipment-metadata-backdrop" @onclick="CloseMetadata">
-        <section class="equipment-metadata-dialog" role="dialog" aria-modal="true"
-                 aria-labelledby="equipment-metadata-title" @onclick:stopPropagation>
-            <header>
-                <div><small>KM v2 Metadata</small><h2 id="equipment-metadata-title">@_selected.File.FileName</h2></div>
-                <button type="button" class="btn-secondary" @onclick="CloseMetadata">關閉</button>
-            </header>
-            <div class="metadata-dialog-summary">
-                KM Job：@_selected.Detail.KmJobId · Schema：@_selected.Detail.MetadataSchemaVersion ·
-                分析時間：@_selected.Detail.AnalyzedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")
-            </div>
-            @foreach (var section in MetadataSections(_selected.Detail.Result))
-            {
-                <section class="metadata-json-section"><h3>@section.Label</h3><pre>@PrettyJson(section.Value)</pre></section>
-            }
-            <details class="metadata-raw"><summary>原始 JSON</summary><pre>@PrettyJson(_selected.Detail.Result)</pre></details>
-        </section>
-    </div>
-}
-
 <div class="form-card equipment-metadata-summary">
     <div class="case-card-head"><div><div class="case-kicker">KM / AI SUGGESTIONS</div><h3>C. AI／KM 根據設備文件擷取建議</h3></div></div>
     @if (_loading)
@@ -52,7 +30,6 @@
             <article class="equipment-km-result" @key="item.Detail.Id">
                 <div class="equipment-km-result-head">
                     <div><strong>@item.File.FileName</strong><small>KM Job：@item.Detail.KmJobId · Schema：@item.Detail.MetadataSchemaVersion</small></div>
-                    <button type="button" class="metadata-view" @onclick="() => OpenMetadata(item)">查看完整 Metadata</button>
                 </div>
 
                 <section>
@@ -172,7 +149,6 @@
     private string? _fingerprint;
     private string? _error;
     private bool _loading;
-    private KmResult? _selected;
     private CancellationTokenSource? _metadataCts;
     private Task? _metadataRetryTask;
     private int _metadataVersion;
@@ -193,7 +169,6 @@
         var cancellationToken = _metadataCts.Token;
         _fingerprint = fingerprint;
         _results.Clear();
-        _selected = null;
         _error = null;
         _loading = false;
         var completed = Files.Where(x => x.KmStatus == KmIntegrationStatus.Completed.ToString()).ToList();
@@ -330,15 +305,5 @@
         return string.Join("；", values);
     }
 
-    private void OpenMetadata(KmResult result) => _selected = result;
-    private void CloseMetadata() => _selected = null;
-    private static IReadOnlyList<MetadataSection> MetadataSections(JsonElement result) =>
-        new[] { ("文件", "document"), ("技術資訊", "technical"), ("擷取資訊", "extraction"),
-                ("索引資訊", "indexing"), ("設備分析", "sourceSpecific"), ("警告", "warnings") }
-            .Select(x => result.TryGetProperty(x.Item2, out var value) ? new MetadataSection(x.Item1, value.Clone()) : new MetadataSection(x.Item1, null)).ToList();
-    private static string PrettyJson(JsonElement? value) => value.HasValue
-        ? JsonSerializer.Serialize(value.Value, new JsonSerializerOptions { WriteIndented = true }) : "無資料";
-
     private sealed record KmResult(ApparatusFileDto File, KmAnalysisResultDetail Detail, EquipmentKmMetadataView View);
-    private sealed record MetadataSection(string Label, JsonElement? Value);
 }

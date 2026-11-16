@@ -99,8 +99,8 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.Contains("EvidenceText", metadata);
         Assert.Contains("/api/administration/km-analysis/results?sourceType=", metadata);
         Assert.Contains("EquipmentKmMetadataProjection.Project", metadata);
-        Assert.Contains("查看完整 Metadata", metadata);
-        Assert.Contains("原始 JSON", metadata);
+        Assert.DoesNotContain("查看完整 Metadata", metadata);
+        Assert.DoesNotContain("原始 JSON", metadata);
         Assert.Contains("KM 分析已完成，未擷取到可填入設備規格的建議。", metadata);
         Assert.DoesNotContain("KM 正式派送目前停用", metadata);
         Assert.Contains(">下載</a>", files);

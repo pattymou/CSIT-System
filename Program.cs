@@ -260,6 +260,8 @@ builder.Services.AddAuthorization(options =>
     options.AddPolicy(SystemAuthorization.Policies.Administration, policy =>
         policy.RequireAuthenticatedUser()
             .AddRequirements(new AdministrationAccessRequirement()));
+    options.AddPolicy(SystemAuthorization.Policies.AdminOnly, policy =>
+        policy.RequireAuthenticatedUser().RequireRole("Admin"));
     options.AddPolicy(SystemAuthorization.Policies.KmQueueRead, policy =>
         policy.RequireAuthenticatedUser().AddRequirements(new KmQueueReadRequirement()));
     options.AddPolicy(SystemAuthorization.Policies.BusinessWrite, policy =>
