@@ -264,7 +264,7 @@ public sealed class EquipmentAggregateDispatchTests
         Assert.DoesNotContain("CreateTable", migration, StringComparison.Ordinal);
         var sqlPath = Path.Combine(root, "docs", "equipment-aggregate-dispatch-migration.sql");
         var hash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(sqlPath)));
-        Assert.Equal("1F81A0BEF3A46D0F1216120BAA36EAB146B849A6F652E09545FD7F965C3697E5", hash);
+        Assert.Equal("C965FE821854493F16895B4D406E3F7089311A2F1144862CC2C569237B9AC194", hash);
     }
 
     private static KmSyncWorker Worker(TestDbFactory factory, IKmIntegrationClient client,

@@ -5,7 +5,7 @@
 - Migration: `20261117055627_AddEquipmentAggregateDispatch`
 - Required predecessor: `20261116083516_AddEquipmentAggregateAnalysis`
 - Review script: `docs/equipment-aggregate-dispatch-migration.sql`
-- Script SHA256: `1F81A0BEF3A46D0F1216120BAA36EAB146B849A6F652E09545FD7F965C3697E5`
+- Script SHA256: `C965FE821854493F16895B4D406E3F7089311A2F1144862CC2C569237B9AC194`
 - Target after separate approval: `sit_department_system_dev` only.
 - This package is review-only. It does not apply the migration, create an approval marker, enable either feature flag, or modify DEV/Production data.
 
