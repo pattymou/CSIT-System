@@ -22,7 +22,8 @@ public sealed class KmSyncWorker(
     IKmIntegrationClient client,
     IOptions<KmIntegrationOptions> configured,
     ILogger<KmSyncWorker> logger,
-    IOptions<DocumentStorageOptions>? documentStorage = null)
+    IOptions<DocumentStorageOptions>? documentStorage = null,
+    IOptions<EquipmentAggregateAnalysisOptions>? aggregateConfigured = null)
 {
     public async Task<int> ProcessBatchAsync(CancellationToken cancellationToken = default)
     {
@@ -38,6 +39,11 @@ public sealed class KmSyncWorker(
             await DispatchAsync(claim.Value.Id, claim.Value.Lease, options, cancellationToken,
                 allowDisabled: false);
             count++;
+        }
+        if (aggregateConfigured?.Value.Enabled == true)
+        {
+            await EnsureEquipmentAggregateRequestsAsync(cancellationToken);
+            count += await ProcessEquipmentAggregateBatchAsync(options, cancellationToken);
         }
         return count;
     }
@@ -1030,6 +1036,190 @@ public sealed class KmSyncWorker(
         foreach (var job in pending)
             db.KmIntegrationOutbox.Add(KmIntegrationOutbox.ForDocumentLibraryFile(job.DocumentFile, job, now));
         if (pending.Count > 0) await db.SaveChangesAsync(cancellationToken);
+    }
+
+    private async Task EnsureEquipmentAggregateRequestsAsync(CancellationToken cancellationToken)
+    {
+        if (aggregateConfigured?.Value.Enabled != true) return;
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var fromResults = await (from result in db.KmDocumentAnalysisResults.AsNoTracking()
+            join file in db.ApparatusFiles.AsNoTracking() on result.SourceEntityId equals file.Id
+            where result.SourceType == KmAnalysisSourceTypes.EquipmentAttachment &&
+                result.Status == "Completed" && result.SupersededAt == null &&
+                !db.EquipmentAggregateAnalysisRequests.Any(request =>
+                    request.ApparatusId == file.ApparatusId &&
+                    request.ModuleCode == file.Apparatus.ModuleCode &&
+                    request.RequestedAt >= result.ReceivedAt)
+            select new { file.ApparatusId, ModuleCode = file.Apparatus.ModuleCode })
+            .Distinct().ToListAsync(cancellationToken);
+        var fromRequests = await db.EquipmentAggregateAnalysisRequests.AsNoTracking()
+            .Where(x => x.Status == EquipmentAggregateAnalysisStatuses.Pending)
+            .Select(x => new { x.ApparatusId, x.ModuleCode }).Distinct()
+            .ToListAsync(cancellationToken);
+        var fromChangedFiles = await db.ApparatusFiles.AsNoTracking().Where(file =>
+                file.ArchiveUpdatedAt.HasValue &&
+                !db.EquipmentAggregateAnalysisRequests.Any(request =>
+                    request.ApparatusId == file.ApparatusId &&
+                    request.ModuleCode == file.Apparatus.ModuleCode &&
+                    request.RequestedAt >= file.ArchiveUpdatedAt.Value))
+            .Select(file => new { file.ApparatusId, ModuleCode = file.Apparatus.ModuleCode })
+            .Distinct().ToListAsync(cancellationToken);
+        var fromDeletions = await db.EquipmentFileDeletionJobs.AsNoTracking().Where(deletion =>
+                !db.EquipmentAggregateAnalysisRequests.Any(request =>
+                    request.ApparatusId == deletion.EquipmentId &&
+                    request.ModuleCode == "equipment" && request.UpdatedAt >= deletion.UpdatedAt))
+            .Select(deletion => new { ApparatusId = deletion.EquipmentId, ModuleCode = "equipment" })
+            .Distinct().ToListAsync(cancellationToken);
+        var identities = fromResults.Concat(fromRequests).Concat(fromChangedFiles).Concat(fromDeletions)
+            .DistinctBy(x => (x.ApparatusId, x.ModuleCode)).ToList();
+        foreach (var identity in identities)
+        {
+            await using var refreshDb = await dbFactory.CreateDbContextAsync(cancellationToken);
+            var service = new EquipmentAggregateAnalysisService(refreshDb, aggregateConfigured,
+                TimeProvider.System);
+            await service.EnsureCurrentRequestAsync(identity.ApparatusId, identity.ModuleCode,
+                cancellationToken);
+        }
+    }
+
+    private async Task<int> ProcessEquipmentAggregateBatchAsync(KmIntegrationOptions options,
+        CancellationToken cancellationToken)
+    {
+        var count = 0;
+        for (var i = 0; i < 20; i++)
+        {
+            var claim = await ClaimEquipmentAggregateAsync(options, cancellationToken);
+            if (claim is null) break;
+            await DispatchEquipmentAggregateAsync(claim.Value.Id, claim.Value.Lease, options,
+                cancellationToken);
+            count++;
+        }
+        return count;
+    }
+
+    private async Task<(Guid Id, Guid Lease)?> ClaimEquipmentAggregateAsync(
+        KmIntegrationOptions options, CancellationToken cancellationToken)
+    {
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = db.Database.IsRelational()
+            ? await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            : null;
+        var now = DateTime.UtcNow;
+        EquipmentAggregateAnalysisRequest? row;
+        if (db.Database.IsRelational())
+        {
+            await db.Database.ExecuteSqlInterpolatedAsync($"""
+                UPDATE equipment_aggregate_analysis_requests
+                SET dispatch_status = 'Failed', dispatch_next_retry_at = NULL,
+                    dispatch_lease_token = NULL, dispatch_lease_expires_at = NULL,
+                    dispatch_last_error_code = 'RETRY_EXHAUSTED',
+                    dispatch_last_error_message = 'KM aggregate delivery retry limit reached.',
+                    updated_at = {now}
+                WHERE status = 'Pending' AND dispatch_attempt_count >= {options.MaxRetryCount}
+                  AND (dispatch_status = 'RetryWaiting' OR
+                    (dispatch_status = 'Dispatching' AND dispatch_lease_expires_at <= {now}))
+                """, cancellationToken);
+            row = await db.EquipmentAggregateAnalysisRequests.FromSqlInterpolated($"""
+                SELECT * FROM equipment_aggregate_analysis_requests
+                WHERE status = 'Pending' AND (
+                    dispatch_status = 'Pending' OR
+                    (dispatch_status = 'RetryWaiting' AND dispatch_next_retry_at <= {now}
+                        AND dispatch_attempt_count < {options.MaxRetryCount}) OR
+                    (dispatch_status = 'Deferred' AND dispatch_next_retry_at <= {now}) OR
+                    (dispatch_status = 'Dispatching' AND dispatch_lease_expires_at <= {now}
+                        AND dispatch_attempt_count < {options.MaxRetryCount}))
+                ORDER BY requested_at
+                FOR UPDATE SKIP LOCKED LIMIT 1
+                """).SingleOrDefaultAsync(cancellationToken);
+        }
+        else
+        {
+            var exhausted = await db.EquipmentAggregateAnalysisRequests.Where(x =>
+                x.Status == EquipmentAggregateAnalysisStatuses.Pending &&
+                x.DispatchAttemptCount >= options.MaxRetryCount &&
+                (x.DispatchStatus == EquipmentAggregateDispatchStatuses.RetryWaiting ||
+                 x.DispatchStatus == EquipmentAggregateDispatchStatuses.Dispatching &&
+                 x.DispatchLeaseExpiresAt <= now)).ToListAsync(cancellationToken);
+            exhausted.ForEach(x => x.ExhaustDispatch(now));
+            if (exhausted.Count > 0) await db.SaveChangesAsync(cancellationToken);
+            row = await db.EquipmentAggregateAnalysisRequests.OrderBy(x => x.RequestedAt)
+                .FirstOrDefaultAsync(x => x.Status == EquipmentAggregateAnalysisStatuses.Pending &&
+                    (x.DispatchStatus == EquipmentAggregateDispatchStatuses.Pending ||
+                     x.DispatchStatus == EquipmentAggregateDispatchStatuses.RetryWaiting &&
+                        x.DispatchNextRetryAt <= now && x.DispatchAttemptCount < options.MaxRetryCount ||
+                     x.DispatchStatus == EquipmentAggregateDispatchStatuses.Deferred &&
+                        x.DispatchNextRetryAt <= now ||
+                     x.DispatchStatus == EquipmentAggregateDispatchStatuses.Dispatching &&
+                        x.DispatchLeaseExpiresAt <= now && x.DispatchAttemptCount < options.MaxRetryCount),
+                    cancellationToken);
+        }
+        if (row is null) return null;
+        var lease = row.ClaimDispatch(now, TimeSpan.FromSeconds(options.LeaseSeconds),
+            options.MaxRetryCount);
+        await db.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        logger.LogInformation(
+            "KM aggregate request claimed RequestId={RequestId} Attempt={Attempt} DispatchStatus={DispatchStatus}",
+            row.Id, row.DispatchAttemptCount, row.DispatchStatus);
+        return (row.Id, lease);
+    }
+
+    private async Task DispatchEquipmentAggregateAsync(Guid requestId, Guid lease,
+        KmIntegrationOptions options, CancellationToken cancellationToken)
+    {
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(options.LeaseSeconds - 5));
+        KmDeliveryResult result;
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(deadline.Token);
+            var service = new EquipmentAggregateAnalysisService(db, aggregateConfigured!, TimeProvider.System);
+            var request = await service.GetPendingRequestAsync(requestId, deadline.Token);
+            result = request is null
+                ? KmDeliveryResult.Failure(false, "REQUEST_SUPERSEDED",
+                    "Aggregate analysis request is no longer current.")
+                : await client.SubmitEquipmentAggregateAnalysisAsync(request, deadline.Token);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            result = KmDeliveryResult.Failure(true, "LEASE_TIMEOUT",
+                "KM aggregate delivery exceeded its lease deadline.");
+        }
+
+        await using var update = await dbFactory.CreateDbContextAsync(cancellationToken);
+        await using var transaction = update.Database.IsRelational()
+            ? await update.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted, cancellationToken)
+            : null;
+        var current = update.Database.IsRelational()
+            ? await update.EquipmentAggregateAnalysisRequests.FromSqlInterpolated($"""
+                SELECT * FROM equipment_aggregate_analysis_requests WHERE id = {requestId} FOR UPDATE
+                """).SingleAsync(cancellationToken)
+            : await update.EquipmentAggregateAnalysisRequests.SingleAsync(x => x.Id == requestId,
+                cancellationToken);
+        if (current.DispatchLeaseToken != lease ||
+            current.DispatchStatus != EquipmentAggregateDispatchStatuses.Dispatching) return;
+        var now = DateTime.UtcNow;
+        if (result.Accepted)
+            current.AcceptDispatch(lease, result.JobId!, now);
+        else
+        {
+            var featureDisabled = result.ErrorCode == "KM_FEATURE_DISABLED";
+            var schedule = options.RetryScheduleSeconds;
+            var index = Math.Min(Math.Max(current.DispatchAttemptCount - 1, 0), schedule.Length - 1);
+            var delay = featureDisabled ? schedule[^1] : schedule[index];
+            var next = (featureDisabled || result.Retryable &&
+                current.DispatchAttemptCount < options.MaxRetryCount)
+                ? now.AddSeconds(delay) : (DateTime?)null;
+            current.FailDispatch(lease, result.ErrorCode ?? "UNKNOWN",
+                result.ErrorMessage ?? "KM aggregate delivery failed.", result.Retryable,
+                featureDisabled, next, options.MaxRetryCount, now);
+        }
+        await update.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        logger.LogInformation(
+            "KM aggregate transition RequestId={RequestId} KmJobId={KmJobId} Attempt={Attempt} DispatchStatus={DispatchStatus} ErrorCode={ErrorCode}",
+            current.Id, current.KmJobId, current.DispatchAttemptCount, current.DispatchStatus,
+            current.DispatchLastErrorCode);
     }
 
     private static void ValidateOptions(KmIntegrationOptions options)

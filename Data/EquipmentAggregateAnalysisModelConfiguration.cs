@@ -13,7 +13,13 @@ public static class EquipmentAggregateAnalysisModelConfiguration
             {
                 table.HasCheckConstraint("ck_equipment_aggregate_request_status",
                     "status IN ('Pending','Completed','Failed','Superseded')");
+                table.HasCheckConstraint("ck_equipment_aggregate_dispatch_status",
+                    "dispatch_status IN ('Pending','Dispatching','Accepted','RetryWaiting','Deferred','Failed','Superseded')");
                 table.HasCheckConstraint("ck_equipment_aggregate_request_manifest", "length(manifest_hash) = 64");
+                table.HasCheckConstraint("ck_equipment_aggregate_dispatch_lease",
+                    "(dispatch_status = 'Dispatching') = (dispatch_lease_token IS NOT NULL AND dispatch_lease_expires_at IS NOT NULL)");
+                table.HasCheckConstraint("ck_equipment_aggregate_dispatch_job",
+                    "dispatch_status <> 'Accepted' OR km_job_id IS NOT NULL");
             });
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Id).HasColumnName("id");
@@ -28,8 +34,22 @@ public static class EquipmentAggregateAnalysisModelConfiguration
             entity.Property(x => x.CompletedAt).HasColumnName("completed_at");
             entity.Property(x => x.FailureCode).HasColumnName("failure_code").HasMaxLength(100);
             entity.Property(x => x.FailureMessage).HasColumnName("failure_message").HasMaxLength(1000);
+            entity.Property(x => x.DispatchStatus).HasColumnName("dispatch_status").HasMaxLength(30).IsRequired()
+                .HasDefaultValue(EquipmentAggregateDispatchStatuses.Pending);
+            entity.Property(x => x.KmJobId).HasColumnName("km_job_id").HasMaxLength(150);
+            entity.Property(x => x.DispatchAttemptCount).HasColumnName("dispatch_attempt_count");
+            entity.Property(x => x.DispatchNextRetryAt).HasColumnName("dispatch_next_retry_at");
+            entity.Property(x => x.DispatchLastErrorCode).HasColumnName("dispatch_last_error_code").HasMaxLength(100);
+            entity.Property(x => x.DispatchLastErrorMessage).HasColumnName("dispatch_last_error_message").HasMaxLength(1000);
+            entity.Property(x => x.DispatchLastAttemptAt).HasColumnName("dispatch_last_attempt_at");
+            entity.Property(x => x.DispatchLeaseToken).HasColumnName("dispatch_lease_token");
+            entity.Property(x => x.DispatchLeaseExpiresAt).HasColumnName("dispatch_lease_expires_at");
+            entity.Property(x => x.DispatchedAt).HasColumnName("dispatched_at");
             entity.HasIndex(x => new { x.ApparatusId, x.ModuleCode, x.ManifestHash, x.AnalysisVersion }).IsUnique();
             entity.HasIndex(x => new { x.Status, x.UpdatedAt });
+            entity.HasIndex(x => new { x.Status, x.DispatchStatus, x.DispatchNextRetryAt });
+            entity.HasIndex(x => x.DispatchLeaseExpiresAt);
+            entity.HasIndex(x => x.KmJobId).IsUnique().HasFilter("km_job_id IS NOT NULL");
         });
 
         modelBuilder.Entity<EquipmentAggregateAnalysisSnapshot>(entity =>

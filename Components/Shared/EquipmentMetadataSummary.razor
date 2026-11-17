@@ -27,6 +27,10 @@
         }
         else
         {
+            @if (!HasSubstantiveAnalysis(_view.Result))
+            {
+                <div class="record-empty-box"><strong>資料不足／沒有可用分析</strong><span>KM 回傳內容沒有可驗證的技術規格、測試能力、限制、衝突或來源證據；警告訊息不視為完整分析。</span></div>
+            }
             <section><h4>設備概述</h4>
                 @if (string.IsNullOrWhiteSpace(_view.Result.Overview)) { <span class="metadata-empty">KM 未提供設備概述。</span> }
                 else { <p class="metadata-document-summary">@_view.Result.Overview</p> }
@@ -74,8 +78,11 @@
         catch (Exception ex) { if (loadVersion == _loadVersion) _error = ex.Message; }
         finally { if (loadVersion == _loadVersion) _loading = false; }
     }
-    private static string StatusText(string status) => status switch { "Completed" => "分析完成", "Stale" => "待更新", "Pending" => "等待 KM", "Failed" => "分析失敗", "NoEligibleDocuments" => "無有效文件", "FeatureDisabled" => "流程尚未啟用", _ => status };
+    private static string StatusText(string status) => status switch { "Completed" => "分析完成", "Stale" => "待更新", "Pending" => "等待 KM", "Deferred" => "KM 暫停受理", "Failed" => "分析失敗", "NoEligibleDocuments" => "無有效文件", "FeatureDisabled" => "流程尚未啟用", _ => status };
     private static string EmptyTitle(string status) => status switch { "NoEligibleDocuments" => "目前沒有可供綜合分析的有效文件", "FeatureDisabled" => "KM 設備綜合分析流程尚未啟用", "Failed" => "本次 KM 設備綜合分析失敗", _ => "設備綜合分析尚未完成" };
     private static string EmptyDescription(string status) => status switch { "FeatureDisabled" => "Feature Flag 保持關閉；CSIT 不會用單檔結果拼湊或產生假綜合分析。", "NoEligibleDocuments" => "只納入正式入庫、未進入刪除流程且具有有效 KM 單檔分析結果的文件。", _ => "完成後會顯示 KM 回傳快照；既有單檔 KM 工作不會重新派送。" };
+    private static bool HasSubstantiveAnalysis(EquipmentAggregateAnalysisResult result) =>
+        result.TechnicalSpecifications.Count > 0 || result.TestCapabilities.Count > 0 ||
+        result.Limitations.Count > 0 || result.Conflicts.Count > 0 || result.Evidence.Count > 0;
     private static string ShortHash(string hash) => hash.Length <= 12 ? hash : hash[..12];
 }

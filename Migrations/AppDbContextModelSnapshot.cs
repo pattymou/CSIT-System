@@ -963,6 +963,47 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
 
+                    b.Property<int>("DispatchAttemptCount")
+                        .HasColumnType("integer")
+                        .HasColumnName("dispatch_attempt_count");
+
+                    b.Property<DateTime?>("DispatchLastAttemptAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("dispatch_last_attempt_at");
+
+                    b.Property<string>("DispatchLastErrorCode")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("dispatch_last_error_code");
+
+                    b.Property<string>("DispatchLastErrorMessage")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)")
+                        .HasColumnName("dispatch_last_error_message");
+
+                    b.Property<DateTime?>("DispatchLeaseExpiresAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("dispatch_lease_expires_at");
+
+                    b.Property<Guid?>("DispatchLeaseToken")
+                        .HasColumnType("uuid")
+                        .HasColumnName("dispatch_lease_token");
+
+                    b.Property<DateTime?>("DispatchNextRetryAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("dispatch_next_retry_at");
+
+                    b.Property<string>("DispatchStatus")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("character varying(30)")
+                        .HasDefaultValue("Pending")
+                        .HasColumnName("dispatch_status");
+
+                    b.Property<DateTime?>("DispatchedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("dispatched_at");
+
                     b.Property<string>("FailureCode")
                         .HasMaxLength(100)
                         .HasColumnType("character varying(100)")
@@ -972,6 +1013,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasMaxLength(1000)
                         .HasColumnType("character varying(1000)")
                         .HasColumnName("failure_message");
+
+                    b.Property<string>("KmJobId")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("km_job_id");
 
                     b.Property<string>("ManifestHash")
                         .IsRequired()
@@ -1006,13 +1052,27 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("DispatchLeaseExpiresAt");
+
+                    b.HasIndex("KmJobId")
+                        .IsUnique()
+                        .HasFilter("km_job_id IS NOT NULL");
+
                     b.HasIndex("Status", "UpdatedAt");
+
+                    b.HasIndex("Status", "DispatchStatus", "DispatchNextRetryAt");
 
                     b.HasIndex("ApparatusId", "ModuleCode", "ManifestHash", "AnalysisVersion")
                         .IsUnique();
 
                     b.ToTable("equipment_aggregate_analysis_requests", null, t =>
                         {
+                            t.HasCheckConstraint("ck_equipment_aggregate_dispatch_job", "dispatch_status <> 'Accepted' OR km_job_id IS NOT NULL");
+
+                            t.HasCheckConstraint("ck_equipment_aggregate_dispatch_lease", "(dispatch_status = 'Dispatching') = (dispatch_lease_token IS NOT NULL AND dispatch_lease_expires_at IS NOT NULL)");
+
+                            t.HasCheckConstraint("ck_equipment_aggregate_dispatch_status", "dispatch_status IN ('Pending','Dispatching','Accepted','RetryWaiting','Deferred','Failed','Superseded')");
+
                             t.HasCheckConstraint("ck_equipment_aggregate_request_manifest", "length(manifest_hash) = 64");
 
                             t.HasCheckConstraint("ck_equipment_aggregate_request_status", "status IN ('Pending','Completed','Failed','Superseded')");

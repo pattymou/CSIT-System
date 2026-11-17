@@ -8,6 +8,17 @@ public static class EquipmentAggregateAnalysisStatuses
     public const string Superseded = "Superseded";
 }
 
+public static class EquipmentAggregateDispatchStatuses
+{
+    public const string Pending = "Pending";
+    public const string Dispatching = "Dispatching";
+    public const string Accepted = "Accepted";
+    public const string RetryWaiting = "RetryWaiting";
+    public const string Deferred = "Deferred";
+    public const string Failed = "Failed";
+    public const string Superseded = "Superseded";
+}
+
 public sealed class EquipmentAggregateAnalysisRequest
 {
     public Guid Id { get; private set; }
@@ -22,6 +33,16 @@ public sealed class EquipmentAggregateAnalysisRequest
     public DateTime? CompletedAt { get; private set; }
     public string? FailureCode { get; private set; }
     public string? FailureMessage { get; private set; }
+    public string DispatchStatus { get; private set; } = EquipmentAggregateDispatchStatuses.Pending;
+    public string? KmJobId { get; private set; }
+    public int DispatchAttemptCount { get; private set; }
+    public DateTime? DispatchNextRetryAt { get; private set; }
+    public string? DispatchLastErrorCode { get; private set; }
+    public string? DispatchLastErrorMessage { get; private set; }
+    public DateTime? DispatchLastAttemptAt { get; private set; }
+    public Guid? DispatchLeaseToken { get; private set; }
+    public DateTime? DispatchLeaseExpiresAt { get; private set; }
+    public DateTime? DispatchedAt { get; private set; }
 
     private EquipmentAggregateAnalysisRequest() { }
 
@@ -63,6 +84,100 @@ public sealed class EquipmentAggregateAnalysisRequest
     {
         if (Status != EquipmentAggregateAnalysisStatuses.Pending) return;
         Status = EquipmentAggregateAnalysisStatuses.Superseded;
+        DispatchStatus = EquipmentAggregateDispatchStatuses.Superseded;
+        DispatchNextRetryAt = null;
+        DispatchLeaseToken = null;
+        DispatchLeaseExpiresAt = null;
+        UpdatedAt = now;
+    }
+
+    public Guid ClaimDispatch(DateTime now, TimeSpan leaseDuration, int maxRetryCount)
+    {
+        var retryReady = DispatchStatus == EquipmentAggregateDispatchStatuses.RetryWaiting &&
+            DispatchNextRetryAt <= now && DispatchAttemptCount < maxRetryCount;
+        var deferredReady = DispatchStatus == EquipmentAggregateDispatchStatuses.Deferred &&
+            DispatchNextRetryAt <= now;
+        var expiredLease = DispatchStatus == EquipmentAggregateDispatchStatuses.Dispatching &&
+            DispatchLeaseExpiresAt <= now && DispatchAttemptCount < maxRetryCount;
+        if (Status != EquipmentAggregateAnalysisStatuses.Pending || leaseDuration <= TimeSpan.Zero ||
+            maxRetryCount < 1 || !(DispatchStatus == EquipmentAggregateDispatchStatuses.Pending ||
+            retryReady || deferredReady || expiredLease))
+            throw new InvalidOperationException("Aggregate analysis request is not dispatchable.");
+        var lease = Guid.NewGuid();
+        DispatchStatus = EquipmentAggregateDispatchStatuses.Dispatching;
+        DispatchLeaseToken = lease;
+        DispatchLeaseExpiresAt = now.Add(leaseDuration);
+        DispatchAttemptCount++;
+        DispatchLastAttemptAt = now;
+        DispatchNextRetryAt = null;
+        UpdatedAt = now;
+        return lease;
+    }
+
+    public void AcceptDispatch(Guid lease, string kmJobId, DateTime now)
+    {
+        EnsureDispatchLease(lease);
+        if (string.IsNullOrWhiteSpace(kmJobId))
+            throw new InvalidOperationException("KM aggregate job ID is missing.");
+        DispatchStatus = EquipmentAggregateDispatchStatuses.Accepted;
+        KmJobId = kmJobId.Trim();
+        DispatchedAt = now;
+        DispatchLastErrorCode = null;
+        DispatchLastErrorMessage = null;
+        ClearDispatchLease(now);
+    }
+
+    public void FailDispatch(Guid lease, string code, string message, bool retryable,
+        bool featureDisabled, DateTime? nextRetryAt, int maxRetryCount, DateTime now)
+    {
+        EnsureDispatchLease(lease);
+        DispatchLastErrorCode = Clean(code, 100) ?? "unknown";
+        DispatchLastErrorMessage = Clean(message, 1000);
+        if (featureDisabled)
+        {
+            DispatchStatus = EquipmentAggregateDispatchStatuses.Deferred;
+            DispatchNextRetryAt = nextRetryAt ?? throw new InvalidOperationException(
+                "A deferred aggregate request requires a retry time.");
+        }
+        else if (retryable && DispatchAttemptCount < maxRetryCount)
+        {
+            DispatchStatus = EquipmentAggregateDispatchStatuses.RetryWaiting;
+            DispatchNextRetryAt = nextRetryAt ?? throw new InvalidOperationException(
+                "A retryable aggregate request requires a retry time.");
+        }
+        else
+        {
+            DispatchStatus = EquipmentAggregateDispatchStatuses.Failed;
+            DispatchNextRetryAt = null;
+        }
+        ClearDispatchLease(now);
+    }
+
+    public void ExhaustDispatch(DateTime now)
+    {
+        if (Status != EquipmentAggregateAnalysisStatuses.Pending ||
+            DispatchStatus is not (EquipmentAggregateDispatchStatuses.Dispatching or
+                EquipmentAggregateDispatchStatuses.RetryWaiting)) return;
+        DispatchStatus = EquipmentAggregateDispatchStatuses.Failed;
+        DispatchNextRetryAt = null;
+        DispatchLastErrorCode = "RETRY_EXHAUSTED";
+        DispatchLastErrorMessage = "KM aggregate delivery retry limit reached.";
+        DispatchLeaseToken = null;
+        DispatchLeaseExpiresAt = null;
+        UpdatedAt = now;
+    }
+
+    private void EnsureDispatchLease(Guid lease)
+    {
+        if (DispatchStatus != EquipmentAggregateDispatchStatuses.Dispatching ||
+            lease == Guid.Empty || DispatchLeaseToken != lease)
+            throw new InvalidOperationException("Aggregate analysis dispatch lease does not match.");
+    }
+
+    private void ClearDispatchLease(DateTime now)
+    {
+        DispatchLeaseToken = null;
+        DispatchLeaseExpiresAt = null;
         UpdatedAt = now;
     }
 

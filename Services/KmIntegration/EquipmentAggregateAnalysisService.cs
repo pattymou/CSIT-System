@@ -58,11 +58,33 @@ public sealed class EquipmentAggregateAnalysisService(
         EquipmentAggregateAnalysisResult? result = null;
         if (snapshot is not null)
             result = JsonSerializer.Deserialize<EquipmentAggregateAnalysisResult>(snapshot.ResultJson, JsonOptions);
+        var requestStatus = request?.Status == EquipmentAggregateAnalysisStatuses.Pending
+            ? request.DispatchStatus switch
+            {
+                EquipmentAggregateDispatchStatuses.Failed => "Failed",
+                EquipmentAggregateDispatchStatuses.Deferred => "Deferred",
+                _ => "Pending"
+            }
+            : request?.Status;
         var status = stale ? "Stale" : snapshot is not null ? "Completed" :
-            request?.Status ?? (manifest.Documents.Count == 0 ? "NoEligibleDocuments" : "Pending");
+            requestStatus ?? (manifest.Documents.Count == 0 ? "NoEligibleDocuments" : "Pending");
         return new(apparatusId, moduleCode, options.Enabled, manifest.Hash, manifest.Documents.Count,
             manifest.PendingDocumentCount, status, stale, snapshot?.Id, snapshot?.AnalyzedAt,
             snapshot?.ReviewStatus, result);
+    }
+
+    public async Task EnsureCurrentRequestAsync(string apparatusId, string moduleCode,
+        CancellationToken cancellationToken)
+    {
+        var options = configured.Value;
+        if (!options.Enabled) return;
+        var manifest = await BuildManifestAsync(apparatusId, moduleCode, cancellationToken);
+        var now = clock.GetUtcNow().UtcDateTime;
+        if (manifest.Documents.Count > 0)
+            await EnsureRequestAsync(apparatusId, moduleCode, manifest, options.AnalysisVersion,
+                now, cancellationToken);
+        else
+            await SupersedePendingRequestsAsync(apparatusId, moduleCode, now, cancellationToken);
     }
 
     public async Task ApplyCallbackAsync(EquipmentAggregateAnalysisCallback callback,
@@ -213,6 +235,25 @@ public sealed class EquipmentAggregateAnalysisService(
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
     }
 
+    private async Task SupersedePendingRequestsAsync(string apparatusId, string moduleCode,
+        DateTime now, CancellationToken cancellationToken)
+    {
+        IDbContextTransaction? transaction = null;
+        if (db.Database.IsNpgsql())
+        {
+            transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted,
+                cancellationToken);
+            await LockApparatusAsync(apparatusId, moduleCode, cancellationToken);
+        }
+        await using var transactionScope = transaction;
+        var pending = await db.EquipmentAggregateAnalysisRequests.Where(x =>
+            x.ApparatusId == apparatusId && x.ModuleCode == moduleCode &&
+            x.Status == EquipmentAggregateAnalysisStatuses.Pending).ToListAsync(cancellationToken);
+        pending.ForEach(x => x.Supersede(now));
+        if (pending.Count > 0) await db.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+    }
+
     private async Task LockApparatusAsync(string apparatusId, string moduleCode,
         CancellationToken cancellationToken)
     {
@@ -232,7 +273,7 @@ public sealed class EquipmentAggregateAnalysisService(
             .ToListAsync(cancellationToken);
         var fileIds = files.Select(x => x.Id).ToArray();
         var deleting = await db.EquipmentFileDeletionJobs.AsNoTracking().Where(x =>
-            fileIds.Contains(x.ApparatusFileId) && x.Status != EquipmentFileDeletionStatuses.Completed)
+            fileIds.Contains(x.ApparatusFileId))
             .Select(x => x.ApparatusFileId).ToListAsync(cancellationToken);
         var results = await db.KmDocumentAnalysisResults.AsNoTracking().Where(x =>
             fileIds.Contains(x.SourceEntityId) && x.SourceType == KmAnalysisSourceTypes.EquipmentAttachment &&

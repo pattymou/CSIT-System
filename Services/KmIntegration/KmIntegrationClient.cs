@@ -27,6 +27,10 @@ public interface IKmIntegrationClient
         KmMetadataChangeRequest request, CancellationToken cancellationToken) =>
         Task.FromResult(KmMetadataChangeDeliveryResult.Failure(false, "UNSUPPORTED",
             "KM metadata change delivery is unavailable."));
+    Task<KmDeliveryResult> SubmitEquipmentAggregateAnalysisAsync(
+        EquipmentAggregateAnalysisRequestContract request, CancellationToken cancellationToken) =>
+        Task.FromResult(KmDeliveryResult.Failure(false, "UNSUPPORTED",
+            "KM equipment aggregate analysis delivery is unavailable."));
 }
 
 public interface IKmIntegrationAccessTokenProvider
@@ -50,6 +54,8 @@ public sealed class KmIntegrationClient(
     public const string DocumentLibraryIngestionPath = "/api/integrations/csit/v1/document-library/jobs";
     public const string DocumentJobV2Path = "/api/integrations/csit/v2/document-jobs";
     public const string MetadataChangeV2Path = "/api/integrations/csit/v2/document-metadata-changes";
+    public const string EquipmentAggregateAnalysisPath =
+        "/api/integrations/csit/v1/equipment-aggregate-analyses";
 
     public async Task<KmDeliveryResult> SubmitAsync(KmIngestionRequest request, CancellationToken cancellationToken)
     {
@@ -306,6 +312,79 @@ public sealed class KmIntegrationClient(
                      x.NameEquals("code") || x.NameEquals("field") || x.NameEquals("type") ||
                      x.NameEquals("expected")))
             CollectSafeReasons(property.Value, values);
+    }
+
+    public async Task<KmDeliveryResult> SubmitEquipmentAggregateAnalysisAsync(
+        EquipmentAggregateAnalysisRequestContract request, CancellationToken cancellationToken)
+    {
+        var options = configured.Value;
+        if (!options.Enabled)
+            return KmDeliveryResult.Failure(false, "DISABLED", "KM integration is disabled.");
+        if (!TryGetBaseUri(options, out var baseUri))
+            return KmDeliveryResult.Failure(false, "CONFIGURATION",
+                "KM integration configuration is incomplete.");
+        string accessToken;
+        try { accessToken = await tokens.GetAccessTokenAsync(cancellationToken); }
+        catch (Exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return KmDeliveryResult.Failure(false, "AUTH_NOT_CONFIGURED",
+                "KM Client Credentials is unavailable.");
+        }
+        if (string.IsNullOrWhiteSpace(accessToken))
+            return KmDeliveryResult.Failure(false, "AUTH_NOT_CONFIGURED",
+                "KM Client Credentials is unavailable.");
+
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(options.TimeoutSeconds));
+        using var message = new HttpRequestMessage(HttpMethod.Post,
+            new Uri(baseUri!, EquipmentAggregateAnalysisPath)) { Content = JsonContent.Create(request) };
+        message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
+        message.Headers.Add("Idempotency-Key", request.RequestId.ToString("D"));
+        try
+        {
+            using var response = await http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead,
+                timeout.Token);
+            if (response.StatusCode == HttpStatusCode.Accepted)
+            {
+                EquipmentAggregateAnalysisAccepted? payload;
+                try
+                {
+                    payload = await response.Content.ReadFromJsonAsync<EquipmentAggregateAnalysisAccepted>(
+                        timeout.Token);
+                }
+                catch (Exception) when (!cancellationToken.IsCancellationRequested)
+                {
+                    return KmDeliveryResult.Failure(false, "INVALID_RESPONSE",
+                        "KM aggregate analysis 202 response is invalid.");
+                }
+                if (payload is null || payload.RequestId != request.RequestId ||
+                    string.IsNullOrWhiteSpace(payload.KmJobId) || payload.Status != "Accepted")
+                    return KmDeliveryResult.Failure(false, "INVALID_RESPONSE",
+                        "KM aggregate analysis 202 response does not match the request.");
+                return KmDeliveryResult.Success(payload.KmJobId);
+            }
+
+            var safeReason = await ReadSafeRejectionReasonAsync(response.Content, timeout.Token);
+            if (response.StatusCode == HttpStatusCode.ServiceUnavailable &&
+                safeReason?.Contains("aggregate analysis disabled", StringComparison.OrdinalIgnoreCase) == true)
+                return KmDeliveryResult.Failure(true, "KM_FEATURE_DISABLED",
+                    "KM equipment aggregate analysis is temporarily disabled.");
+            var retryable = (int)response.StatusCode >= 500 ||
+                response.StatusCode is HttpStatusCode.TooManyRequests or HttpStatusCode.RequestTimeout;
+            return KmDeliveryResult.Failure(retryable, "HTTP_" + (int)response.StatusCode,
+                retryable ? "KM is temporarily unavailable." :
+                $"KM rejected the aggregate analysis request (HTTP {(int)response.StatusCode}).");
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return KmDeliveryResult.Failure(true, "TIMEOUT",
+                "KM aggregate analysis request timed out.");
+        }
+        catch (HttpRequestException)
+        {
+            return KmDeliveryResult.Failure(true, "CONNECTION",
+                "KM aggregate analysis connection failed.");
+        }
     }
 
     public async Task<KmMetadataChangeDeliveryResult> SubmitMetadataChangeAsync(

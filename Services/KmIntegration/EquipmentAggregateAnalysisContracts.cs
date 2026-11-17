@@ -11,6 +11,9 @@ public sealed record EquipmentAggregateAnalysisRequestContract(
     string ApparatusId, string ManifestHash, string AnalysisVersion,
     IReadOnlyList<EquipmentAggregateSourceDocument> Documents, DateTimeOffset RequestedAt);
 
+public sealed record EquipmentAggregateAnalysisAccepted(
+    Guid RequestId, string KmJobId, string Status);
+
 [JsonUnmappedMemberHandling(JsonUnmappedMemberHandling.Disallow)]
 public sealed record EquipmentAggregateSpecification(
     string Name, string Value, [property: JsonRequired] string? Unit,
