@@ -53,6 +53,39 @@ Assert-MaintenanceDecision 'maintenance requires exact runtime shape' 'BlockedRu
 Assert-MaintenanceDecision 'maintenance refuses unhealthy runtime' 'BlockedUnhealthy' @{HealthPassed=$false}
 Assert-MaintenanceDecision 'maintenance reloads a healthy exact release' 'Reload' @{}
 
+function Assert-EquipmentDependencyState([string] $Name, [bool] $Expected, [hashtable] $Case) {
+    $defaults = @{
+        EquipmentDeletionCount=0; EquipmentFileDeletionCount=0;
+        AllowedPendingEquipmentFileDeletionCount=0;
+        AllowPendingEquipmentFileDeletionId=[guid]::Empty
+    }
+    foreach ($key in $Case.Keys) { $defaults[$key] = $Case[$key] }
+    $actual = Test-DevEquipmentDeletionDependencyState @defaults
+    if ($actual -ne $Expected) { throw "$Name expected $Expected but received $actual" }
+    Write-Output "PASS $Name"
+}
+
+$approvedEquipmentFileDeletionId = [guid]'11111111-2222-3333-4444-555555555555'
+Assert-EquipmentDependencyState 'automatic recovery accepts no active equipment work' $true @{}
+Assert-EquipmentDependencyState 'automatic recovery blocks an active equipment deletion' $false @{
+    EquipmentDeletionCount=1
+}
+Assert-EquipmentDependencyState 'automatic recovery blocks an active equipment file deletion' $false @{
+    EquipmentFileDeletionCount=1
+}
+Assert-EquipmentDependencyState 'approved maintenance accepts one exact pristine pending file deletion' $true @{
+    EquipmentFileDeletionCount=1; AllowedPendingEquipmentFileDeletionCount=1;
+    AllowPendingEquipmentFileDeletionId=$approvedEquipmentFileDeletionId
+}
+Assert-EquipmentDependencyState 'approved maintenance rejects multiple active file deletions' $false @{
+    EquipmentFileDeletionCount=2; AllowedPendingEquipmentFileDeletionCount=1;
+    AllowPendingEquipmentFileDeletionId=$approvedEquipmentFileDeletionId
+}
+Assert-EquipmentDependencyState 'approved maintenance rejects a non-pristine or wrong deletion' $false @{
+    EquipmentFileDeletionCount=1; AllowedPendingEquipmentFileDeletionCount=0;
+    AllowPendingEquipmentFileDeletionId=$approvedEquipmentFileDeletionId
+}
+
 function Assert-M2MDecision([string] $Name, [string] $Expected, [hashtable] $Case) {
     $defaults = @{
         RequestValid=$true; CurrentValid=$true; DevListenerCount=1;
@@ -102,7 +135,28 @@ try {
     if (-not (Test-DevMaintenanceRequest -RequestPath $maintenanceFile -Current $current -NowUtc $now)) {
         throw 'A matching unexpired maintenance request was rejected.'
     }
+    $approvedId = [guid]'8a0a4639-0f38-4380-b8fa-cc7618f709a4'
+    @{Action='ReloadRuntimeConfiguration'; Sha=$current.Sha; Pid=$current.Pid; Path=$current.Path;
+        AllowPendingEquipmentFileDeletionId=$approvedId.ToString('D');
+        ExpiresAtUtc=$now.AddMinutes(5).ToString('o')} | ConvertTo-Json |
+        Set-Content -LiteralPath $maintenanceFile -Encoding UTF8
+    if (-not (Test-DevMaintenanceRequest -RequestPath $maintenanceFile -Current $current -NowUtc $now)) {
+        throw 'A maintenance request with an approved pending equipment deletion was rejected.'
+    }
+    $parsedId = Get-DevMaintenanceAllowedPendingEquipmentFileDeletionId `
+        -Request (Get-Content -LiteralPath $maintenanceFile -Raw | ConvertFrom-Json)
+    if ($parsedId -ne $approvedId) { throw 'The approved pending equipment deletion ID changed.' }
+    @{Action='ReloadRuntimeConfiguration'; Sha=$current.Sha; Pid=$current.Pid; Path=$current.Path;
+        AllowPendingEquipmentFileDeletionId=[guid]::Empty.ToString('D');
+        ExpiresAtUtc=$now.AddMinutes(5).ToString('o')} | ConvertTo-Json |
+        Set-Content -LiteralPath $maintenanceFile -Encoding UTF8
+    if (Test-DevMaintenanceRequest -RequestPath $maintenanceFile -Current $current -NowUtc $now) {
+        throw 'An explicitly empty pending equipment deletion ID was accepted.'
+    }
     $expired = $now.AddMinutes(16)
+    @{Action='ReloadRuntimeConfiguration'; Sha=$current.Sha; Pid=$current.Pid; Path=$current.Path;
+        ExpiresAtUtc=$now.AddMinutes(5).ToString('o')} | ConvertTo-Json |
+        Set-Content -LiteralPath $maintenanceFile -Encoding UTF8
     if (Test-DevMaintenanceRequest -RequestPath $maintenanceFile -Current $current -NowUtc $expired) {
         throw 'An expired maintenance request was accepted.'
     }

@@ -60,6 +60,31 @@ function Get-DevRuntimeMaintenanceDecision {
     return 'Reload'
 }
 
+function Get-DevMaintenanceAllowedPendingEquipmentFileDeletionId {
+    param([object] $Request)
+    $property = $Request.PSObject.Properties['AllowPendingEquipmentFileDeletionId']
+    if (-not $property) { return [guid]::Empty }
+    $id = [guid]::Empty
+    if (-not [guid]::TryParse([string]$property.Value, [ref]$id) -or $id -eq [guid]::Empty) {
+        throw 'The maintenance equipment file deletion ID is invalid.'
+    }
+    return $id
+}
+
+function Test-DevEquipmentDeletionDependencyState {
+    param(
+        [int] $EquipmentDeletionCount,
+        [int] $EquipmentFileDeletionCount,
+        [int] $AllowedPendingEquipmentFileDeletionCount,
+        [guid] $AllowPendingEquipmentFileDeletionId = [guid]::Empty
+    )
+    if ($AllowPendingEquipmentFileDeletionId -eq [guid]::Empty) {
+        return $EquipmentDeletionCount -eq 0 -and $EquipmentFileDeletionCount -eq 0
+    }
+    return $EquipmentDeletionCount -eq 0 -and $EquipmentFileDeletionCount -eq 1 -and
+        $AllowedPendingEquipmentFileDeletionCount -eq 1
+}
+
 function Test-DevMaintenanceRequest {
     param([string] $RequestPath, [object] $Current, [datetime] $NowUtc)
     if (-not (Test-Path -LiteralPath $RequestPath)) { return $false }
@@ -69,6 +94,7 @@ function Test-DevMaintenanceRequest {
             [string]$request.Sha -ne [string]$Current.Sha -or
             [int]$request.Pid -ne [int]$Current.Pid -or
             [string]$request.Path -ne [string]$Current.Path) { return $false }
+        $null = Get-DevMaintenanceAllowedPendingEquipmentFileDeletionId -Request $request
         $expires = [datetime]::Parse([string]$request.ExpiresAtUtc).ToUniversalTime()
         return $expires -gt $NowUtc -and $expires -le $NowUtc.AddMinutes(16)
     } catch { return $false }
@@ -307,6 +333,7 @@ function Save-RecoveryState($State, [datetime] $NowUtc, [bool] $Succeeded, [stri
 }
 
 function Assert-DevDependencies {
+    param([guid] $AllowPendingEquipmentFileDeletionId = [guid]::Empty)
     if (-not (Test-Path -LiteralPath $secretFile) -or
         -not (Test-Path -LiteralPath $baseSettings)) {
         throw 'Restricted DEV runtime configuration is incomplete.'
@@ -344,13 +371,23 @@ function Assert-DevDependencies {
     }
     $env:PGPASSWORD = [string]$connection['Password']
     try {
-        $query = @'
+        $allowedPendingId = $AllowPendingEquipmentFileDeletionId.ToString('D')
+        $query = @"
 SELECT current_database() || '|' || current_user;
 SELECT category || '|' || name || '|' || value FROM system_options WHERE is_enabled = TRUE AND category IN
 ('AssetRootPath','ThreeLevelRootPath','TestReportRootPath') ORDER BY category, name;
 SELECT (SELECT count(*) FROM equipment_deletion_jobs WHERE status <> 'Completed') || '|' ||
-       (SELECT count(*) FROM equipment_file_deletion_jobs WHERE status <> 'Completed');
-'@
+       (SELECT count(*) FROM equipment_file_deletion_jobs WHERE status <> 'Completed') || '|' ||
+       (SELECT count(*) FROM equipment_file_deletion_jobs
+        WHERE status <> 'Completed' AND id = '$allowedPendingId'::uuid
+          AND status = 'Pending' AND attempt_count = 0
+          AND km_deletion_job_id IS NULL
+          AND last_error_code IS NULL AND last_error_message IS NULL
+          AND last_error_retryable IS NULL
+          AND lease_token IS NULL AND lease_expires_at IS NULL
+          AND km_verified_at IS NULL AND db_record_deleted_at IS NULL
+          AND physical_file_deleted_at IS NULL AND completed_at IS NULL);
+"@
         $result = @($query | & $psqlExe -X -w -t -A -v ON_ERROR_STOP=1 `
             -h ([string]$connection['Host']) -p ([string]$connection['Port']) `
             -U ([string]$connection['Username']) -d ([string]$connection['Database']) |
@@ -359,7 +396,13 @@ SELECT (SELECT count(*) FROM equipment_deletion_jobs WHERE status <> 'Completed'
             $result[0] -ne 'sit_department_system_dev|csit_runtime_dev') {
             throw 'The DEV runtime database connectivity guard failed.'
         }
-        if ($result[-1] -ne '0|0') {
+        $deletionState = @([string]$result[-1] -split '\|')
+        if ($deletionState.Count -ne 3 -or
+            -not (Test-DevEquipmentDeletionDependencyState `
+                -EquipmentDeletionCount ([int]$deletionState[0]) `
+                -EquipmentFileDeletionCount ([int]$deletionState[1]) `
+                -AllowedPendingEquipmentFileDeletionCount ([int]$deletionState[2]) `
+                -AllowPendingEquipmentFileDeletionId $AllowPendingEquipmentFileDeletionId)) {
             throw 'Active equipment deletion work blocks automatic DEV recovery.'
         }
         $expectedRoots = if ($businessHierarchy) { @(
@@ -736,7 +779,15 @@ try {
         $candidatePid = 0
         try {
             $productionBefore = Get-ProductionPid
-            Assert-DevDependencies
+            if (-not (Test-DevMaintenanceRequest -RequestPath $maintenanceFile `
+                    -Current $current -NowUtc ((Get-Date).ToUniversalTime()))) {
+                throw 'The DEV maintenance request changed or expired before reload.'
+            }
+            $maintenanceRequest = Get-Content -LiteralPath $maintenanceFile -Raw | ConvertFrom-Json
+            $allowedPendingEquipmentFileDeletionId =
+                Get-DevMaintenanceAllowedPendingEquipmentFileDeletionId -Request $maintenanceRequest
+            Assert-DevDependencies `
+                -AllowPendingEquipmentFileDeletionId $allowedPendingEquipmentFileDeletionId
             $oldProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$oldPid"
             $expectedExe = Join-Path $oldRelease 'SIT.DepartmentSystem.Web.exe'
             if ($null -eq $oldProcess -or $oldProcess.Name -ne 'SIT.DepartmentSystem.Web.exe' -or

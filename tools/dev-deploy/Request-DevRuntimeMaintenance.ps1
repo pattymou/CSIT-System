@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory)] [ValidatePattern('^[0-9a-f]{40}$')] [string] $Sha,
     [Parameter(Mandatory)] [ValidateRange(1,2147483647)] [int] $Pid,
+    [guid] $AllowPendingEquipmentFileDeletionId = [guid]::Empty,
     [ValidateRange(1,15)] [int] $ExpiresMinutes = 10,
     [string] $Reason = 'Approved DEV runtime configuration maintenance'
 )
@@ -48,6 +49,10 @@ try {
         RequestedAtUtc = $now.ToString('o'); ExpiresAtUtc = $now.AddMinutes($ExpiresMinutes).ToString('o')
         Reason = if ($Reason.Length -gt 256) { $Reason.Substring(0,256) } else { $Reason }
     }
+    if ($AllowPendingEquipmentFileDeletionId -ne [guid]::Empty) {
+        $request['AllowPendingEquipmentFileDeletionId'] =
+            $AllowPendingEquipmentFileDeletionId.ToString('D')
+    }
     $tmp = $requestFile + '.tmp'
     $request | ConvertTo-Json | Set-Content -LiteralPath $tmp -Encoding UTF8
     & icacls.exe $tmp /inheritance:r /grant:r '*S-1-5-18:F' '*S-1-5-32-544:F' '*S-1-5-19:R' | Out-Null
@@ -60,5 +65,9 @@ try {
         throw 'Production 5010 PID changed while creating maintenance request.'
     }
     Write-Output ('DEV_MAINTENANCE_REQUESTED sha=' + $Sha + ' pid=' + $Pid +
-        ' expires=' + $request.ExpiresAtUtc)
+        ' expires=' + $request.ExpiresAtUtc +
+        $(if ($AllowPendingEquipmentFileDeletionId -ne [guid]::Empty) {
+            ' allowPendingEquipmentFileDeletionId=' +
+                $AllowPendingEquipmentFileDeletionId.ToString('D')
+        } else { '' }))
 } finally { if ($lock) { $lock.Dispose() } }
