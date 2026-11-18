@@ -54,8 +54,12 @@ function Get-DevRuntimeMaintenanceDecision {
 
     if (-not $RequestValid) { return 'NoRequest' }
     if (-not $CurrentValid) { return 'BlockedCurrent' }
-    if ($DevListenerCount -ne 1 -or $ReleaseProcessCount -ne 1) { return 'BlockedRuntimeShape' }
-    if (-not $RuntimeMatchesCurrent -or -not $HealthPassed) { return 'BlockedUnhealthy' }
+    $runtimePresent = $DevListenerCount -eq 1 -and $ReleaseProcessCount -eq 1
+    $runtimeAbsent = $DevListenerCount -eq 0 -and $ReleaseProcessCount -eq 0
+    if (-not $runtimePresent -and -not $runtimeAbsent) { return 'BlockedRuntimeShape' }
+    if ($runtimePresent -and (-not $RuntimeMatchesCurrent -or -not $HealthPassed)) {
+        return 'BlockedUnhealthy'
+    }
     if (-not $DependenciesReady) { return 'BlockedDependencies' }
     return 'Reload'
 }
@@ -764,7 +768,8 @@ try {
         return
     }
     if ($preDecision -eq 'Healthy' -and -not $maintenanceValid) { return }
-    if ($preDecision -eq 'Healthy' -and $maintenanceValid) {
+    if (($preDecision -eq 'Healthy' -or
+            ($listeners.Count -eq 0 -and $processes.Count -eq 0)) -and $maintenanceValid) {
         $maintenanceDecision = Get-DevRuntimeMaintenanceDecision -RequestValid $true `
             -CurrentValid $currentValid -DevListenerCount $listeners.Count `
             -ReleaseProcessCount $processes.Count -RuntimeMatchesCurrent $runtimeMatches `
@@ -790,15 +795,19 @@ try {
                 -AllowPendingEquipmentFileDeletionId $allowedPendingEquipmentFileDeletionId
             $oldProcess = Get-CimInstance Win32_Process -Filter "ProcessId=$oldPid"
             $expectedExe = Join-Path $oldRelease 'SIT.DepartmentSystem.Web.exe'
-            if ($null -eq $oldProcess -or $oldProcess.Name -ne 'SIT.DepartmentSystem.Web.exe' -or
-                [IO.Path]::GetFullPath([string]$oldProcess.ExecutablePath) -ne
-                [IO.Path]::GetFullPath($expectedExe)) {
-                throw 'DEV maintenance PID or executable guard failed.'
-            }
-            Stop-Process -Id $oldPid -Force
-            Wait-Process -Id $oldPid -Timeout 15 -ErrorAction SilentlyContinue
-            if (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {
-                throw 'DEV maintenance process did not stop.'
+            if ($listeners.Count -eq 1) {
+                if ($null -eq $oldProcess -or $oldProcess.Name -ne 'SIT.DepartmentSystem.Web.exe' -or
+                    [IO.Path]::GetFullPath([string]$oldProcess.ExecutablePath) -ne
+                    [IO.Path]::GetFullPath($expectedExe)) {
+                    throw 'DEV maintenance PID or executable guard failed.'
+                }
+                Stop-Process -Id $oldPid -Force
+                Wait-Process -Id $oldPid -Timeout 15 -ErrorAction SilentlyContinue
+                if (Get-Process -Id $oldPid -ErrorAction SilentlyContinue) {
+                    throw 'DEV maintenance process did not stop.'
+                }
+            } elseif ($null -ne $oldProcess) {
+                throw 'A stale PID is occupied while resuming DEV maintenance.'
             }
             $candidatePid = Start-CurrentRelease $oldRelease ([string]$current.Sha)
             Assert-Smoke ([string]$current.Sha) $candidatePid

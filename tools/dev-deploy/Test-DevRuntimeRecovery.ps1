@@ -49,9 +49,14 @@ function Assert-MaintenanceDecision([string] $Name, [string] $Expected, [hashtab
 }
 
 Assert-MaintenanceDecision 'no maintenance request is a no-op' 'NoRequest' @{RequestValid=$false}
-Assert-MaintenanceDecision 'maintenance requires exact runtime shape' 'BlockedRuntimeShape' @{DevListenerCount=0}
+Assert-MaintenanceDecision 'maintenance rejects a partial runtime shape' 'BlockedRuntimeShape' @{
+    DevListenerCount=0; ReleaseProcessCount=1
+}
 Assert-MaintenanceDecision 'maintenance refuses unhealthy runtime' 'BlockedUnhealthy' @{HealthPassed=$false}
 Assert-MaintenanceDecision 'maintenance reloads a healthy exact release' 'Reload' @{}
+Assert-MaintenanceDecision 'maintenance resumes the exact release after an approved late exit' 'Reload' @{
+    DevListenerCount=0; ReleaseProcessCount=0; RuntimeMatchesCurrent=$false; HealthPassed=$false
+}
 
 function Assert-EquipmentDependencyState([string] $Name, [bool] $Expected, [hashtable] $Case) {
     $defaults = @{
