@@ -1,4 +1,11 @@
+using System.Net;
+using System.Net.Http.Json;
+using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.TestHost;
+using Microsoft.Extensions.DependencyInjection;
+using SIT.DepartmentSystem.Web.Controllers;
 using SIT.DepartmentSystem.Web.Services.KmIntegration;
 
 namespace ApprovalFramework.Tests;
@@ -19,12 +26,14 @@ public sealed class DevKmServiceIngressTests
     [InlineData("POST", "/api/integrations/km/v1/ingestion-status", true)]
     [InlineData("POST", "/api/integrations/km/v2/document-jobs/status", true)]
     [InlineData("POST", "/api/integrations/km/v2/analysis-results", true)]
+    [InlineData("POST", "/api/integrations/km/v2/equipment-aggregate-analyses/status", true)]
     [InlineData("POST", "/api/integrations/km/v2/document-deletions/status", true)]
     [InlineData("POST", "/api/integrations/km/v2/document-metadata-changes/status", true)]
     [InlineData("POST", Document, false)]
     [InlineData("GET", "/api/integrations/km/v1/ingestion-status", false)]
     [InlineData("GET", "/api/integrations/km/v2/document-jobs/status", false)]
     [InlineData("GET", "/api/integrations/km/v2/analysis-results", false)]
+    [InlineData("GET", "/api/integrations/km/v2/equipment-aggregate-analyses/status", false)]
     [InlineData("GET", "/api/integrations/km/v2/document-deletions/status", false)]
     [InlineData("POST", "/api/integrations/km/drafts/equipment-document-deletion-status", false)]
     [InlineData("GET", "/api/integrations/km/v2/document-metadata-changes/status", false)]
@@ -55,5 +64,41 @@ public sealed class DevKmServiceIngressTests
         context.Connection.LocalPort = 7296;
         context.Request.Path = "/";
         Assert.True(DevKmServiceIngress.IsAllowed(context));
+    }
+
+    [Fact]
+    public async Task EquipmentAggregateCallbackOn7444WithoutTokenReachesAuthenticationChallenge()
+    {
+        const string scheme = "IsolatedMockKmCallback";
+        var builder = WebApplication.CreateSlimBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddControllers().AddApplicationPart(typeof(KmAnalysisCallbackController).Assembly);
+        builder.Services.AddAuthentication(scheme)
+            .AddScheme<AuthenticationSchemeOptions, MockKmCallbackAuthenticationHandler>(scheme, _ => { });
+        builder.Services.AddAuthorization(options => options.AddPolicy(
+            KmIntegrationAuthorization.AnalysisStatusWritePolicy,
+            policy => policy.AddAuthenticationSchemes(scheme).RequireAuthenticatedUser()));
+
+        await using var app = builder.Build();
+        app.Use(async (context, next) =>
+        {
+            context.Connection.LocalPort = DevKmServiceIngress.Port;
+            if (!DevKmServiceIngress.IsAllowed(context))
+            {
+                context.Response.StatusCode = StatusCodes.Status404NotFound;
+                return;
+            }
+            await next();
+        });
+        app.UseAuthentication();
+        app.UseAuthorization();
+        app.MapControllers();
+        await app.StartAsync();
+
+        using var client = app.GetTestClient();
+        using var response = await client.PostAsJsonAsync(
+            "/api/integrations/km/v2/equipment-aggregate-analyses/status", new { });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
     }
 }
