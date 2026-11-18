@@ -9,6 +9,14 @@ if ($maintenanceRequestSource -notmatch "\*S-1-5-19:\(R,D\)" -or
 }
 Write-Output 'PASS maintenance request ACL permits read and delete only'
 
+$equipmentRecoveryRequestSource = Get-Content -LiteralPath `
+    (Join-Path $PSScriptRoot 'Request-DevEquipmentFileDeletionRecovery.ps1') -Raw
+if ($equipmentRecoveryRequestSource -notmatch "\*S-1-5-19:\(R,D\)" -or
+    $equipmentRecoveryRequestSource -match "\*S-1-5-19:[^'\r\n]*[WFM]") {
+    throw 'LOCAL SERVICE must consume, but not modify, an equipment recovery request.'
+}
+Write-Output 'PASS equipment recovery request ACL permits read and delete only'
+
 function Assert-Decision([string] $Name, [string] $Expected, [hashtable] $Case) {
     $defaults = @{
         CurrentValid=$true; DevListenerCount=0; ReleaseProcessCount=0;
@@ -70,7 +78,9 @@ function Assert-EquipmentDependencyState([string] $Name, [bool] $Expected, [hash
     $defaults = @{
         EquipmentDeletionCount=0; EquipmentFileDeletionCount=0;
         AllowedPendingEquipmentFileDeletionCount=0;
-        AllowPendingEquipmentFileDeletionId=[guid]::Empty
+        AllowPendingEquipmentFileDeletionId=[guid]::Empty;
+        AllowedRecoverableFailedEquipmentFileDeletionCount=0;
+        AllowRecoverableFailedEquipmentFileDeletionId=[guid]::Empty
     }
     foreach ($key in $Case.Keys) { $defaults[$key] = $Case[$key] }
     $actual = Test-DevEquipmentDeletionDependencyState @defaults
@@ -97,6 +107,20 @@ Assert-EquipmentDependencyState 'approved maintenance rejects multiple active fi
 Assert-EquipmentDependencyState 'approved maintenance rejects a non-pristine or wrong deletion' $false @{
     EquipmentFileDeletionCount=1; AllowedPendingEquipmentFileDeletionCount=0;
     AllowPendingEquipmentFileDeletionId=$approvedEquipmentFileDeletionId
+}
+$recoverableFailedEquipmentFileDeletionId =
+    [guid]'13e69616-ee7e-42c8-b501-740353de1071'
+Assert-EquipmentDependencyState 'exact failed HTTP 400 recovery permits only its target' $true @{
+    EquipmentFileDeletionCount=1; AllowedRecoverableFailedEquipmentFileDeletionCount=1;
+    AllowRecoverableFailedEquipmentFileDeletionId=$recoverableFailedEquipmentFileDeletionId
+}
+Assert-EquipmentDependencyState 'failed recovery rejects another active file deletion' $false @{
+    EquipmentFileDeletionCount=2; AllowedRecoverableFailedEquipmentFileDeletionCount=1;
+    AllowRecoverableFailedEquipmentFileDeletionId=$recoverableFailedEquipmentFileDeletionId
+}
+Assert-EquipmentDependencyState 'failed recovery rejects a nonmatching target state' $false @{
+    EquipmentFileDeletionCount=1; AllowedRecoverableFailedEquipmentFileDeletionCount=0;
+    AllowRecoverableFailedEquipmentFileDeletionId=$recoverableFailedEquipmentFileDeletionId
 }
 
 function Assert-M2MDecision([string] $Name, [string] $Expected, [hashtable] $Case) {
@@ -135,6 +159,45 @@ try {
     Write-Output 'PASS M2M verification request binding and expiry'
 } finally {
     Remove-Item -LiteralPath $m2mFile -Force -ErrorAction SilentlyContinue
+}
+
+$equipmentRecoveryFile = Join-Path ([IO.Path]::GetTempPath()) `
+    ('csit-equipment-recovery-' + [guid]::NewGuid().ToString('N') + '.json')
+try {
+    $current = [pscustomobject] @{ Sha = ('c' * 40); Pid = 6789;
+        Path = 'C:\ProgramData\CSIT-DEV\releases\' + ('c' * 40) }
+    $now = [datetime]::SpecifyKind([datetime]'2026-11-18T08:00:00', [DateTimeKind]::Utc)
+    $request = @{Action='RecoverEquipmentFileDeletion'; Sha=$current.Sha; Pid=$current.Pid;
+        Path=$current.Path; JobId='13e69616-ee7e-42c8-b501-740353de1071';
+        RequestedBy='HOST\Administrator'; Reason='Approved exact HTTP 400 recovery';
+        ExpiresAtUtc=$now.AddMinutes(5).ToString('o')}
+    $request | ConvertTo-Json | Set-Content -LiteralPath $equipmentRecoveryFile -Encoding UTF8
+    if (-not (Test-DevEquipmentFileDeletionRecoveryRequest -RequestPath $equipmentRecoveryFile `
+            -Current $current -NowUtc $now)) {
+        throw 'A matching equipment deletion recovery request was rejected.'
+    }
+    $request.JobId = [guid]::Empty.ToString('D')
+    $request | ConvertTo-Json | Set-Content -LiteralPath $equipmentRecoveryFile -Encoding UTF8
+    if (Test-DevEquipmentFileDeletionRecoveryRequest -RequestPath $equipmentRecoveryFile `
+            -Current $current -NowUtc $now) {
+        throw 'An empty equipment deletion Job ID was accepted.'
+    }
+    $request.JobId = '13e69616-ee7e-42c8-b501-740353de1071'
+    $request.Reason = 'Authorization: Bearer unsafe'
+    $request | ConvertTo-Json | Set-Content -LiteralPath $equipmentRecoveryFile -Encoding UTF8
+    if (Test-DevEquipmentFileDeletionRecoveryRequest -RequestPath $equipmentRecoveryFile `
+            -Current $current -NowUtc $now) {
+        throw 'A credential-like equipment recovery reason was accepted.'
+    }
+    $request.Reason = 'Approved exact HTTP 400 recovery'
+    $request | ConvertTo-Json | Set-Content -LiteralPath $equipmentRecoveryFile -Encoding UTF8
+    if (Test-DevEquipmentFileDeletionRecoveryRequest -RequestPath $equipmentRecoveryFile `
+            -Current $current -NowUtc $now.AddMinutes(11)) {
+        throw 'An expired equipment deletion recovery request was accepted.'
+    }
+    Write-Output 'PASS equipment recovery request binding, content, and expiry'
+} finally {
+    Remove-Item -LiteralPath $equipmentRecoveryFile -Force -ErrorAction SilentlyContinue
 }
 
 $maintenanceFile = Join-Path ([IO.Path]::GetTempPath()) ('csit-maintenance-' + [guid]::NewGuid().ToString('N') + '.json')

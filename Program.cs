@@ -24,12 +24,19 @@ var builder = WebApplication.CreateBuilder(args);
 var verifyKmM2MToken = args.Contains("--verify-km-m2m-token", StringComparer.Ordinal);
 var dispatchKmOutboxEvent = args.Contains("--dispatch-km-outbox-event", StringComparer.Ordinal);
 var requeueKmOutboxEvent = args.Contains("--requeue-km-outbox-event", StringComparer.Ordinal);
+var recoverEquipmentFileDeletion = args.Contains(
+    "--recover-equipment-file-deletion", StringComparer.Ordinal);
 var requestedOutboxId = Guid.Empty;
 var requestedEventId = Guid.Empty;
+var requestedEquipmentDeletionJobId = Guid.Empty;
 if ((dispatchKmOutboxEvent || requeueKmOutboxEvent) &&
     (args.Length != 3 || !Guid.TryParse(args[1], out requestedOutboxId) ||
      !Guid.TryParse(args[2], out requestedEventId)))
     throw new InvalidOperationException("The DEV KM outbox command requires exactly an OutboxId and EventId.");
+if (recoverEquipmentFileDeletion &&
+    (args.Length != 2 || !Guid.TryParse(args[1], out requestedEquipmentDeletionJobId)))
+    throw new InvalidOperationException(
+        "The DEV equipment deletion recovery command requires exactly one Job ID.");
 if (verifyKmM2MToken)
     builder.Logging.ClearProviders();
 var loadTestMode = builder.Environment.IsEnvironment("LoadTest");
@@ -304,6 +311,7 @@ builder.Services.AddScoped<EquipmentDeletionService>();
 builder.Services.AddScoped<DocumentLibraryDeletionAuthorizationService>();
 builder.Services.AddScoped<DocumentLibraryFileDeletionService>();
 builder.Services.AddScoped<KmDeletionDispatchService>();
+builder.Services.AddScoped<EquipmentFileDeletionManualRecoveryService>();
 builder.Services.AddHostedService<KmDeletionBackgroundService>();
 builder.Services.AddScoped<VerificationCaseDeletionPreparationService>();
 builder.Services.AddScoped<VerificationCaseDeletionConfirmationService>();
@@ -508,6 +516,18 @@ if (requeueKmOutboxEvent)
 {
     var exitCode = await DevKmOutboxDispatch.RequeueAsync(app.Services, Console.Out,
         requestedOutboxId, requestedEventId, CancellationToken.None);
+    await app.DisposeAsync();
+    Environment.ExitCode = exitCode;
+    return;
+}
+if (recoverEquipmentFileDeletion)
+{
+    var actor = Environment.GetEnvironmentVariable(
+        "CSIT_DEV_EQUIPMENT_DELETION_RECOVERY_ACTOR") ?? string.Empty;
+    var reason = Environment.GetEnvironmentVariable(
+        "CSIT_DEV_EQUIPMENT_DELETION_RECOVERY_REASON") ?? string.Empty;
+    var exitCode = await DevEquipmentFileDeletionRecovery.RunAsync(app.Services, Console.Out,
+        requestedEquipmentDeletionJobId, actor, reason, CancellationToken.None);
     await app.DisposeAsync();
     Environment.ExitCode = exitCode;
     return;

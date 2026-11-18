@@ -19,6 +19,8 @@ public static class ApprovalAuditActions
     public const string CaseDeletionCleanupStarted = "CaseDeletionCleanupStarted";
     public const string CaseDeletionCleanupFailed = "CaseDeletionCleanupFailed";
     public const string CaseDeletionCompleted = "CaseDeletionCompleted";
+    public const string EquipmentFileDeletionManualRecovery =
+        "EquipmentFileDeletionManualRecovery";
 }
 
 public sealed class ApprovalAuditEvent

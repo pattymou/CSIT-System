@@ -80,8 +80,16 @@ function Test-DevEquipmentDeletionDependencyState {
         [int] $EquipmentDeletionCount,
         [int] $EquipmentFileDeletionCount,
         [int] $AllowedPendingEquipmentFileDeletionCount,
-        [guid] $AllowPendingEquipmentFileDeletionId = [guid]::Empty
+        [guid] $AllowPendingEquipmentFileDeletionId = [guid]::Empty,
+        [int] $AllowedRecoverableFailedEquipmentFileDeletionCount = 0,
+        [guid] $AllowRecoverableFailedEquipmentFileDeletionId = [guid]::Empty
     )
+    if ($AllowPendingEquipmentFileDeletionId -ne [guid]::Empty -and
+        $AllowRecoverableFailedEquipmentFileDeletionId -ne [guid]::Empty) { return $false }
+    if ($AllowRecoverableFailedEquipmentFileDeletionId -ne [guid]::Empty) {
+        return $EquipmentDeletionCount -eq 0 -and $EquipmentFileDeletionCount -eq 1 -and
+            $AllowedRecoverableFailedEquipmentFileDeletionCount -eq 1
+    }
     if ($AllowPendingEquipmentFileDeletionId -eq [guid]::Empty) {
         return $EquipmentDeletionCount -eq 0 -and $EquipmentFileDeletionCount -eq 0
     }
@@ -156,6 +164,31 @@ function Test-DevKmOutboxRetryRequest {
     } catch { return $false }
 }
 
+function Test-DevEquipmentFileDeletionRecoveryRequest {
+    param([string] $RequestPath, [object] $Current, [datetime] $NowUtc)
+    if (-not (Test-Path -LiteralPath $RequestPath)) { return $false }
+    try {
+        $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+        $jobId = [guid]::Empty
+        $reason = [string]$request.Reason
+        $requestedBy = [string]$request.RequestedBy
+        if ([string]$request.Action -ne 'RecoverEquipmentFileDeletion' -or
+            [string]$request.Sha -ne [string]$Current.Sha -or
+            [int]$request.Pid -ne [int]$Current.Pid -or
+            [string]$request.Path -ne [string]$Current.Path -or
+            -not [guid]::TryParse([string]$request.JobId, [ref]$jobId) -or
+            $jobId -eq [guid]::Empty -or [string]::IsNullOrWhiteSpace($requestedBy) -or
+            $requestedBy.Length -gt 100 -or $requestedBy -match '[\x00-\x1F\x7F]' -or
+            $reason.Trim().Length -lt 5 -or $reason.Trim().Length -gt 500 -or
+            $reason -match '[\x00-\x1F\x7F]' -or
+            $reason -match '(?i)authorization:|bearer\s|password|client_secret|access_token') {
+            return $false
+        }
+        $expires = [datetime]::Parse([string]$request.ExpiresAtUtc).ToUniversalTime()
+        return $expires -gt $NowUtc -and $expires -le $NowUtc.AddMinutes(11)
+    } catch { return $false }
+}
+
 function Get-DevKmOutboxDispatchDecision {
     param([bool] $RequestValid, [bool] $CurrentValid, [int] $DevListenerCount,
         [bool] $RuntimeMatchesCurrent, [bool] $ReleaseProcessDuplicate, [bool] $DependenciesReady)
@@ -199,6 +232,10 @@ $kmOutboxDispatchFile = Join-Path $stateRoot 'runtime-km-outbox-dispatch-request
 $kmOutboxDispatchResultFile = Join-Path $stateRoot 'runtime-km-outbox-dispatch-result.json'
 $kmOutboxRetryFile = Join-Path $stateRoot 'runtime-km-outbox-retry-request.json'
 $kmOutboxRetryResultFile = Join-Path $stateRoot 'runtime-km-outbox-retry-result.json'
+$equipmentDeletionRecoveryFile = Join-Path $stateRoot `
+    'runtime-equipment-file-deletion-recovery-request.json'
+$equipmentDeletionRecoveryResultFile = Join-Path $stateRoot `
+    'runtime-equipment-file-deletion-recovery-result.json'
 $recoveryFile = Join-Path $stateRoot 'runtime-recovery.json'
 $recoveryLog = Join-Path $logsRoot 'runtime-recovery.log'
 $lock = $null
@@ -337,7 +374,10 @@ function Save-RecoveryState($State, [datetime] $NowUtc, [bool] $Succeeded, [stri
 }
 
 function Assert-DevDependencies {
-    param([guid] $AllowPendingEquipmentFileDeletionId = [guid]::Empty)
+    param(
+        [guid] $AllowPendingEquipmentFileDeletionId = [guid]::Empty,
+        [guid] $AllowRecoverableFailedEquipmentFileDeletionId = [guid]::Empty
+    )
     if (-not (Test-Path -LiteralPath $secretFile) -or
         -not (Test-Path -LiteralPath $baseSettings)) {
         throw 'Restricted DEV runtime configuration is incomplete.'
@@ -376,6 +416,8 @@ function Assert-DevDependencies {
     $env:PGPASSWORD = [string]$connection['Password']
     try {
         $allowedPendingId = $AllowPendingEquipmentFileDeletionId.ToString('D')
+        $allowedRecoverableFailedId =
+            $AllowRecoverableFailedEquipmentFileDeletionId.ToString('D')
         $query = @"
 SELECT current_database() || '|' || current_user;
 SELECT category || '|' || name || '|' || value FROM system_options WHERE is_enabled = TRUE AND category IN
@@ -390,7 +432,19 @@ SELECT (SELECT count(*) FROM equipment_deletion_jobs WHERE status <> 'Completed'
           AND last_error_retryable IS NULL
           AND lease_token IS NULL AND lease_expires_at IS NULL
           AND km_verified_at IS NULL AND db_record_deleted_at IS NULL
-          AND physical_file_deleted_at IS NULL AND completed_at IS NULL);
+          AND physical_file_deleted_at IS NULL AND completed_at IS NULL) || '|' ||
+       (SELECT count(*) FROM equipment_file_deletion_jobs j
+        WHERE j.id = '$allowedRecoverableFailedId'::uuid
+          AND j.status = 'Failed' AND j.attempt_count = 1
+          AND j.last_error_code = 'HTTP_400' AND j.last_error_retryable IS FALSE
+          AND j.km_deletion_job_id IS NULL
+          AND j.lease_token IS NULL AND j.lease_expires_at IS NULL
+          AND j.km_verified_at IS NULL AND j.db_record_deleted_at IS NULL
+          AND j.physical_file_deleted_at IS NULL AND j.completed_at IS NULL
+          AND NOT EXISTS (SELECT 1 FROM equipment_file_deletion_callbacks c
+                          WHERE c.deletion_job_id = j.id)
+          AND NOT EXISTS (SELECT 1 FROM km_v2_document_deletion_callbacks c
+                          WHERE c.deletion_request_id = j.id));
 "@
         $result = @($query | & $psqlExe -X -w -t -A -v ON_ERROR_STOP=1 `
             -h ([string]$connection['Host']) -p ([string]$connection['Port']) `
@@ -401,12 +455,15 @@ SELECT (SELECT count(*) FROM equipment_deletion_jobs WHERE status <> 'Completed'
             throw 'The DEV runtime database connectivity guard failed.'
         }
         $deletionState = @([string]$result[-1] -split '\|')
-        if ($deletionState.Count -ne 3 -or
+        if ($deletionState.Count -ne 4 -or
             -not (Test-DevEquipmentDeletionDependencyState `
                 -EquipmentDeletionCount ([int]$deletionState[0]) `
                 -EquipmentFileDeletionCount ([int]$deletionState[1]) `
                 -AllowedPendingEquipmentFileDeletionCount ([int]$deletionState[2]) `
-                -AllowPendingEquipmentFileDeletionId $AllowPendingEquipmentFileDeletionId)) {
+                -AllowPendingEquipmentFileDeletionId $AllowPendingEquipmentFileDeletionId `
+                -AllowedRecoverableFailedEquipmentFileDeletionCount ([int]$deletionState[3]) `
+                -AllowRecoverableFailedEquipmentFileDeletionId `
+                    $AllowRecoverableFailedEquipmentFileDeletionId)) {
             throw 'Active equipment deletion work blocks automatic DEV recovery.'
         }
         $expectedRoots = if ($businessHierarchy) { @(
@@ -651,6 +708,91 @@ function Invoke-DevKmOutboxRetry([object] $Current, [string] $RequestPath, [date
     }
 }
 
+function Invoke-DevEquipmentFileDeletionRecovery(
+    [object] $Current, [string] $RequestPath, [datetime] $NowUtc) {
+    $releasePath = [string]$Current.Path
+    $exe = Join-Path $releasePath 'SIT.DepartmentSystem.Web.exe'
+    $request = Get-Content -LiteralPath $RequestPath -Raw | ConvertFrom-Json
+    $logPrefix = Join-Path $logsRoot ('equipment-file-deletion-recovery-' +
+        ([string]$Current.Sha).Substring(0, 8) + '-' + $NowUtc.ToString('yyyyMMddHHmmss'))
+    $stdout = $logPrefix + '.stdout.log'; $stderr = $logPrefix + '.stderr.log'
+    $child = $null; $exitCode = 1
+    try {
+        $process = Get-CimInstance Win32_Process -Filter "ProcessId=$([int]$Current.Pid)"
+        if ($null -eq $process -or [IO.Path]::GetFullPath([string]$process.ExecutablePath) -ne
+            [IO.Path]::GetFullPath($exe)) {
+            throw 'Equipment deletion recovery runtime path guard failed.'
+        }
+        $env:ASPNETCORE_ENVIRONMENT = 'Development'; $env:DOTNET_ENVIRONMENT = 'Development'
+        $env:CSIT_DEV_RUNTIME_SECRETS_FILE = $secretFile
+        $env:CSIT_DEV_LOCAL_CERT_THUMBPRINT = $localhostCert
+        $env:CSIT_DEV_7444_CERT_THUMBPRINT = $publicCert
+        $env:DevDeployment__Sha = [string]$Current.Sha
+        $env:DevDeployment__TimeUtc = $NowUtc.ToString('yyyy-MM-dd HH:mm:ss UTC')
+        $env:CSIT_DEV_EQUIPMENT_DELETION_RECOVERY_ACTOR = [string]$request.RequestedBy
+        $env:CSIT_DEV_EQUIPMENT_DELETION_RECOVERY_REASON = [string]$request.Reason
+        $child = Start-Process -FilePath $exe -WorkingDirectory $releasePath -WindowStyle Hidden `
+            -ArgumentList @('--recover-equipment-file-deletion', [string]$request.JobId) `
+            -RedirectStandardOutput $stdout -RedirectStandardError $stderr -PassThru
+        if (-not $child.WaitForExit(120000)) {
+            Stop-Process -Id $child.Id -Force -ErrorAction SilentlyContinue
+            throw 'Equipment deletion recovery timed out.'
+        }
+        $exitCode = [int]$child.ExitCode
+        $jsonLines = @(Get-Content -LiteralPath $stdout -ErrorAction SilentlyContinue |
+            Where-Object { $_ -match '^\s*\{.*\}\s*$' })
+        if ($jsonLines.Count -ne 1) {
+            throw 'Equipment deletion recovery result was not exactly one safe record.'
+        }
+        $result = $jsonLines[0] | ConvertFrom-Json
+        if ([string]$result.IdentitySid -ne 'S-1-5-19' -or
+            [string]$result.JobId -ne [string]$request.JobId) {
+            throw 'Equipment deletion recovery result identity or Job ID changed.'
+        }
+        $record = [ordered]@{
+            Sha=[string]$Current.Sha; Pid=[int]$child.Id; ExitCode=$exitCode
+            RequestedAtUtc=[string]$request.RequestedAtUtc
+            CompletedAtUtc=(Get-Date).ToUniversalTime().ToString('o')
+            IdentitySid=[string]$result.IdentitySid; JobId=[string]$result.JobId
+            RequestedBy=[string]$request.RequestedBy; Reason=[string]$request.Reason
+            Outcome=[string]$result.Outcome; HttpStatus=$result.HttpStatus
+            Status=[string]$result.Status; KmDeletionJobId=[string]$result.KmDeletionJobId
+            ErrorCode=[string]$result.ErrorCode; FailureStage=[string]$result.FailureStage
+        }
+        $record | ConvertTo-Json | Set-Content -LiteralPath `
+            ($equipmentDeletionRecoveryResultFile + '.tmp') -Encoding UTF8
+        Move-Item -LiteralPath ($equipmentDeletionRecoveryResultFile + '.tmp') `
+            -Destination $equipmentDeletionRecoveryResultFile -Force
+        Write-RecoveryLog $(if ($exitCode -eq 0) { 'SUCCESS' } else { 'FAILED' }) `
+            ("DEV_EQUIPMENT_FILE_DELETION_RECOVERY sha=$($Current.Sha) job=$($result.JobId) " +
+             "outcome=$($result.Outcome) http=$($result.HttpStatus) status=$($result.Status) " +
+             "error=$($result.ErrorCode)")
+    } catch {
+        $record = [ordered]@{
+            Sha=[string]$Current.Sha; Pid=[int]$(if($child){$child.Id}else{0})
+            ExitCode=$exitCode; CompletedAtUtc=(Get-Date).ToUniversalTime().ToString('o')
+            IdentitySid='S-1-5-19'; JobId=[string]$request.JobId; Outcome='FAIL'
+            Status='Failed'; ErrorCode='WATCHER_RECOVERY_FAILED'
+        }
+        $record | ConvertTo-Json | Set-Content -LiteralPath `
+            ($equipmentDeletionRecoveryResultFile + '.tmp') -Encoding UTF8
+        Move-Item -LiteralPath ($equipmentDeletionRecoveryResultFile + '.tmp') `
+            -Destination $equipmentDeletionRecoveryResultFile -Force
+        Write-RecoveryLog 'FAILED' `
+            ("DEV_EQUIPMENT_FILE_DELETION_RECOVERY watcher_error=" +
+             $_.Exception.GetType().Name)
+    } finally {
+        Remove-Item -LiteralPath $RequestPath -Force -ErrorAction SilentlyContinue
+        foreach ($key in @('ASPNETCORE_ENVIRONMENT','DOTNET_ENVIRONMENT',
+                'CSIT_DEV_RUNTIME_SECRETS_FILE','CSIT_DEV_LOCAL_CERT_THUMBPRINT',
+                'CSIT_DEV_7444_CERT_THUMBPRINT','DevDeployment__Sha','DevDeployment__TimeUtc',
+                'CSIT_DEV_EQUIPMENT_DELETION_RECOVERY_ACTOR',
+                'CSIT_DEV_EQUIPMENT_DELETION_RECOVERY_REASON')) {
+            Remove-Item "Env:$key" -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 if ($LoadFunctionsOnly) { return }
 
 if ([Security.Principal.WindowsIdentity]::GetCurrent().User.Value -ne 'S-1-5-19') {
@@ -715,7 +857,10 @@ try {
     $m2mVerificationValid = Test-DevM2MVerificationRequest -RequestPath $m2mVerificationFile -Current $current -NowUtc $now
     $kmOutboxDispatchValid = Test-DevKmOutboxDispatchRequest -RequestPath $kmOutboxDispatchFile -Current $current -NowUtc $now
     $kmOutboxRetryValid = Test-DevKmOutboxRetryRequest -RequestPath $kmOutboxRetryFile -Current $current -NowUtc $now
-    $validRequests = @($maintenanceValid, $m2mVerificationValid, $kmOutboxDispatchValid, $kmOutboxRetryValid)
+    $equipmentDeletionRecoveryValid = Test-DevEquipmentFileDeletionRecoveryRequest `
+        -RequestPath $equipmentDeletionRecoveryFile -Current $current -NowUtc $now
+    $validRequests = @($maintenanceValid, $m2mVerificationValid, $kmOutboxDispatchValid,
+        $kmOutboxRetryValid, $equipmentDeletionRecoveryValid)
     $requestCount = @($validRequests | Where-Object { $_ }).Count
     if ($requestCount -gt 1) {
         Write-RecoveryLog 'BLOCKED' 'Multiple DEV maintenance or diagnostic requests are present.'
@@ -747,6 +892,47 @@ try {
             return
         }
         Invoke-DevKmOutboxRetry -Current $current -RequestPath $kmOutboxRetryFile -NowUtc $now
+        return
+    }
+    if ($equipmentDeletionRecoveryValid) {
+        $recoveryRuntimeMatches = $listeners.Count -eq 1 -and
+            [int]$listeners[0] -eq [int]$current.Pid
+        $recoveryDecision = Get-DevKmOutboxDispatchDecision -RequestValid $true `
+            -CurrentValid $currentValid -DevListenerCount $listeners.Count `
+            -RuntimeMatchesCurrent $recoveryRuntimeMatches `
+            -ReleaseProcessDuplicate ($processes.Count -gt 1) -DependenciesReady $true
+        if ($recoveryDecision -ne 'Dispatch') {
+            Write-RecoveryLog 'BLOCKED' $recoveryDecision
+            return
+        }
+        if (-not $healthPassed) {
+            Write-RecoveryLog 'BLOCKED' 'Equipment deletion recovery requires healthy DEV smoke.'
+            return
+        }
+        $equipmentRecoveryRequest = Get-Content -LiteralPath `
+            $equipmentDeletionRecoveryFile -Raw | ConvertFrom-Json
+        try { Assert-DevDependencies -AllowRecoverableFailedEquipmentFileDeletionId `
+                ([guid][string]$equipmentRecoveryRequest.JobId) } catch {
+            Write-RecoveryLog 'BLOCKED' `
+                'Equipment deletion recovery DEV dependency guard failed.'
+            Remove-Item -LiteralPath $equipmentDeletionRecoveryFile -Force `
+                -ErrorAction SilentlyContinue
+            return
+        }
+        try {
+            $productionBefore = Get-ProductionPid
+            Invoke-DevEquipmentFileDeletionRecovery -Current $current `
+                -RequestPath $equipmentDeletionRecoveryFile -NowUtc $now
+            if ((Get-ProductionPid) -ne $productionBefore) {
+                throw 'Production 5010 PID changed during equipment deletion recovery.'
+            }
+        } catch {
+            Remove-Item -LiteralPath $equipmentDeletionRecoveryFile -Force `
+                -ErrorAction SilentlyContinue
+            Write-RecoveryLog 'FAILED' `
+                ('Equipment deletion recovery production guard failed: ' +
+                 $_.Exception.GetType().Name)
+        }
         return
     }
     if ($m2mVerificationValid) {

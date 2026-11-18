@@ -80,6 +80,26 @@ public sealed class EquipmentFileDeletionJob
         new DateTimeOffset(DateTime.SpecifyKind(RequestedAt, DateTimeKind.Utc)),
         ReasonCode, Resource);
 
+    public bool CanRecoverFailedHttp400() =>
+        Status == EquipmentFileDeletionStatuses.Failed &&
+        string.Equals(LastErrorCode, "HTTP_400", StringComparison.Ordinal) &&
+        AttemptCount == 1 && LastErrorRetryable == false &&
+        KmDeletionJobId is null && LeaseToken is null && LeaseExpiresAt is null &&
+        KmVerifiedAt is null && DbRecordDeletedAt is null &&
+        PhysicalFileDeletedAt is null && CompletedAt is null;
+
+    public void RecoverFailedHttp400ForManualDispatch(DateTime now)
+    {
+        if (!CanRecoverFailedHttp400())
+            throw new InvalidOperationException(
+                "Equipment deletion does not meet the exact manual recovery gate.");
+        Status = EquipmentFileDeletionStatuses.Pending;
+        LastErrorCode = null;
+        LastErrorMessage = null;
+        LastErrorRetryable = null;
+        UpdatedAt = now;
+    }
+
     public Guid ClaimDispatch(DateTime now, TimeSpan leaseDuration)
     {
         if (leaseDuration <= TimeSpan.Zero ||

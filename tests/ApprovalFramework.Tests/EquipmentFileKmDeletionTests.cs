@@ -359,6 +359,126 @@ public sealed class EquipmentFileKmDeletionTests
         finally { Directory.Delete(root, true); }
     }
 
+    [Fact]
+    public async Task ExactFailedHttp400JobIsAuditedRecoveredAndDispatchedWithoutChangingIdentity()
+    {
+        var factory = new Factory();
+        var root = NewRoot();
+        try
+        {
+            var fileId = await SeedSentFileAsync(factory, root, "manual-recovery.pdf",
+                "EQ-MANUAL-RECOVERY");
+            EquipmentFileDeletionJob failed;
+            await using (var requestDb = factory.CreateDbContext())
+            {
+                await new EquipmentFileDeletionService(requestDb).RequestAsync(fileId, "writer");
+                failed = await requestDb.EquipmentFileDeletionJobs.SingleAsync();
+                var lease = failed.ClaimDispatch(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+                failed.DeliveryFailed(lease, "HTTP_400", "Old KM contract rejected equipmentId.",
+                    false, DateTime.UtcNow);
+                await requestDb.SaveChangesAsync();
+            }
+            var original = new
+            {
+                failed.Id,
+                failed.ApparatusFileId,
+                failed.DocumentId,
+                failed.CanonicalIngestionEventId,
+                failed.EquipmentId,
+                failed.FileName
+            };
+            var adapter = new MockEquipmentDeletionApi();
+            var result = await new EquipmentFileDeletionManualRecoveryService(
+                factory, adapter,
+                Options.Create(new KmDeletionOptions
+                { Enabled = true, EquipmentEnabled = true, Scope = "mock.equipment.delete" }),
+                Options.Create(new KmIntegrationOptions
+                {
+                    BaseUrl = "https://km.mock.test/", TimeoutSeconds = 2,
+                    LeaseSeconds = 30, MaxRetryCount = 4
+                })).RecoverAndDispatchAsync(failed.Id, "dev-admin",
+                    "KM equipment identifier contract repaired.");
+
+            Assert.True(result.KmHttpAccepted);
+            Assert.Equal(EquipmentFileDeletionStatuses.Accepted, result.Status);
+            Assert.Single(adapter.Requests);
+            await using var verify = factory.CreateDbContext();
+            var stored = await verify.EquipmentFileDeletionJobs.SingleAsync();
+            Assert.Equal(original.Id, stored.Id);
+            Assert.Equal(original.ApparatusFileId, stored.ApparatusFileId);
+            Assert.Equal(original.DocumentId, stored.DocumentId);
+            Assert.Equal(original.CanonicalIngestionEventId, stored.CanonicalIngestionEventId);
+            Assert.Equal(original.EquipmentId, stored.EquipmentId);
+            Assert.Equal(original.FileName, stored.FileName);
+            Assert.Equal(2, stored.AttemptCount);
+            var audit = await verify.ApprovalAuditEvents.SingleAsync(x =>
+                x.SubmissionId == stored.Id &&
+                x.Action == ApprovalAuditActions.EquipmentFileDeletionManualRecovery);
+            Assert.Equal("dev-admin", audit.ActorAccount);
+            Assert.Equal("KM equipment identifier contract repaired.", audit.Reason);
+            Assert.Contains(stored.DocumentId.ToString(), audit.Details);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Theory]
+    [InlineData("FailedOther")]
+    [InlineData("FailedAttemptTwo")]
+    [InlineData("FailedRetryable")]
+    [InlineData("FailedWithKmJob")]
+    [InlineData("Pending")]
+    [InlineData("Dispatching")]
+    [InlineData("Accepted")]
+    [InlineData("Completed")]
+    public void ManualRecoveryRejectsEveryNonExactState(string state)
+    {
+        var file = NewEntityFile();
+        var job = EquipmentFileDeletionJob.Create(file, "writer", state != "Completed",
+            DateTime.UtcNow, state == "Completed" ? null : Guid.NewGuid());
+        if (state == "FailedOther")
+        {
+            var lease = job.ClaimDispatch(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+            job.DeliveryFailed(lease, "HTTP_503", null, false, DateTime.UtcNow);
+        }
+        else if (state == "FailedAttemptTwo")
+        {
+            var lease = job.ClaimDispatch(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+            job.DeliveryFailed(lease, "HTTP_503", null, true, DateTime.UtcNow);
+            lease = job.ClaimDispatch(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+            job.DeliveryFailed(lease, "HTTP_400", null, false, DateTime.UtcNow);
+        }
+        else if (state == "FailedRetryable")
+        {
+            var lease = job.ClaimDispatch(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+            job.DeliveryFailed(lease, "HTTP_400", null, true, DateTime.UtcNow);
+        }
+        else if (state == "FailedWithKmJob")
+        {
+            var lease = job.ClaimDispatch(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+            job.DeliveryAccepted(lease, "KM-JOB", DateTime.UtcNow);
+            job.ApplyCallback(new KmDocumentDeletionV2Callback(
+                "2.0", Guid.NewGuid(), "CSIT", job.Id, "KM-JOB", job.Resource, "Failed",
+                new KmDeletionTimestamps(null, null, DateTimeOffset.UtcNow), null,
+                new KmDeletionError("KM_FAILED", "Deletion failed.", false)), DateTime.UtcNow);
+        }
+        else if (state == "Dispatching")
+            job.ClaimDispatch(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+        else if (state == "Accepted")
+        {
+            var lease = job.ClaimDispatch(DateTime.UtcNow, TimeSpan.FromMinutes(1));
+            job.DeliveryAccepted(lease, "KM-JOB", DateTime.UtcNow);
+        }
+        else if (state == "Completed")
+        {
+            job.BeginLocalCleanup(DateTime.UtcNow);
+            job.MarkLocalCleanupCompleted(true, DateTime.UtcNow);
+        }
+
+        Assert.False(job.CanRecoverFailedHttp400());
+        Assert.Throws<InvalidOperationException>(() =>
+            job.RecoverFailedHttp400ForManualDispatch(DateTime.UtcNow));
+    }
+
     private static KmDeletionDispatchService Dispatcher(Factory factory,
         IKmDocumentDeletionV2Client adapter) => new(factory, new NoopCaseDeletionClient(),
         Options.Create(new KmDeletionOptions
@@ -434,6 +554,19 @@ public sealed class EquipmentFileKmDeletionTests
                 equipment, file, DateTime.UtcNow));
         await db.SaveChangesAsync();
         return id;
+    }
+
+    private static ApparatusFile NewEntityFile()
+    {
+        var id = Guid.NewGuid();
+        return new ApparatusFile
+        {
+            Id = id, ApparatusId = "EQ-ENTITY", FileName = "entity.pdf",
+            OriginalFileName = "entity.pdf", FilePath = "C:\\isolated",
+            ContentType = "application/pdf", FileSize = 1,
+            Sha256 = new string('a', 64), ArchiveStatus = FileArchiveStatuses.Archived,
+            ArchiveUpdatedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow
+        };
     }
 
     private static string NewRoot()

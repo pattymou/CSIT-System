@@ -18,7 +18,8 @@ $names = @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevMigrationReview.ps1'
     'Test-DevNasAccess.ps1', 'Migrate-DevFormalStorageToNas.ps1',
     'Set-DevNasCredential.ps1', 'Restart-DevCurrent.ps1',
     'Request-DevRuntimeMaintenance.ps1', 'Request-DevM2MTokenVerification.ps1',
-    'Request-DevKmOutboxDispatch.ps1', 'Request-DevKmOutboxRetry.ps1')
+    'Request-DevKmOutboxDispatch.ps1', 'Request-DevKmOutboxRetry.ps1',
+    'Request-DevEquipmentFileDeletionRecovery.ps1')
 $watchLock = $null
 $deployLock = $null
 $backupRoot = $null
