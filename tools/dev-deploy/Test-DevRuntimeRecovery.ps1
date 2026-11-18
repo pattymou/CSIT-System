@@ -1,6 +1,14 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'Restart-DevCurrent.ps1') -LoadFunctionsOnly
 
+$maintenanceRequestSource = Get-Content -LiteralPath `
+    (Join-Path $PSScriptRoot 'Request-DevRuntimeMaintenance.ps1') -Raw
+if ($maintenanceRequestSource -notmatch "\*S-1-5-19:\(R,D\)" -or
+    $maintenanceRequestSource -match "\*S-1-5-19:[^'\r\n]*[WFM]") {
+    throw 'LOCAL SERVICE must be able to read and consume, but not modify, a maintenance request.'
+}
+Write-Output 'PASS maintenance request ACL permits read and delete only'
+
 function Assert-Decision([string] $Name, [string] $Expected, [hashtable] $Case) {
     $defaults = @{
         CurrentValid=$true; DevListenerCount=0; ReleaseProcessCount=0;
