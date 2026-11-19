@@ -24,6 +24,7 @@ $reviewRoot = Join-Path $root 'migration-reviews'
 $secretFile = Join-Path $secretRoot 'runtime.json'
 $baseSettings = Join-Path $secretRoot 'base-appsettings.json'
 $currentFile = Join-Path $stateRoot 'current.json'
+$oidcAcceptanceFile = Join-Path $stateRoot 'oidc-acceptance.json'
 $hierarchyTransitionFile = Join-Path $stateRoot 'nas-business-hierarchy-transition.json'
 $localhostCert = '46BFDA36B073576B3116CB5E52D7ABE1FC595F2D'
 $publicCert = 'D4E5BA5E6D6252575BB8D0ADD3F2A98B279C503B'
@@ -32,6 +33,7 @@ $lock = $null
 $devRuntimeConnection = $null
 
 . (Join-Path $PSScriptRoot 'DevMigrationReview.ps1')
+. (Join-Path $PSScriptRoot 'DevOidcStructuralSmoke.ps1')
 
 function Assert-Within([string] $Path, [string] $Parent) {
     $parentPath = [IO.Path]::GetFullPath($Parent).TrimEnd('\') + '\'
@@ -155,6 +157,46 @@ ORDER BY category,name;
     }
 }
 
+function Assert-DevLogAcl {
+    $logs = Join-Path $root 'logs'
+    Assert-Within $logs $root
+    $acl = Get-Acl -LiteralPath $logs -ErrorAction Stop
+    $owner = ([Security.Principal.NTAccount]::new([string]$acl.Owner)).Translate(
+        [Security.Principal.SecurityIdentifier]).Value
+    $allowed = @('S-1-5-18','S-1-5-19','S-1-5-32-544')
+    if ($owner -ne 'S-1-5-32-544') { throw 'DEV diagnostic log owner is not approved.' }
+    foreach ($rule in $acl.Access) {
+        $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+        if ($sid -notin $allowed -or $rule.AccessControlType -ne 'Allow') {
+            throw 'DEV diagnostic log ACL permits an unapproved principal.'
+        }
+    }
+}
+
+function Invoke-DevLogRetention([string] $ActiveSha) {
+    Assert-DevLogAcl
+    $logs = Join-Path $root 'logs'
+    $now = (Get-Date).ToUniversalTime()
+    foreach ($file in @(Get-ChildItem -LiteralPath $logs -File -ErrorAction Stop)) {
+        $runtimeOld = $file.Name -match '^runtime-([0-9a-f]{8})-[0-9]{14}\.(stdout|stderr)\.log$' -and
+            $Matches[1] -ne $ActiveSha.Substring(0,8) -and
+            $file.LastWriteTimeUtc -lt $now.AddDays(-180)
+        $deployOld = $file.Name -match '^dev-ready-[0-9]{14}-[0-9a-f]{8}-[0-9]{14}\.log$' -and
+            $file.LastWriteTimeUtc -lt $now.AddDays(-365)
+        if ($runtimeOld -or $deployOld) { Remove-Item -LiteralPath $file.FullName -Force }
+    }
+}
+
+function Write-DevOidcAcceptance([string] $Commit, [int] $ProcessId) {
+    @{SchemaVersion=1; Sha=$Commit; Pid=$ProcessId;
+        CheckedAtUtc=(Get-Date).ToUniversalTime().ToString('o');
+        Deploy='Pass'; StructuralSmoke='Pass'; RealLogin='NotVerified';
+        RealLoginReason='NoApprovedAutomatedDevIdentity';
+        CallbackProxyEvidence='Unknown'} |
+        ConvertTo-Json | Set-Content -LiteralPath ($oidcAcceptanceFile + '.tmp') -Encoding UTF8
+    Move-Item -LiteralPath ($oidcAcceptanceFile + '.tmp') -Destination $oidcAcceptanceFile -Force
+}
+
 function Get-AppliedDevMigrations([string[]] $MigrationIds) {
     if ($null -eq $devRuntimeConnection -or $MigrationIds.Count -eq 0) {
         throw 'DEV_MIGRATION_REVIEW_INVALID: DEV migration verification is unavailable.'
@@ -237,6 +279,9 @@ function Assert-Smoke([string] $ExpectedSha) {
     $kmPids = @(Get-NetTCPConnection -State Listen -LocalPort 7444 -ErrorAction SilentlyContinue |
         Select-Object -ExpandProperty OwningProcess -Unique)
     if ($kmPids.Count -ne 1 -or $kmPids[0] -ne $devProcessId) { throw 'DEV 7444 is not served by the deployed process.' }
+    $oidcSettings = Get-Content -LiteralPath $secretFile -Raw | ConvertFrom-Json
+    Assert-DevOidcStructuralSmoke ([string]$oidcSettings.PSObject.Properties['SharedIdentity:Authority'].Value) `
+        ([string]$oidcSettings.PSObject.Properties['SharedIdentity:ClientId'].Value) $ExpectedSha
     Write-Output "DEV_SMOKE_PASS $ExpectedSha PID=$devProcessId"
 }
 
@@ -291,6 +336,7 @@ Assert-Within $reviewRoot $root
 $productionBefore = Get-ProductionPid
 Assert-ProductionUnchanged
 Assert-DevRuntimeConfig
+Assert-DevLogAcl
 
 $lockPath = Join-Path $stateRoot 'deploy.lock'
 try {
@@ -330,6 +376,7 @@ try {
         [string] ((Get-Content -LiteralPath $baselineFile -Raw | ConvertFrom-Json).Sha)
     }
     if ($previousSha -notmatch '^[0-9a-f]{40}$') { throw 'The previous DEV commit is unknown.' }
+    Invoke-DevLogRetention $previousSha
     $releasePath = Join-Path $releaseRoot $Sha
     Assert-Within $releasePath $releaseRoot
     $work = Join-Path $workRoot $Sha
@@ -401,6 +448,8 @@ try {
     }
     if ($current -and $current.Sha -eq $Sha -and -not $SimulateSmokeFailure -and -not $SimulateTestFailure) {
         Assert-Smoke $Sha
+        Write-DevOidcAcceptance $Sha (Get-DevPid)
+        Write-Output "DEPLOY_PASS $Sha"
         Write-Output "DEV_ALREADY_CURRENT $Sha"
         return
     }
@@ -414,6 +463,8 @@ try {
         if (-not $current -or -not $current.Path) {
             throw 'Current DEV process has no recoverable release manifest.'
         }
+        Assert-Smoke $previousSha
+        Write-Output "DEV_PREVIOUS_RUNTIME_HEALTHY $previousSha PID=$oldPid"
     }
     $oldRelease = if ($current) { [string] $current.Path } else { $null }
     if ($oldRelease) { Assert-Within $oldRelease $releaseRoot }
@@ -428,6 +479,8 @@ try {
             DllSha256=$release.DllSha256; DeployedAtUtc=(Get-Date).ToUniversalTime().ToString('o')} |
             ConvertTo-Json | Set-Content -LiteralPath ($currentFile + '.tmp') -Encoding UTF8
         Move-Item -LiteralPath ($currentFile + '.tmp') -Destination $currentFile -Force
+        Write-DevOidcAcceptance $Sha $candidatePid
+        Write-Output "DEPLOY_PASS $Sha"
         Write-Output "DEV_DEPLOY_SUCCESS $Sha PID=$candidatePid"
     } catch {
         $failure = $_.Exception.Message
@@ -441,6 +494,7 @@ try {
             $current.DeployedAtUtc = (Get-Date).ToUniversalTime().ToString('o')
             $current | ConvertTo-Json | Set-Content -LiteralPath ($currentFile + '.tmp') -Encoding UTF8
             Move-Item -LiteralPath ($currentFile + '.tmp') -Destination $currentFile -Force
+            Write-DevOidcAcceptance ([string] $current.Sha) $rollbackPid
             Write-Output "DEV_ROLLBACK_PASS $($current.Sha) PID=$rollbackPid"
         } elseif ($hierarchyTransition) {
             Write-Output 'DEV_HIERARCHY_DEPLOYMENT_ROLLBACK_REQUIRED: incompatible old runtime was not restarted.'

@@ -6,15 +6,21 @@ using SIT.DepartmentSystem.Web.Models;
 
 namespace SIT.DepartmentSystem.Web.Services;
 
+public sealed record SharedIdentityMappingResult(ClaimsPrincipal? Principal, string Kind);
+
 public sealed class SharedIdentityClaimsAdapter(IDbContextFactory<AppDbContext> dbFactory,
     ILogger<SharedIdentityClaimsAdapter> logger)
 {
     public async Task<ClaimsPrincipal?> MapAsync(ClaimsPrincipal external, CancellationToken cancellationToken)
+        => (await MapWithResultAsync(external, cancellationToken)).Principal;
+
+    public async Task<SharedIdentityMappingResult> MapWithResultAsync(
+        ClaimsPrincipal external, CancellationToken cancellationToken)
     {
         if (!Guid.TryParse(external.FindFirstValue("sub"), out var subject) ||
             !long.TryParse(external.FindFirstValue("security_version"), out var securityVersion) ||
             !long.TryParse(external.FindFirstValue("authorization_version"), out var authorizationVersion))
-            return null;
+            return new(null, "RequiredClaims");
         var account = external.FindFirstValue("account")?.Trim().ToLowerInvariant();
         var displayName = external.FindFirstValue("name")?.Trim();
         var department = external.FindFirstValue("department")?.Trim();
@@ -23,13 +29,14 @@ public sealed class SharedIdentityClaimsAdapter(IDbContextFactory<AppDbContext> 
         var roles = (external.FindFirstValue("csit_roles") ?? string.Empty).Split(' ',
             StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
         if (string.IsNullOrWhiteSpace(account) || string.IsNullOrWhiteSpace(displayName) ||
-            string.IsNullOrWhiteSpace(department) || string.IsNullOrWhiteSpace(email) || email.Length > 200 ||
-            dataAccessLevel is not (SystemAuthorization.DataAccessLevels.ReadOnly or
+            string.IsNullOrWhiteSpace(department) || string.IsNullOrWhiteSpace(email) || email.Length > 200)
+            return new(null, "ProfileClaims");
+        if (dataAccessLevel is not (SystemAuthorization.DataAccessLevels.ReadOnly or
                 SystemAuthorization.DataAccessLevels.Editor) ||
             roles.Contains("RdApplicant") == roles.Contains("CsitStaff") ||
             (roles.Contains("Admin") && !roles.Contains("CsitStaff")) ||
             roles.Except(["RdApplicant", "CsitStaff", "Admin"]).Any())
-            return null;
+            return new(null, "AccessClaims");
 
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
         var byId = await db.Users.SingleOrDefaultAsync(x => x.IdentityUserId == subject, cancellationToken);
@@ -37,16 +44,16 @@ public sealed class SharedIdentityClaimsAdapter(IDbContextFactory<AppDbContext> 
             .OrderBy(x => x.Id).Take(2).ToListAsync(cancellationToken);
         if (accountMatches.Count > 1)
         {
-            logger.LogError("Shared Identity duplicate CSIT accounts for subject {Subject}", subject);
-            return null;
+            logger.LogError("Shared Identity duplicate CSIT accounts during OIDC mapping.");
+            return new(null, "DuplicateAccount");
         }
         var byAccount = accountMatches.SingleOrDefault();
         if ((byId is not null && !string.Equals(byId.Account, account, StringComparison.Ordinal)) ||
             (byId is not null && byAccount is not null && byId.Id != byAccount.Id) ||
             (byAccount?.IdentityUserId is Guid existingId && existingId != subject))
         {
-            logger.LogError("Shared Identity account mapping conflict for subject {Subject}", subject);
-            return null;
+            logger.LogError("Shared Identity account binding conflict during OIDC mapping.");
+            return new(null, "BindingConflict");
         }
 
         var user = byId ?? byAccount;
@@ -66,10 +73,10 @@ public sealed class SharedIdentityClaimsAdapter(IDbContextFactory<AppDbContext> 
         {
             await db.SaveChangesAsync(cancellationToken);
         }
-        catch (DbUpdateException ex)
+        catch (DbUpdateException)
         {
-            logger.LogError(ex, "Shared Identity account mapping could not be saved for subject {Subject}", subject);
-            return null;
+            logger.LogError("Shared Identity account mapping could not be saved.");
+            return new(null, "Persistence");
         }
 
         var claims = new List<Claim>
@@ -87,6 +94,7 @@ public sealed class SharedIdentityClaimsAdapter(IDbContextFactory<AppDbContext> 
                 roles.Contains("CsitStaff") ? SystemAuthorization.AccessScopes.CsitStaff
                                             : SystemAuthorization.AccessScopes.RdApplicant)
         };
-        return new ClaimsPrincipal(new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme));
+        return new(new ClaimsPrincipal(new ClaimsIdentity(claims,
+            CookieAuthenticationDefaults.AuthenticationScheme)), "Accepted");
     }
 }

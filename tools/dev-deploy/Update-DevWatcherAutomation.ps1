@@ -13,7 +13,8 @@ $currentFile = Join-Path $stateRoot 'current.json'
 $transitionFile = Join-Path $stateRoot 'nas-business-hierarchy-transition.json'
 $branch = 'feature/km-stage-integration'
 $taskName = 'CSIT DEV Ready Watcher'
-$names = @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevMigrationReview.ps1',
+$names = @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevOidcStructuralSmoke.ps1',
+    'DevMigrationReview.ps1',
     'Approve-DevMigrationReview.ps1', 'Initialize-DevManagedAssetStorage.ps1',
     'Test-DevNasAccess.ps1', 'Migrate-DevFormalStorageToNas.ps1',
     'Set-DevNasCredential.ps1', 'Restart-DevCurrent.ps1',

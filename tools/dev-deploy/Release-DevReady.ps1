@@ -12,6 +12,15 @@ $sha = (git rev-parse HEAD).Trim()
 if ($sha -notmatch '^[0-9a-f]{40}$') { throw 'Invalid HEAD.' }
 $remoteHead = ((git ls-remote origin "refs/heads/$branch") -split '\s+')[0]
 if ($LASTEXITCODE -ne 0 -or $remoteHead -ne $sha) { throw 'Push the tested commit to the DEV branch first.' }
+foreach ($name in @('Watch-DevReady.ps1','Deploy-DevReady.ps1','DevOidcStructuralSmoke.ps1')) {
+    $source = Join-Path $PSScriptRoot $name
+    $installed = Join-Path $root ('automation\' + $name)
+    if (-not (Test-Path -LiteralPath $installed) -or
+        (Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne
+        (Get-FileHash -LiteralPath $installed -Algorithm SHA256).Hash) {
+        throw 'The protected DEV watcher automation does not match this reviewed release.'
+    }
+}
 
 $work = Join-Path $workRoot ("ready-gate-" + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $workRoot -Force | Out-Null

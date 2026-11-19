@@ -1,5 +1,4 @@
 using Microsoft.AspNetCore.Authentication.Cookies;
-using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Authorization;
@@ -11,7 +10,6 @@ using SIT.DepartmentSystem.Web.Services.Implementations;
 using SIT.DepartmentSystem.Web.Services.Interfaces;
 using SIT.DepartmentSystem.Web.Services.Approval;
 using SIT.DepartmentSystem.Web.Models.Config;
-using Microsoft.IdentityModel.Tokens;
 using Microsoft.AspNetCore.Authentication;
 using SIT.DepartmentSystem.Web.Services.KmIntegration;
 using OpenIddict.Validation.AspNetCore;
@@ -19,19 +17,6 @@ using SIT.DepartmentSystem.Web.Services.ValidationRequests;
 using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using SIT.DepartmentSystem.Web.Services.LoadTesting;
-
-static string ClassifyOidcFailure(Exception? exception)
-{
-    var message = exception?.GetBaseException().Message ?? string.Empty;
-    if (message.Contains("correlation", StringComparison.OrdinalIgnoreCase)) return "Correlation";
-    if (message.Contains("nonce", StringComparison.OrdinalIgnoreCase)) return "Nonce";
-    if (message.Contains("state", StringComparison.OrdinalIgnoreCase)) return "State";
-    if (message.Contains("access_denied", StringComparison.OrdinalIgnoreCase)) return "AuthorizationDenied";
-    if (message.Contains("invalid_client", StringComparison.OrdinalIgnoreCase)) return "ClientRejected";
-    if (message.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase)) return "CodeRejected";
-    if (exception?.GetBaseException() is HttpRequestException) return "Transport";
-    return "Other";
-}
 
 var builder = WebApplication.CreateBuilder(args);
 var verifyKmM2MToken = args.Contains("--verify-km-m2m-token", StringComparer.Ordinal);
@@ -103,9 +88,10 @@ if (builder.Environment.IsDevelopment())
         });
     }
 }
-builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication.OpenIdConnect", LogLevel.Warning);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Authentication.OpenIdConnect", LogLevel.None);
+builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting.Diagnostics", LogLevel.Warning);
 builder.Logging.AddFilter("Microsoft.EntityFrameworkCore.Database.Command", LogLevel.Warning);
-builder.Logging.AddFilter("System.Net.Http.HttpClient.SharedIdentitySessionValidator", LogLevel.Warning);
+builder.Logging.AddFilter("System.Net.Http.HttpClient.SharedIdentitySessionValidator", LogLevel.None);
 if (builder.Environment.IsDevelopment())
 {
     builder.Services.Configure<ForwardedHeadersOptions>(options =>
@@ -192,101 +178,7 @@ if (useSharedIdentity)
     builder.Services.AddHttpClient<SharedIdentitySessionValidator>(http => http.Timeout = TimeSpan.FromSeconds(5));
     authentication.AddOpenIdConnect("oidc", options =>
     {
-        options.Authority = authority;
-        options.ClientId = clientId;
-        options.ClientSecret = clientSecret;
-        options.ResponseType = "code";
-        options.UsePkce = true;
-        options.RequireHttpsMetadata = true;
-        options.CallbackPath = "/signin-oidc";
-        options.SignInScheme = CookieAuthenticationDefaults.AuthenticationScheme;
-        options.SaveTokens = false;
-        options.MapInboundClaims = false;
-        options.Scope.Clear();
-        options.Scope.Add("openid");
-        options.Scope.Add("profile");
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidAudience = clientId
-        };
-        options.Events = new OpenIdConnectEvents
-        {
-            OnMessageReceived = context =>
-            {
-                context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
-                    .CreateLogger("CSIT.Oidc")
-                    .LogInformation("OIDC callback received. RequestId={RequestId} Method={Method}",
-                        context.HttpContext.TraceIdentifier, context.Request.Method);
-                return Task.CompletedTask;
-            },
-            OnAuthorizationCodeReceived = context =>
-            {
-                context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
-                    .CreateLogger("CSIT.Oidc")
-                    .LogInformation("OIDC authorization code accepted for exchange. RequestId={RequestId}",
-                        context.HttpContext.TraceIdentifier);
-                return Task.CompletedTask;
-            },
-            OnTokenResponseReceived = context =>
-            {
-                context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
-                    .CreateLogger("CSIT.Oidc")
-                    .LogInformation("OIDC token response received. RequestId={RequestId}",
-                        context.HttpContext.TraceIdentifier);
-                return Task.CompletedTask;
-            },
-            OnTokenValidated = async context =>
-            {
-                var oidcLogger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
-                    .CreateLogger("CSIT.Oidc");
-                oidcLogger.LogInformation("OIDC ID token validated. RequestId={RequestId}",
-                    context.HttpContext.TraceIdentifier);
-                var adapter = context.HttpContext.RequestServices.GetRequiredService<SharedIdentityClaimsAdapter>();
-                var mapped = context.Principal is null ? null :
-                    await adapter.MapAsync(context.Principal, context.HttpContext.RequestAborted);
-                if (mapped is null)
-                {
-                    oidcLogger.LogWarning("OIDC CSIT claims mapping rejected. RequestId={RequestId}",
-                        context.HttpContext.TraceIdentifier);
-                    context.Fail("Shared Identity account or CSIT access rejected.");
-                }
-                else
-                {
-                    oidcLogger.LogInformation("OIDC CSIT claims mapping succeeded. RequestId={RequestId}",
-                        context.HttpContext.TraceIdentifier);
-                    context.Principal = mapped;
-                    if (context.Properties?.RedirectUri == "/home" &&
-                        mapped.HasClaim(SystemAuthorization.AccessScopeClaim,
-                            SystemAuthorization.AccessScopes.RdApplicant))
-                        context.Properties.RedirectUri = "/rd";
-                }
-            },
-            OnRemoteFailure = context =>
-            {
-                context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
-                    .CreateLogger("CSIT.Oidc")
-                    .LogWarning("OIDC remote failure. RequestId={RequestId} Kind={Kind} ExceptionType={ExceptionType}",
-                        context.HttpContext.TraceIdentifier, ClassifyOidcFailure(context.Failure),
-                        context.Failure?.GetType().Name ?? "None");
-                context.HandleResponse();
-                context.Response.Redirect("/signin?error=1");
-                return Task.CompletedTask;
-            },
-            OnAuthenticationFailed = context =>
-            {
-                context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
-                    .CreateLogger("CSIT.Oidc")
-                    .LogWarning("OIDC authentication failure. RequestId={RequestId} Kind={Kind} ExceptionType={ExceptionType}",
-                        context.HttpContext.TraceIdentifier, ClassifyOidcFailure(context.Exception),
-                        context.Exception.GetType().Name);
-                context.HandleResponse();
-                context.Response.Redirect("/signin?error=1");
-                return Task.CompletedTask;
-            }
-        };
+        SharedIdentityOidcConfiguration.Apply(options, authority, clientId, clientSecret);
     });
 }
 
@@ -652,6 +544,27 @@ app.Use(async (context, next) =>
     await next();
 });
 
+if (useSharedIdentity)
+{
+    app.Use(async (context, next) =>
+    {
+        var callback = context.Request.Path.Equals("/signin-oidc", StringComparison.OrdinalIgnoreCase);
+        var landing = context.Request.Method == "GET" &&
+            (context.Request.Path.Equals("/home", StringComparison.OrdinalIgnoreCase) ||
+             context.Request.Path.Equals("/rd", StringComparison.OrdinalIgnoreCase));
+        if (callback)
+            OidcDiagnostics.Write(context, "CallbackIngress", state:
+                OidcDiagnostics.HasState(context.Request), correlation:
+                OidcDiagnostics.HasCorrelation(context.Request), nonce:
+                OidcDiagnostics.HasNonce(context.Request));
+        await next();
+        if (landing)
+            OidcDiagnostics.Write(context, "ProtectedPage", context.User.Identity?.IsAuthenticated == true
+                ? "Authenticated" : "Unauthenticated",
+                flow: context.Items[OidcDiagnostics.RequestFlowKey] as string ?? "Unknown",
+                status: context.Response.StatusCode);
+    });
+}
 app.UseAuthentication();
 app.UseAuthorization();
 

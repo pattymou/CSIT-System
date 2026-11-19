@@ -58,7 +58,8 @@ foreach ($thumbprint in @('46BFDA36B073576B3116CB5E52D7ABE1FC595F2D',
 }
 
 $scriptRoot = $PSScriptRoot
-foreach ($name in @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevMigrationReview.ps1',
+  foreach ($name in @('Watch-DevReady.ps1', 'Deploy-DevReady.ps1', 'DevOidcStructuralSmoke.ps1',
+        'DevMigrationReview.ps1',
         'Approve-DevMigrationReview.ps1', 'Initialize-DevManagedAssetStorage.ps1',
         'Test-DevNasAccess.ps1', 'Migrate-DevFormalStorageToNas.ps1',
         'Set-DevNasCredential.ps1',
