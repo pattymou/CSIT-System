@@ -20,6 +20,19 @@ using System.Net;
 using System.Security.Cryptography.X509Certificates;
 using SIT.DepartmentSystem.Web.Services.LoadTesting;
 
+static string ClassifyOidcFailure(Exception? exception)
+{
+    var message = exception?.GetBaseException().Message ?? string.Empty;
+    if (message.Contains("correlation", StringComparison.OrdinalIgnoreCase)) return "Correlation";
+    if (message.Contains("nonce", StringComparison.OrdinalIgnoreCase)) return "Nonce";
+    if (message.Contains("state", StringComparison.OrdinalIgnoreCase)) return "State";
+    if (message.Contains("access_denied", StringComparison.OrdinalIgnoreCase)) return "AuthorizationDenied";
+    if (message.Contains("invalid_client", StringComparison.OrdinalIgnoreCase)) return "ClientRejected";
+    if (message.Contains("invalid_grant", StringComparison.OrdinalIgnoreCase)) return "CodeRejected";
+    if (exception?.GetBaseException() is HttpRequestException) return "Transport";
+    return "Other";
+}
+
 var builder = WebApplication.CreateBuilder(args);
 var verifyKmM2MToken = args.Contains("--verify-km-m2m-token", StringComparer.Ordinal);
 var dispatchKmOutboxEvent = args.Contains("--dispatch-km-outbox-event", StringComparer.Ordinal);
@@ -201,14 +214,49 @@ if (useSharedIdentity)
         };
         options.Events = new OpenIdConnectEvents
         {
+            OnMessageReceived = context =>
+            {
+                context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("CSIT.Oidc")
+                    .LogInformation("OIDC callback received. RequestId={RequestId} Method={Method}",
+                        context.HttpContext.TraceIdentifier, context.Request.Method);
+                return Task.CompletedTask;
+            },
+            OnAuthorizationCodeReceived = context =>
+            {
+                context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("CSIT.Oidc")
+                    .LogInformation("OIDC authorization code accepted for exchange. RequestId={RequestId}",
+                        context.HttpContext.TraceIdentifier);
+                return Task.CompletedTask;
+            },
+            OnTokenResponseReceived = context =>
+            {
+                context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("CSIT.Oidc")
+                    .LogInformation("OIDC token response received. RequestId={RequestId}",
+                        context.HttpContext.TraceIdentifier);
+                return Task.CompletedTask;
+            },
             OnTokenValidated = async context =>
             {
+                var oidcLogger = context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("CSIT.Oidc");
+                oidcLogger.LogInformation("OIDC ID token validated. RequestId={RequestId}",
+                    context.HttpContext.TraceIdentifier);
                 var adapter = context.HttpContext.RequestServices.GetRequiredService<SharedIdentityClaimsAdapter>();
                 var mapped = context.Principal is null ? null :
                     await adapter.MapAsync(context.Principal, context.HttpContext.RequestAborted);
-                if (mapped is null) context.Fail("Shared Identity account or CSIT access rejected.");
+                if (mapped is null)
+                {
+                    oidcLogger.LogWarning("OIDC CSIT claims mapping rejected. RequestId={RequestId}",
+                        context.HttpContext.TraceIdentifier);
+                    context.Fail("Shared Identity account or CSIT access rejected.");
+                }
                 else
                 {
+                    oidcLogger.LogInformation("OIDC CSIT claims mapping succeeded. RequestId={RequestId}",
+                        context.HttpContext.TraceIdentifier);
                     context.Principal = mapped;
                     if (context.Properties?.RedirectUri == "/home" &&
                         mapped.HasClaim(SystemAuthorization.AccessScopeClaim,
@@ -218,12 +266,22 @@ if (useSharedIdentity)
             },
             OnRemoteFailure = context =>
             {
+                context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("CSIT.Oidc")
+                    .LogWarning("OIDC remote failure. RequestId={RequestId} Kind={Kind} ExceptionType={ExceptionType}",
+                        context.HttpContext.TraceIdentifier, ClassifyOidcFailure(context.Failure),
+                        context.Failure?.GetType().Name ?? "None");
                 context.HandleResponse();
                 context.Response.Redirect("/signin?error=1");
                 return Task.CompletedTask;
             },
             OnAuthenticationFailed = context =>
             {
+                context.HttpContext.RequestServices.GetRequiredService<ILoggerFactory>()
+                    .CreateLogger("CSIT.Oidc")
+                    .LogWarning("OIDC authentication failure. RequestId={RequestId} Kind={Kind} ExceptionType={ExceptionType}",
+                        context.HttpContext.TraceIdentifier, ClassifyOidcFailure(context.Exception),
+                        context.Exception.GetType().Name);
                 context.HandleResponse();
                 context.Response.Redirect("/signin?error=1");
                 return Task.CompletedTask;
