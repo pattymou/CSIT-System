@@ -135,7 +135,18 @@ public sealed class VendorFileDeletionService(AppDbContext db,
                 x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile &&
                 x.SourceEntityId == file.Id).ToListAsync(cancellationToken);
-            db.KmIntegrationOutbox.RemoveRange(outboxes);
+            var outboxIds = outboxes.Select(x => x.Id).ToArray();
+            var auditedOutboxIds = outboxIds.Length == 0
+                ? []
+                : await db.KmAnalysisCallbackReceipts
+                    .Where(x => outboxIds.Contains(x.OutboxId))
+                    .Select(x => x.OutboxId)
+                    .Union(db.KmDocumentAnalysisResults
+                        .Where(x => outboxIds.Contains(x.OutboxId))
+                        .Select(x => x.OutboxId))
+                    .ToHashSetAsync(cancellationToken);
+            db.KmIntegrationOutbox.RemoveRange(
+                outboxes.Where(x => !auditedOutboxIds.Contains(x.Id)));
             db.VendorFiles.Remove(file);
             job.MarkLocalCleanupCompleted(moved || !File.Exists(fullPath), DateTime.UtcNow);
             await db.SaveChangesAsync(cancellationToken);

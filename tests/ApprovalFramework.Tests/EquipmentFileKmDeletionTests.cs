@@ -85,6 +85,102 @@ public sealed class EquipmentFileKmDeletionTests
                     x.ApparatusFileId == leased)).Status);
             Assert.Single(await verify.KmDocumentDeletionV2Callbacks.Where(x =>
                 x.DeletionRequestId == request.DeletionRequestId).ToListAsync());
+
+            var audited = await SeedSentFileAsync(factory, root, "audited.pdf",
+                "application/pdf", "EQ-PG-AUDITED",
+                "EBA1F6012F871D86F78B4C95E1A5803842D7BC7F0E8CF82B66D261C5285452F8");
+            var sibling = await SeedSentFileAsync(factory, root, "sibling.pdf",
+                "application/pdf", "EQ-PG-SIBLING");
+            Guid auditedOutboxId;
+            await using (var db = factory.CreateDbContext())
+            {
+                var outbox = await db.KmIntegrationOutbox.SingleAsync(x =>
+                    x.SourceEntityId == audited);
+                auditedOutboxId = outbox.Id;
+                var now = DateTime.UtcNow;
+                outbox.CallbackProcessing(now);
+                outbox.CallbackCompleted(now);
+                var analysisCallbackId = Guid.NewGuid();
+                db.KmAnalysisCallbackReceipts.AddRange(
+                    new KmAnalysisCallbackReceipt
+                    {
+                        CallbackId = Guid.NewGuid(),
+                        OutboxId = outbox.Id,
+                        Endpoint = "document-jobs/status",
+                        Status = "Processing",
+                        PayloadSha256 = new string('1', 64),
+                        ReceivedAt = now.AddSeconds(-2)
+                    },
+                    new KmAnalysisCallbackReceipt
+                    {
+                        CallbackId = analysisCallbackId,
+                        OutboxId = outbox.Id,
+                        Endpoint = "document-jobs/status",
+                        Status = "Completed",
+                        PayloadSha256 = new string('2', 64),
+                        ReceivedAt = now
+                    });
+                db.KmDocumentAnalysisResults.Add(KmDocumentAnalysisResult.Create(
+                    Guid.NewGuid(), analysisCallbackId, outbox,
+                    KmAnalysisSourceTypes.EquipmentAttachment, audited, audited, 1,
+                    outbox.Id, outbox.KmJobId!, new string('e', 64),
+                    "2.0", """{"summary":"pg-audited"}""", now, now, now, 1,
+                    new string('2', 64)));
+                await db.SaveChangesAsync();
+
+                var requested = await new EquipmentFileDeletionService(db)
+                    .RequestAsync(audited, "pg-test");
+                Assert.False(requested!.CompletedLocally);
+            }
+
+            Assert.Equal(1, await Dispatcher(factory, adapter).ProcessBatchAsync());
+            var auditedRequest = adapter.Requests.Last();
+            await using (var simulateFailureDb = factory.CreateDbContext())
+            {
+                var job = await simulateFailureDb.EquipmentFileDeletionJobs.SingleAsync(x =>
+                    x.Id == auditedRequest.DeletionRequestId);
+                var lowerCallback = Completed(
+                    auditedRequest with
+                    {
+                        Resource = auditedRequest.Resource with
+                        {
+                            Sha256 = auditedRequest.Resource.Sha256.ToLowerInvariant()
+                        }
+                    },
+                    adapter.JobId(auditedRequest.DeletionRequestId));
+                job.ApplyCallback(lowerCallback, DateTime.UtcNow);
+                job.BeginLocalCleanup(DateTime.UtcNow);
+                job.MarkCleanupFailed("LOCAL_DB_CLEANUP_FAILED",
+                    "本地清理資料更新失敗，等待安全重試。", DateTime.UtcNow);
+                await simulateFailureDb.SaveChangesAsync();
+            }
+
+            await using (var cleanupDb = factory.CreateDbContext())
+            {
+                Assert.True(await new EquipmentFileDeletionService(cleanupDb)
+                    .TryCompleteLocalCleanupAsync(auditedRequest.DeletionRequestId));
+            }
+
+            await using var verifyAudited = factory.CreateDbContext();
+            var completedAuditedJob = await verifyAudited.EquipmentFileDeletionJobs
+                .SingleAsync(x => x.Id == auditedRequest.DeletionRequestId);
+            Assert.Equal(EquipmentFileDeletionStatuses.Completed, completedAuditedJob.Status);
+            Assert.Null(completedAuditedJob.LastErrorCode);
+            Assert.NotNull(completedAuditedJob.DbRecordDeletedAt);
+            Assert.NotNull(completedAuditedJob.PhysicalFileDeletedAt);
+            Assert.NotNull(completedAuditedJob.CompletedAt);
+            Assert.False(await verifyAudited.ApparatusFiles.AnyAsync(x => x.Id == audited));
+            Assert.False(File.Exists(Path.Combine(root, "audited.pdf")));
+            Assert.Empty(Directory.GetFiles(root, "audited.pdf.csit-delete-*"));
+            var retainedOutbox = await verifyAudited.KmIntegrationOutbox
+                .SingleAsync(x => x.Id == auditedOutboxId);
+            Assert.Equal(KmIntegrationStatus.Completed, retainedOutbox.Status);
+            Assert.Equal(2, await verifyAudited.KmAnalysisCallbackReceipts
+                .CountAsync(x => x.OutboxId == auditedOutboxId));
+            Assert.Single(await verifyAudited.KmDocumentAnalysisResults
+                .Where(x => x.OutboxId == auditedOutboxId).ToListAsync());
+            Assert.True(await verifyAudited.ApparatusFiles.AnyAsync(x => x.Id == sibling));
+            Assert.True(File.Exists(Path.Combine(root, "sibling.pdf")));
         }
         finally { Directory.Delete(root, true); }
     }
@@ -592,6 +688,103 @@ public sealed class EquipmentFileKmDeletionTests
             Assert.False(File.Exists(Path.Combine(root, "case-sha.pdf")));
             Assert.Equal(2, await verify.KmDocumentDeletionV2Callbacks.CountAsync(x =>
                 x.DeletionRequestId == request.DeletionRequestId));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
+    public async Task AuditedOutboxIsRetainedOnLocalCleanup_UnauditedOutboxIsRemoved_AndCleanupFailedCanRecover()
+    {
+        var factory = new Factory();
+        var root = NewRoot();
+        try
+        {
+            var auditedFileId = await SeedSentFileAsync(factory, root, "audited-eq.pdf",
+                "application/pdf", "EQ-AUDITED");
+            var unauditedFileId = await SeedSentFileAsync(factory, root, "unaudited-eq.pdf",
+                "application/pdf", "EQ-UNAUDITED");
+            var siblingFileId = await SeedSentFileAsync(factory, root, "sibling-eq.pdf",
+                "application/pdf", "EQ-SIBLING");
+
+            Guid auditedOutboxId;
+            await using (var db = factory.CreateDbContext())
+            {
+                var outbox = await db.KmIntegrationOutbox.SingleAsync(x =>
+                    x.SourceEntityId == auditedFileId);
+                auditedOutboxId = outbox.Id;
+                var now = DateTime.UtcNow;
+                outbox.CallbackProcessing(now);
+                outbox.CallbackCompleted(now);
+                var callbackId = Guid.NewGuid();
+                db.KmAnalysisCallbackReceipts.Add(new KmAnalysisCallbackReceipt
+                {
+                    CallbackId = callbackId,
+                    OutboxId = outbox.Id,
+                    Endpoint = "document-jobs/status",
+                    Status = "Completed",
+                    PayloadSha256 = new string('c', 64),
+                    ReceivedAt = now
+                });
+                db.KmDocumentAnalysisResults.Add(KmDocumentAnalysisResult.Create(
+                    Guid.NewGuid(), callbackId, outbox,
+                    KmAnalysisSourceTypes.EquipmentAttachment, auditedFileId, auditedFileId, 1,
+                    outbox.Id, outbox.KmJobId!, new string('a', 64),
+                    "2.0", """{"summary":"audited"}""", now, now, now, 1,
+                    new string('c', 64)));
+                await db.SaveChangesAsync();
+
+                await new EquipmentFileDeletionService(db).RequestAsync(auditedFileId, "admin");
+                await new EquipmentFileDeletionService(db).RequestAsync(unauditedFileId, "admin");
+            }
+
+            var adapter = new MockEquipmentDeletionApi();
+            Assert.Equal(2, await Dispatcher(factory, adapter).ProcessBatchAsync());
+            var auditedRequest = adapter.Requests.Single(x => x.Resource.SourceEntityId == auditedFileId);
+            var unauditedRequest = adapter.Requests.Single(x => x.Resource.SourceEntityId == unauditedFileId);
+
+            var callbacks = new KmDocumentDeletionV2CallbackService(factory);
+            Assert.Equal(KmDeletionCallbackOutcome.Accepted,
+                await callbacks.ApplyAsync(Completed(unauditedRequest,
+                    adapter.JobId(unauditedRequest.DeletionRequestId))));
+
+            var completedAuditedCallback = Completed(auditedRequest,
+                adapter.JobId(auditedRequest.DeletionRequestId));
+            await using (var failDb = factory.CreateDbContext())
+            {
+                var job = await failDb.EquipmentFileDeletionJobs.SingleAsync(x =>
+                    x.Id == auditedRequest.DeletionRequestId);
+                job.ApplyCallback(completedAuditedCallback, DateTime.UtcNow);
+                job.BeginLocalCleanup(DateTime.UtcNow);
+                job.MarkCleanupFailed("LOCAL_DB_CLEANUP_FAILED",
+                    "本地清理資料更新失敗，等待安全重試。", DateTime.UtcNow);
+                await failDb.SaveChangesAsync();
+            }
+
+            await using (var recoverDb = factory.CreateDbContext())
+            {
+                var recovered = await new EquipmentFileDeletionService(recoverDb)
+                    .RequestAsync(auditedFileId, "admin");
+                Assert.NotNull(recovered);
+                Assert.True(recovered!.CompletedLocally);
+                Assert.Equal(EquipmentFileDeletionStatuses.Completed, recovered.Status);
+            }
+
+            await using var verify = factory.CreateDbContext();
+            Assert.False(await verify.ApparatusFiles.AnyAsync(x =>
+                x.Id == auditedFileId || x.Id == unauditedFileId));
+            Assert.True(await verify.ApparatusFiles.AnyAsync(x => x.Id == siblingFileId));
+            Assert.False(File.Exists(Path.Combine(root, "audited-eq.pdf")));
+            Assert.False(File.Exists(Path.Combine(root, "unaudited-eq.pdf")));
+            Assert.True(File.Exists(Path.Combine(root, "sibling-eq.pdf")));
+            Assert.False(await verify.KmIntegrationOutbox.AnyAsync(x =>
+                x.SourceEntityId == unauditedFileId));
+            var retainedOutbox = await verify.KmIntegrationOutbox.SingleAsync(x =>
+                x.Id == auditedOutboxId);
+            Assert.Equal(KmIntegrationStatus.Completed, retainedOutbox.Status);
+            Assert.Single(await verify.KmAnalysisCallbackReceipts
+                .Where(x => x.OutboxId == auditedOutboxId).ToListAsync());
+            Assert.Single(await verify.KmDocumentAnalysisResults
+                .Where(x => x.OutboxId == auditedOutboxId).ToListAsync());
         }
         finally { Directory.Delete(root, true); }
     }

@@ -54,9 +54,90 @@ public sealed class VendorAttachmentLifecycleTests
             await new KmDocumentDeletionV2CallbackService(factory).ApplyAsync(callback));
         await using var verify = factory.CreateDbContext();
         Assert.False(await verify.VendorFiles.AnyAsync(x => x.Id == file.Id));
+        Assert.False(await verify.KmIntegrationOutbox.AnyAsync(x => x.SourceEntityId == file.Id));
         Assert.Equal(VendorFileDeletionStatuses.Completed,
             (await verify.VendorFileDeletionJobs.SingleAsync(x =>
                 x.VendorFileId == file.Id)).Status);
+
+        var auditedFile = Seed(factory, "task-d-vendor-audited.pdf", "application/pdf");
+        var siblingFile = Seed(factory, "task-d-vendor-sibling.pdf", "application/pdf");
+        Guid auditedOutboxId;
+        await using (var db = factory.CreateDbContext())
+        {
+            var outbox = await db.KmIntegrationOutbox.SingleAsync(x =>
+                x.SourceEntityId == auditedFile.Id);
+            auditedOutboxId = outbox.Id;
+            var lease = Guid.NewGuid();
+            var at = DateTime.UtcNow;
+            outbox.Claim(lease, at, TimeSpan.FromMinutes(1));
+            outbox.Sent(lease, "KM-PG-INGEST-AUDITED", at);
+            outbox.CallbackProcessing(at);
+            outbox.CallbackCompleted(at);
+            var analysisCallbackId = Guid.NewGuid();
+            db.KmAnalysisCallbackReceipts.Add(new KmAnalysisCallbackReceipt
+            {
+                CallbackId = analysisCallbackId,
+                OutboxId = outbox.Id,
+                Endpoint = "document-jobs/status",
+                Status = "Completed",
+                PayloadSha256 = new string('d', 64),
+                ReceivedAt = at
+            });
+            db.KmDocumentAnalysisResults.Add(KmDocumentAnalysisResult.Create(
+                Guid.NewGuid(), analysisCallbackId, outbox,
+                KmAnalysisSourceTypes.VendorFile, auditedFile.Id, auditedFile.Id, 1,
+                outbox.Id, outbox.KmJobId!, auditedFile.Sha256!,
+                "2.0", """{"summary":"vendor-pg-audited"}""", at, at, at, 1,
+                new string('d', 64)));
+            await db.SaveChangesAsync();
+
+            Assert.Equal(VendorFileDeletionStatuses.Pending,
+                (await new VendorFileDeletionService(db)
+                    .RequestAsync(auditedFile.Id, "pg-test"))!.Status);
+        }
+
+        var auditedApi = new VendorDeletionApi("KM-VENDOR-DELETE-2");
+        Assert.Equal(1, await DeletionDispatcher(factory, auditedApi).ProcessBatchAsync());
+        var auditedRequest = Assert.Single(auditedApi.Requests);
+        var auditedCallback = new KmDocumentDeletionV2Callback("2.0", Guid.NewGuid(), "CSIT",
+            auditedRequest.DeletionRequestId, auditedApi.JobId,
+            auditedRequest.Resource with
+            {
+                Sha256 = auditedRequest.Resource.Sha256.ToLowerInvariant()
+            },
+            "Completed",
+            new KmDeletionTimestamps(now, now.AddSeconds(2), null),
+            new KmDeletionResult(true, now.AddSeconds(1), new KmDeletionCleanup(
+                "Deleted", "Deleted", "NotPresent", "Deleted", "Deleted", "Deleted",
+                "Deleted")), null);
+        Assert.Equal(KmDeletionCallbackOutcome.Accepted,
+            await new KmDocumentDeletionV2CallbackService(factory).ApplyAsync(auditedCallback));
+
+        var mockClient = new VendorMockKmClient();
+        await using (var db = factory.CreateDbContext())
+        {
+            var siblingOutbox = await db.KmIntegrationOutbox.SingleAsync(x =>
+                x.SourceEntityId == siblingFile.Id);
+            var siblingLease = Guid.NewGuid();
+            siblingOutbox.Claim(siblingLease, DateTime.UtcNow, TimeSpan.FromMinutes(5));
+            siblingOutbox.Sent(siblingLease, "KM-PG-SIBLING", DateTime.UtcNow);
+            await db.SaveChangesAsync();
+        }
+        Assert.Equal(0, await Worker(factory, mockClient, OptionsForVendor(true)).ProcessBatchAsync());
+
+        await using var verifyAudited = factory.CreateDbContext();
+        Assert.False(await verifyAudited.VendorFiles.AnyAsync(x => x.Id == auditedFile.Id));
+        Assert.True(await verifyAudited.VendorFiles.AnyAsync(x => x.Id == siblingFile.Id));
+        Assert.Equal(VendorFileDeletionStatuses.Completed,
+            (await verifyAudited.VendorFileDeletionJobs.SingleAsync(x =>
+                x.VendorFileId == auditedFile.Id)).Status);
+        var retainedVendorOutbox = await verifyAudited.KmIntegrationOutbox.SingleAsync(x =>
+            x.Id == auditedOutboxId);
+        Assert.Equal(KmIntegrationStatus.Completed, retainedVendorOutbox.Status);
+        Assert.Single(await verifyAudited.KmAnalysisCallbackReceipts
+            .Where(x => x.OutboxId == auditedOutboxId).ToListAsync());
+        Assert.Single(await verifyAudited.KmDocumentAnalysisResults
+            .Where(x => x.OutboxId == auditedOutboxId).ToListAsync());
     }
 
     [Theory]
@@ -276,15 +357,105 @@ public sealed class VendorAttachmentLifecycleTests
         Assert.Equal(api.JobId, (await check.VendorFileDeletionJobs.SingleAsync()).KmDeletionJobId);
     }
 
+    [Fact]
+    public async Task AuditedVendorOutboxIsRetainedOnLocalCleanup_AndCleanupFailedCanRecover()
+    {
+        var factory = new TestDbFactory(Guid.NewGuid().ToString("N"));
+        var auditedFile = Seed(factory, "vendor-audited.pdf", "application/pdf");
+        var siblingFile = Seed(factory, "vendor-sibling.pdf", "application/pdf");
+        Assert.Equal(2, await Worker(factory, new VendorMockKmClient(),
+            OptionsForVendor(true)).ProcessBatchAsync());
+
+        Guid auditedOutboxId;
+        await using (var db = factory.CreateDbContext())
+        {
+            var outbox = await db.KmIntegrationOutbox.SingleAsync(x =>
+                x.SourceEntityId == auditedFile.Id);
+            auditedOutboxId = outbox.Id;
+            var now = DateTime.UtcNow;
+            outbox.CallbackProcessing(now);
+            outbox.CallbackCompleted(now);
+            var callbackId = Guid.NewGuid();
+            db.KmAnalysisCallbackReceipts.Add(new KmAnalysisCallbackReceipt
+            {
+                CallbackId = callbackId,
+                OutboxId = outbox.Id,
+                Endpoint = "document-jobs/status",
+                Status = "Completed",
+                PayloadSha256 = new string('e', 64),
+                ReceivedAt = now
+            });
+            db.KmDocumentAnalysisResults.Add(KmDocumentAnalysisResult.Create(
+                Guid.NewGuid(), callbackId, outbox,
+                KmAnalysisSourceTypes.VendorFile, auditedFile.Id, auditedFile.Id, 1,
+                outbox.Id, outbox.KmJobId!, auditedFile.Sha256!,
+                "2.0", """{"summary":"vendor-audited"}""", now, now, now, 1,
+                new string('e', 64)));
+            await db.SaveChangesAsync();
+
+            await new VendorFileDeletionService(db).RequestAsync(auditedFile.Id, "writer");
+        }
+
+        var api = new VendorDeletionApi();
+        Assert.Equal(1, await DeletionDispatcher(factory, api).ProcessBatchAsync());
+        var request = Assert.Single(api.Requests);
+        var ts = DateTimeOffset.UtcNow;
+        var completed = new KmDocumentDeletionV2Callback("2.0", Guid.NewGuid(), "CSIT",
+            request.DeletionRequestId, api.JobId,
+            request.Resource with { Sha256 = request.Resource.Sha256.ToLowerInvariant() },
+            "Completed",
+            new KmDeletionTimestamps(ts, ts.AddSeconds(2), null),
+            new KmDeletionResult(true, ts.AddSeconds(1), new KmDeletionCleanup(
+                "Deleted", "Deleted", "Deleted", "Deleted", "Deleted", "NotPresent",
+                "Deleted")), null);
+
+        await using (var failDb = factory.CreateDbContext())
+        {
+            var job = await failDb.VendorFileDeletionJobs.SingleAsync(x =>
+                x.Id == request.DeletionRequestId);
+            job.ApplyCallback(completed, DateTime.UtcNow);
+            job.BeginLocalCleanup(DateTime.UtcNow);
+            job.MarkCleanupFailed("LOCAL_DB_CLEANUP_FAILED",
+                "Vendor attachment local cleanup failed and can be retried safely.", DateTime.UtcNow);
+            await failDb.SaveChangesAsync();
+        }
+
+        await using (var recoverDb = factory.CreateDbContext())
+        {
+            var recovered = await new VendorFileDeletionService(recoverDb)
+                .RequestAsync(auditedFile.Id, "writer");
+            Assert.NotNull(recovered);
+            Assert.True(recovered!.CompletedLocally);
+            Assert.Equal(VendorFileDeletionStatuses.Completed, recovered.Status);
+        }
+
+        Assert.Equal(0, await Worker(factory, new VendorMockKmClient(),
+            OptionsForVendor(true)).ProcessBatchAsync());
+
+        await using var verify = factory.CreateDbContext();
+        Assert.False(await verify.VendorFiles.AnyAsync(x => x.Id == auditedFile.Id));
+        Assert.True(await verify.VendorFiles.AnyAsync(x => x.Id == siblingFile.Id));
+        Assert.False(File.Exists(Path.Combine(auditedFile.FolderPath, auditedFile.StoredFileName)));
+        Assert.True(File.Exists(Path.Combine(siblingFile.FolderPath, siblingFile.StoredFileName)));
+        var retained = await verify.KmIntegrationOutbox.SingleAsync(x => x.Id == auditedOutboxId);
+        Assert.Equal(KmIntegrationStatus.Completed, retained.Status);
+        Assert.Single(await verify.KmAnalysisCallbackReceipts
+            .Where(x => x.OutboxId == auditedOutboxId).ToListAsync());
+        Assert.Single(await verify.KmDocumentAnalysisResults
+            .Where(x => x.OutboxId == auditedOutboxId).ToListAsync());
+    }
+
     private static VendorFile Seed(IDbContextFactory<AppDbContext> factory,
         string originalFileName = "manual.pdf", string contentType = "application/pdf")
     {
         using var db = factory.CreateDbContext();
         var now = DateTime.UtcNow;
+        var vendorId = Guid.NewGuid();
+        var vendorName = "Mock Vendor " + vendorId.ToString("N")[..8];
         var vendor = new Vendor
         {
-            Id = Guid.NewGuid(), Name = "Mock Vendor", NormalizedName = "MOCK VENDOR",
-            StorageFolderName = "Mock Vendor", Types = [], CreatedBy = "tester",
+            Id = vendorId, Name = vendorName, NormalizedName = vendorName.ToUpperInvariant(),
+            StorageFolderName = vendorName, Types = [], CreatedBy = "tester",
             UpdatedBy = "tester", CreatedAt = now, UpdatedAt = now
         };
         var id = Guid.NewGuid();
@@ -352,9 +523,9 @@ public sealed class VendorAttachmentLifecycleTests
         }
     }
 
-    private sealed class VendorDeletionApi : IKmDocumentDeletionV2Client
+    private sealed class VendorDeletionApi(string jobId = "KM-VENDOR-DELETE-1") : IKmDocumentDeletionV2Client
     {
-        public string JobId { get; } = "KM-VENDOR-DELETE-1";
+        public string JobId { get; } = jobId;
         public List<KmDocumentDeletionV2Request> Requests { get; } = [];
         public Task<KmDeletionDeliveryResult> SubmitAsync(KmDocumentDeletionV2Request request,
             CancellationToken cancellationToken = default)
