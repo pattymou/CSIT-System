@@ -45,7 +45,7 @@ public sealed class KmDocumentDeletionV2CallbackService(
                 : await db.VendorFileDeletionJobs.SingleOrDefaultAsync(x =>
                     x.Id == callback.DeletionRequestId, cancellationToken);
             if (job is null) return KmDeletionCallbackOutcome.NotFound;
-            if (job.Resource != callback.Resource || job.KmDeletionJobId != callback.KmDeletionJobId)
+            if (!job.Resource.Matches(callback.Resource) || job.KmDeletionJobId != callback.KmDeletionJobId)
                 return KmDeletionCallbackOutcome.Conflict;
             var duplicate = await CheckDuplicateAsync(db, callback, payloadHash, cancellationToken);
             if (duplicate == KmDeletionCallbackOutcome.Conflict) return duplicate.Value;
@@ -91,7 +91,7 @@ public sealed class KmDocumentDeletionV2CallbackService(
                     x.Id == callback.DeletionRequestId, cancellationToken);
             if (job is null) return KmDeletionCallbackOutcome.NotFound;
             equipmentId = job.EquipmentId;
-            if (job.Resource != callback.Resource || job.KmDeletionJobId != callback.KmDeletionJobId)
+            if (!job.Resource.Matches(callback.Resource) || job.KmDeletionJobId != callback.KmDeletionJobId)
                 return KmDeletionCallbackOutcome.Conflict;
             var duplicate = await CheckDuplicateAsync(db, callback, payloadHash, cancellationToken);
             if (duplicate == KmDeletionCallbackOutcome.Conflict) return duplicate.Value;

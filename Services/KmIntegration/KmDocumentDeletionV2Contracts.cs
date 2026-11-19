@@ -26,8 +26,8 @@ public sealed record KmDocumentDeletionV2Resource(
     public bool IsValid()
     {
         if (SourceEntityId == Guid.Empty || DocumentId != SourceEntityId || Version < 1 ||
-            Sha256 is not { Length: 64 } || !Sha256.All(Uri.IsHexDigit) ||
-            CanonicalIngestionEventId == Guid.Empty || Scope != "DocumentVersion") return false;
+            !IsValidSha256(Sha256) || CanonicalIngestionEventId == Guid.Empty ||
+            Scope != "DocumentVersion") return false;
         return SourceType switch
         {
             KmDocumentDeletionV2SourceTypes.VendorFile => Version == 1 &&
@@ -39,6 +39,25 @@ public sealed record KmDocumentDeletionV2Resource(
             _ => false
         };
     }
+
+    public bool Matches(KmDocumentDeletionV2Resource? other) =>
+        other is not null &&
+        string.Equals(SourceType, other.SourceType, StringComparison.Ordinal) &&
+        SourceEntityId == other.SourceEntityId &&
+        DocumentId == other.DocumentId &&
+        Version == other.Version &&
+        IsValidSha256(Sha256) &&
+        IsValidSha256(other.Sha256) &&
+        string.Equals(Sha256, other.Sha256, StringComparison.OrdinalIgnoreCase) &&
+        ApplicationId == other.ApplicationId &&
+        RecordId == other.RecordId &&
+        VendorId == other.VendorId &&
+        string.Equals(EquipmentId, other.EquipmentId, StringComparison.Ordinal) &&
+        CanonicalIngestionEventId == other.CanonicalIngestionEventId &&
+        string.Equals(Scope, other.Scope, StringComparison.Ordinal);
+
+    private static bool IsValidSha256(string? value) =>
+        value is { Length: 64 } && value.All(Uri.IsHexDigit);
 }
 
 public sealed record KmDocumentDeletionV2Request(

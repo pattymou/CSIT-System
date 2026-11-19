@@ -110,7 +110,7 @@ public sealed class VendorFileDeletionJob
 
     public void ApplyCallback(KmDocumentDeletionV2Callback callback, DateTime now)
     {
-        if (callback.DeletionRequestId != Id || callback.Resource != Resource ||
+        if (callback.DeletionRequestId != Id || !Resource.Matches(callback.Resource) ||
             KmDeletionJobId != callback.KmDeletionJobId || !callback.IsValid())
             throw new InvalidOperationException("Vendor deletion callback correlation failed.");
         if (Status == VendorFileDeletionStatuses.Completed)

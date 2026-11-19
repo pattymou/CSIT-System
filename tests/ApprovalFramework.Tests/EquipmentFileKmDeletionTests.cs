@@ -479,6 +479,123 @@ public sealed class EquipmentFileKmDeletionTests
             job.RecoverFailedHttp400ForManualDispatch(DateTime.UtcNow));
     }
 
+    [Fact]
+    public async Task UppercaseRequestAndLowercaseCallbackSha256_AcceptsProcessingAndCompleted_WhileRejectingTrueMismatches()
+    {
+        const string upperSha256 = "EBA1F6012F871D86F78B4C95E1A5803842D7BC7F0E8CF82B66D261C5285452F8";
+        const string lowerSha256 = "eba1f6012f871d86f78b4c95e1a5803842d7bc7f0e8cf82b66d261c5285452f8";
+        const string wrongSha256 = "0ba1f6012f871d86f78b4c95e1a5803842d7bc7f0e8cf82b66d261c5285452f8";
+
+        var factory = new Factory();
+        var root = NewRoot();
+        try
+        {
+            var fileId = await SeedSentFileAsync(factory, root, "case-sha.pdf",
+                "application/pdf", "A202611160609515326246", upperSha256);
+            await using (var db = factory.CreateDbContext())
+                await new EquipmentFileDeletionService(db).RequestAsync(fileId, "admin");
+
+            var adapter = new MockEquipmentDeletionApi(
+                KmDeletionDeliveryResult.Success("KM-DEL-000061"));
+            Assert.Equal(1, await Dispatcher(factory, adapter).ProcessBatchAsync());
+            var request = Assert.Single(adapter.Requests);
+            Assert.Equal(upperSha256, request.Resource.Sha256);
+
+            var lowercaseResource = request.Resource with { Sha256 = lowerSha256 };
+            var startedAt = DateTimeOffset.UtcNow;
+            var processingCallback = new KmDocumentDeletionV2Callback(
+                "2.0", Guid.NewGuid(), "CSIT", request.DeletionRequestId, "KM-DEL-000061",
+                lowercaseResource, "Processing",
+                new KmDeletionTimestamps(startedAt, null, null), null, null);
+            var completedCallback = new KmDocumentDeletionV2Callback(
+                "2.0", Guid.NewGuid(), "CSIT", request.DeletionRequestId, "KM-DEL-000061",
+                lowercaseResource, "Completed",
+                new KmDeletionTimestamps(startedAt, startedAt.AddSeconds(2), null),
+                new KmDeletionResult(true, startedAt.AddSeconds(1),
+                    new KmDeletionCleanup("Deleted", "Deleted", "Deleted", "Deleted",
+                        "Deleted", "Deleted", "NotPresent")), null);
+
+            var otherDocId = Guid.NewGuid();
+            var mismatches = new[]
+            {
+                processingCallback with
+                {
+                    CallbackId = Guid.NewGuid(),
+                    Resource = lowercaseResource with { Sha256 = wrongSha256 }
+                },
+                processingCallback with
+                {
+                    CallbackId = Guid.NewGuid(),
+                    Resource = lowercaseResource with
+                    {
+                        SourceEntityId = otherDocId,
+                        DocumentId = otherDocId
+                    }
+                },
+                processingCallback with
+                {
+                    CallbackId = Guid.NewGuid(),
+                    Resource = lowercaseResource with
+                    {
+                        CanonicalIngestionEventId = Guid.NewGuid()
+                    }
+                },
+                processingCallback with
+                {
+                    CallbackId = Guid.NewGuid(),
+                    KmDeletionJobId = "KM-DEL-999999"
+                },
+                processingCallback with
+                {
+                    CallbackId = Guid.NewGuid(),
+                    Resource = lowercaseResource with
+                    {
+                        EquipmentId = "a202611160609515326246"
+                    }
+                }
+            };
+
+            var callbacks = new KmDocumentDeletionV2CallbackService(factory);
+            foreach (var mismatch in mismatches)
+            {
+                Assert.True(mismatch.IsValid());
+                Assert.Equal(KmDeletionCallbackOutcome.Conflict,
+                    await callbacks.ApplyAsync(mismatch));
+                await using var checkDb = factory.CreateDbContext();
+                var untouched = await checkDb.EquipmentFileDeletionJobs.SingleAsync();
+                Assert.Throws<InvalidOperationException>(() =>
+                    untouched.ApplyCallback(mismatch, DateTime.UtcNow));
+            }
+
+            Assert.Equal(KmDeletionCallbackOutcome.Accepted,
+                await callbacks.ApplyAsync(processingCallback));
+            await using (var afterProcessing = factory.CreateDbContext())
+            {
+                var job = await afterProcessing.EquipmentFileDeletionJobs.SingleAsync();
+                Assert.Equal(EquipmentFileDeletionStatuses.Processing, job.Status);
+                Assert.Equal(upperSha256, job.Sha256);
+                Assert.True(await afterProcessing.ApparatusFiles.AnyAsync(x => x.Id == fileId));
+                Assert.True(File.Exists(Path.Combine(root, "case-sha.pdf")));
+            }
+
+            Assert.Equal(KmDeletionCallbackOutcome.Accepted,
+                await callbacks.ApplyAsync(completedCallback));
+            Assert.Equal(KmDeletionCallbackOutcome.Accepted,
+                await callbacks.ApplyAsync(completedCallback));
+
+            await using var verify = factory.CreateDbContext();
+            var completedJob = await verify.EquipmentFileDeletionJobs.SingleAsync();
+            Assert.Equal(EquipmentFileDeletionStatuses.Completed, completedJob.Status);
+            Assert.Equal(upperSha256, completedJob.Sha256);
+            Assert.NotNull(completedJob.KmVerifiedAt);
+            Assert.False(await verify.ApparatusFiles.AnyAsync(x => x.Id == fileId));
+            Assert.False(File.Exists(Path.Combine(root, "case-sha.pdf")));
+            Assert.Equal(2, await verify.KmDocumentDeletionV2Callbacks.CountAsync(x =>
+                x.DeletionRequestId == request.DeletionRequestId));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
     private static KmDeletionDispatchService Dispatcher(Factory factory,
         IKmDocumentDeletionV2Client adapter) => new(factory, new NoopCaseDeletionClient(),
         Options.Create(new KmDeletionOptions
@@ -515,9 +632,9 @@ public sealed class EquipmentFileKmDeletionTests
         string equipmentId) => SeedSentFileAsync(factory, root, name, "application/pdf", equipmentId);
 
     private static async Task<Guid> SeedSentFileAsync(Factory factory, string root, string name,
-        string contentType, string equipmentId)
+        string contentType, string equipmentId, string? sha256 = null)
     {
-        var id = await SeedFileAsync(factory, root, name, contentType, true, equipmentId);
+        var id = await SeedFileAsync(factory, root, name, contentType, true, equipmentId, sha256);
         await using var db = factory.CreateDbContext();
         var outbox = await db.KmIntegrationOutbox.SingleAsync(x => x.SourceEntityId == id);
         var lease = Guid.NewGuid();
@@ -528,7 +645,8 @@ public sealed class EquipmentFileKmDeletionTests
     }
 
     private static async Task<Guid> SeedFileAsync(Factory factory, string root, string name,
-        string contentType, bool withOutbox, string equipmentId = "EQ-DELETE")
+        string contentType, bool withOutbox, string equipmentId = "EQ-DELETE",
+        string? sha256 = null)
     {
         var id = Guid.NewGuid();
         await File.WriteAllTextAsync(Path.Combine(root, name), "equipment-content-" + id);
@@ -543,7 +661,7 @@ public sealed class EquipmentFileKmDeletionTests
             Id = id, ApparatusId = equipmentId, Apparatus = equipment,
             FileName = name, OriginalFileName = name, FilePath = root,
             ContentType = contentType, FileSize = info.Length,
-            Sha256 = new string('a', 64), ArchiveStatus = FileArchiveStatuses.Archived,
+            Sha256 = sha256 ?? new string('a', 64), ArchiveStatus = FileArchiveStatuses.Archived,
             ArchiveUpdatedAt = DateTime.UtcNow, CreatedAt = DateTime.UtcNow
         };
         await using var db = factory.CreateDbContext();

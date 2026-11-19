@@ -143,7 +143,7 @@ public sealed class EquipmentFileDeletionJob
 
     public void ApplyCallback(KmDocumentDeletionV2Callback callback, DateTime now)
     {
-        if (callback.DeletionRequestId != Id || callback.Resource != Resource ||
+        if (callback.DeletionRequestId != Id || !Resource.Matches(callback.Resource) ||
             KmDeletionJobId != callback.KmDeletionJobId || !callback.IsValid())
             throw new InvalidOperationException("Equipment deletion callback correlation failed.");
         if (Status == EquipmentFileDeletionStatuses.Completed)
