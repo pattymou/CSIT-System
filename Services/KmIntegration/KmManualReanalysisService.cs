@@ -17,6 +17,12 @@ public sealed class KmManualReanalysisService(
             KmIntegrationSourceEntityTypes.ApparatusFile)) return "此來源尚未完成安全整合。";
         if (row.Status != KmIntegrationStatus.Failed || row.KmJobId is null ||
             row.NextRetryAt is not null) return "只有 KM 已接收並回報失敗的工作可重新分析。";
+        // These PNG jobs failed because KM had no image analysis service at the time.
+        if (row.LastErrorCode == "UNSUPPORTED_FORMAT" &&
+            row.FileName.EndsWith(".png", StringComparison.OrdinalIgnoreCase) &&
+            row.LastErrorMessage?.Contains("OCR and vision are not enabled",
+                StringComparison.OrdinalIgnoreCase) == true)
+            return null;
         if (row.LastErrorCode?.StartsWith("MODEL_", StringComparison.OrdinalIgnoreCase) == true ||
             row.LastErrorCode?.StartsWith("EMBEDDING_", StringComparison.OrdinalIgnoreCase) == true ||
             row.LastErrorCode?.StartsWith("OCR_", StringComparison.OrdinalIgnoreCase) == true ||
