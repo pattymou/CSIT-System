@@ -172,7 +172,7 @@ else
 
     @if (IsEquipment)
     {
-        <SIT.DepartmentSystem.Web.Components.Shared.EquipmentMetadataSummary ApparatusId="_item.Id" ModuleCode="_item.ModuleCode" RefreshKey="FileStateFingerprint(_item.Files)" />
+        <SIT.DepartmentSystem.Web.Components.Shared.EquipmentMetadataSummary ApparatusId="_item.Id" ModuleCode="_item.ModuleCode" HasFiles="(_item.Files?.Count > 0)" RefreshKey="FileStateFingerprint(_item.Files)" />
     }
 
     <div class="form-card">

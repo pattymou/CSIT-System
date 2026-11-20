@@ -1,13 +1,15 @@
 @using SIT.DepartmentSystem.Web.Services
 @using SIT.DepartmentSystem.Web.Services.KmIntegration
 @inject BrowserApiClient Api
+@inject ILogger<EquipmentMetadataSummary> Logger
 
 <div class="form-card equipment-metadata-summary @(Compact ? "equipment-metadata-compact" : null)">
     <div class="case-card-head"><div><div class="case-kicker">KM / CONSOLIDATED ANALYSIS</div><h3>設備綜合分析</h3></div>
-        @if (_view is not null) { <span class="record-status-pill">@StatusText(_view.Status)</span> }
+        @if (_view is not null && !IsBlank) { <span class="record-status-pill">@StatusText(_view.Status)</span> }
     </div>
-    @if (_loading) { <div class="record-empty-box"><strong>讀取設備綜合分析中...</strong></div> }
-    else if (_error is not null) { <div class="record-empty-box"><strong>無法讀取設備綜合分析</strong><span>@_error</span></div> }
+    @if (_loading) { if (HasFiles != false) { <div class="record-empty-box"><strong>讀取設備綜合分析中...</strong></div> } }
+    else if (_error is not null) { <div class="record-empty-box"><strong>@_error</strong></div> }
+    else if (IsBlank) { }
     else if (_view is null) { <div class="record-empty-box"><strong>尚無設備綜合分析</strong></div> }
     else
     {
@@ -58,12 +60,14 @@
 @code {
     [Parameter, EditorRequired] public string ApparatusId { get; set; } = string.Empty;
     [Parameter] public string ModuleCode { get; set; } = "equipment";
+    [Parameter] public bool? HasFiles { get; set; }
     [Parameter] public bool Compact { get; set; }
     [Parameter] public string RefreshKey { get; set; } = string.Empty;
     private EquipmentAggregateAnalysisView? _view;
     private string? _key, _error;
     private bool _loading;
     private int _loadVersion;
+    private bool IsBlank => EquipmentAggregateAnalysisPresentation.IsBlank(_view, HasFiles);
     protected override async Task OnParametersSetAsync()
     {
         var key = $"{ModuleCode}:{ApparatusId}:{RefreshKey}";
@@ -75,7 +79,19 @@
             var view = await Api.GetAsync<EquipmentAggregateAnalysisView>($"/api/equipment-aggregate-analysis?apparatusId={Uri.EscapeDataString(ApparatusId)}&moduleCode={Uri.EscapeDataString(ModuleCode)}");
             if (loadVersion == _loadVersion) _view = view;
         }
-        catch (Exception ex) { if (loadVersion == _loadVersion) _error = ex.Message; }
+        catch (BrowserApiException ex)
+        {
+            Logger.LogWarning("Equipment aggregate analysis API failed. StatusCode={StatusCode} TraceId={TraceId} ApparatusId={ApparatusId} ModuleCode={ModuleCode}",
+                ex.StatusCode, EquipmentAggregateAnalysisPresentation.ProblemTraceId(ex.ResponseBody) ?? "Unavailable",
+                ApparatusId, ModuleCode);
+            if (loadVersion == _loadVersion) _error = "設備綜合分析暫時無法取得，請稍後重試。";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning("Equipment aggregate analysis client failed. FailureType={FailureType} ApparatusId={ApparatusId} ModuleCode={ModuleCode}",
+                ex.GetType().Name, ApparatusId, ModuleCode);
+            if (loadVersion == _loadVersion) _error = "設備綜合分析暫時無法取得，請稍後重試。";
+        }
         finally { if (loadVersion == _loadVersion) _loading = false; }
     }
     private static string StatusText(string status) => status switch { "Completed" => "分析完成", "Stale" => "待更新", "Pending" => "等待 KM", "Deferred" => "KM 暫停受理", "Failed" => "分析失敗", "NoEligibleDocuments" => "無有效文件", "FeatureDisabled" => "流程尚未啟用", _ => status };
