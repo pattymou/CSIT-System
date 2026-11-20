@@ -5,6 +5,23 @@
 @inject BrowserApiClient Api
 @inject ILogger<KmQueue> Logger
 
+@if (_pendingReanalysis is not null)
+{
+    <div class="kmq-message" role="dialog" aria-label="確認重新分析">
+        <strong>確認重新分析</strong>
+        <div>文件：@_pendingReanalysis.FileName</div>
+        <div>來源：@_pendingReanalysis.SourceModule</div>
+        <div>原 KM JobId：@_pendingReanalysis.KmJobId</div>
+        <div>失敗原因：@_pendingReanalysis.ErrorCode @(_pendingReanalysis.Detail)</div>
+        <button type="button" disabled="@_submitting" @onclick="SubmitReanalysisAsync">確認送出</button>
+        <button type="button" disabled="@_submitting" @onclick="CancelReanalysis">取消</button>
+    </div>
+}
+@if (!string.IsNullOrWhiteSpace(_reanalysisMessage))
+{
+    <div class="kmq-message" role="status">@_reanalysisMessage</div>
+}
+
 <PageTitle>KM 處理佇列</PageTitle>
 
 <div class="kmq-heading">
@@ -75,12 +92,13 @@ else
                     <th>重試次數</th>
                     <th>重試狀態／下次重試</th>
                     <th>錯誤／詳細資訊</th>
+                    @if (_tab == QueueTab.Ingestion) { <th>操作</th> }
                 </tr>
             </thead>
             <tbody>
                 @if (_page.Items.Count == 0)
                 {
-                    <tr><td colspan="@(_tab == QueueTab.Deletion ? 11 : 10)" class="kmq-empty">此篩選目前沒有資料。</td></tr>
+                    <tr><td colspan="11" class="kmq-empty">此篩選目前沒有資料。</td></tr>
                 }
                 else
                 {
@@ -116,6 +134,32 @@ else
                                 }
                                 <div>@item.Detail</div>
                             </td>
+                            @if (_tab == QueueTab.Ingestion)
+                            {
+                                <td>
+                                    @if (item.CanReanalyze)
+                                    {
+                                        <AuthorizeView Policy="@SystemAuthorization.Policies.AdminOnly">
+                                            <Authorized Context="adminAuth">
+                                                <AuthorizeView Policy="@SystemAuthorization.Policies.BusinessWrite" Context="writeAuth">
+                                                    <Authorized>
+                                                        <button type="button" disabled="@_submitting"
+                                                                @onclick="() => BeginReanalysis(item)">重新分析</button>
+                                                    </Authorized>
+                                                </AuthorizeView>
+                                            </Authorized>
+                                        </AuthorizeView>
+                                    }
+                                    else if (item.Status == "Failed")
+                                    {
+                                        <span class="kmq-muted">@item.ReanalysisReason</span>
+                                    }
+                                    @if (item.ManualAttemptCount > 0)
+                                    {
+                                        <div class="kmq-muted">人工重新分析 @item.ManualAttemptCount 次</div>
+                                    }
+                                </td>
+                            }
                         </tr>
                     }
                 }
@@ -142,6 +186,45 @@ else
     private bool _disposed;
     private string? _error;
     private DateTime? _lastRefreshedAt;
+    private KmQueueItemDto? _pendingReanalysis;
+    private Guid _reanalysisRequestId;
+    private bool _submitting;
+    private string? _reanalysisMessage;
+
+    private void BeginReanalysis(KmQueueItemDto item)
+    {
+        _pendingReanalysis = item;
+        _reanalysisRequestId = Guid.NewGuid();
+        _reanalysisMessage = null;
+    }
+
+    private void CancelReanalysis()
+    {
+        _pendingReanalysis = null;
+        _reanalysisRequestId = Guid.Empty;
+    }
+
+    private async Task SubmitReanalysisAsync()
+    {
+        if (_pendingReanalysis is null || _submitting) return;
+        _submitting = true;
+        try
+        {
+            var response = await Api.PostJsonAsync(
+                $"/api/administration/km-queue/ingestion/{_pendingReanalysis.Id:D}/reanalyze",
+                new { RequestId = _reanalysisRequestId });
+            response.EnsureSuccess();
+            _pendingReanalysis = null;
+            _reanalysisRequestId = Guid.Empty;
+            _reanalysisMessage = "已建立新的分析工作；佇列每 10 秒更新進度。";
+            await LoadAsync();
+        }
+        catch (Exception ex) when (ex is BrowserApiException or Microsoft.JSInterop.JSException)
+        {
+            _reanalysisMessage = "重新分析未確認送出，請更新佇列或再次確認；相同請求不會建立重複工作。";
+        }
+        finally { _submitting = false; }
+    }
 
     private int TotalPages => _page is null ? 1 : Math.Max(1,
         (int)Math.Ceiling(_page.Total / (double)_page.PageSize));

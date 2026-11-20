@@ -35,6 +35,7 @@ public sealed class KmIntegrationOutbox
     public DateTime? NextRetryAt { get; private set; }
     public string? LastErrorCode { get; private set; }
     public string? LastErrorMessage { get; private set; }
+    public bool? LastErrorRetryable { get; private set; }
     public DateTime? LastAttemptAt { get; private set; }
     public Guid? LeaseToken { get; private set; }
     public DateTime? LeaseExpiresAt { get; private set; }
@@ -44,6 +45,24 @@ public sealed class KmIntegrationOutbox
     public DateTime? CompletedAt { get; private set; }
 
     private KmIntegrationOutbox() { }
+
+    public static KmIntegrationOutbox ForManualReanalysis(KmIntegrationOutbox failed, Guid attemptId, DateTime now)
+    {
+        if (failed.Status != KmIntegrationStatus.Failed || failed.KmJobId is null ||
+            failed.NextRetryAt is not null || attemptId == Guid.Empty ||
+            failed.SourceEntityType is not (KmIntegrationSourceEntityTypes.VendorFile or KmIntegrationSourceEntityTypes.ApparatusFile))
+            throw new InvalidOperationException("Only a failed accepted v2 job can be reanalyzed.");
+        return new KmIntegrationOutbox
+        {
+            Id = attemptId, EventId = attemptId, EventType = failed.EventType,
+            SourceSystem = failed.SourceSystem, SourceEntityType = failed.SourceEntityType,
+            SourceEntityId = failed.SourceEntityId, DocumentId = failed.DocumentId,
+            Version = failed.Version, ProjectId = failed.ProjectId, CaseId = failed.CaseId,
+            TaskId = failed.TaskId, FileName = failed.FileName, ContentType = failed.ContentType,
+            SizeBytes = failed.SizeBytes, CommittedAt = failed.CommittedAt,
+            Status = KmIntegrationStatus.Pending, CreatedAt = now, UpdatedAt = now
+        };
+    }
 
     public static KmIntegrationOutbox ForCommittedTestReport(ModuleCaseFile file, DateTime now)
     {
@@ -212,6 +231,7 @@ public sealed class KmIntegrationOutbox
         SentAt = now;
         LastErrorCode = null;
         LastErrorMessage = null;
+        LastErrorRetryable = null;
         ClearLease(now);
     }
 
@@ -303,7 +323,7 @@ public sealed class KmIntegrationOutbox
         UpdatedAt = now;
     }
 
-    public void CallbackFailed(string code, string message, DateTime now)
+    public void CallbackFailed(string code, string message, DateTime now, bool? retryable = null)
     {
         if (Status is not (KmIntegrationStatus.Sent or KmIntegrationStatus.Processing or KmIntegrationStatus.Failed))
             throw new InvalidOperationException("KM callback is out of order.");
@@ -311,6 +331,7 @@ public sealed class KmIntegrationOutbox
         NextRetryAt = null;
         LastErrorCode = Safe(code, 100);
         LastErrorMessage = Safe(message, 500);
+        LastErrorRetryable = retryable;
         UpdatedAt = now;
     }
 

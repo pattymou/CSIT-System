@@ -268,6 +268,7 @@ builder.Services.AddScoped<VerificationCaseDeletionConfirmationService>();
 builder.Services.AddScoped<VerificationCaseLocalCleanupService>();
 builder.Services.AddScoped<KmSyncWorker>();
 builder.Services.AddScoped<KmManualRetryService>();
+builder.Services.AddScoped<KmManualReanalysisService>();
 builder.Services.AddScoped<KmSyncDiagnostics>();
 builder.Services.AddScoped<KmQueueQueryService>();
 builder.Services.AddScoped<KmAnalysisCallbackService>();

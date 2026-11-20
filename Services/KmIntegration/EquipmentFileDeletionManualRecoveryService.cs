@@ -80,13 +80,15 @@ public sealed class EquipmentFileDeletionManualRecoveryService(
                     WHERE event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived')
                       AND source_entity_type = 'ApparatusFile'
                       AND source_entity_id = {job.ApparatusFileId}
+                      AND event_id = {canonicalEventId}
                     FOR UPDATE
                     """).SingleOrDefaultAsync(cancellationToken)
                 : await db.KmIntegrationOutbox.SingleOrDefaultAsync(x =>
                     (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
                      x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                     x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
-                    x.SourceEntityId == job.ApparatusFileId, cancellationToken);
+                    x.SourceEntityId == job.ApparatusFileId &&
+                    x.EventId == canonicalEventId, cancellationToken);
             if (ingestion is null || ingestion.EventId != canonicalEventId ||
                 ingestion.DocumentId != job.DocumentId || ingestion.Version != job.Version ||
                 ingestion.Status == KmIntegrationStatus.Dispatching)

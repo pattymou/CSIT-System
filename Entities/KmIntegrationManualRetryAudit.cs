@@ -15,6 +15,9 @@ public sealed class KmIntegrationManualRetryAudit
     public string? PreviousErrorCode { get; private set; }
     public string? PreviousErrorMessage { get; private set; }
     public int PreviousRetryCount { get; private set; }
+    public Guid? NewOutboxId { get; private set; }
+    public string? PreviousKmJobId { get; private set; }
+    public int? ManualAttemptNumber { get; private set; }
 
     private KmIntegrationManualRetryAudit() { }
 
@@ -26,6 +29,18 @@ public sealed class KmIntegrationManualRetryAudit
         Reason = reason.Trim(), PreviousStatus = row.Status.ToString(),
         PreviousErrorCode = row.LastErrorCode, PreviousErrorMessage = SafeErrorMessage(row.LastErrorMessage),
         PreviousRetryCount = row.RetryCount
+    };
+
+    public static KmIntegrationManualRetryAudit CreateReanalysis(KmIntegrationOutbox failed,
+        KmIntegrationOutbox attempt, string actor, int attemptNumber, DateTime now) => new()
+    {
+        OutboxId = failed.Id, EventId = failed.EventId, DocumentId = failed.DocumentId,
+        Version = failed.Version, RequestedBy = actor.Trim(), RequestedAt = now,
+        Reason = "Reanalyze failed KM v2 document job", Action = "ManualReanalysis",
+        PreviousStatus = failed.Status.ToString(), PreviousErrorCode = failed.LastErrorCode,
+        PreviousErrorMessage = SafeErrorMessage(failed.LastErrorMessage),
+        PreviousRetryCount = failed.RetryCount, PreviousKmJobId = failed.KmJobId,
+        NewOutboxId = attempt.Id, ManualAttemptNumber = attemptNumber
     };
 
     public static string? SafeErrorMessage(string? message) =>

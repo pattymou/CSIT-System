@@ -1,6 +1,6 @@
 # CSIT × KM accepted-job reanalysis contract proposal
 
-Status: proposal only. CSIT does not expose a reanalysis action until KM and CSIT have an approved, tested end-to-end contract.
+Status: superseded for KM v2 vendor and equipment attachments by `km-manual-reanalysis-dba-review.md` and migration `20261120045247_AddKmManualReanalysisAttempts`. The proposal below remains historical context for other sources.
 
 ## Current boundary
 

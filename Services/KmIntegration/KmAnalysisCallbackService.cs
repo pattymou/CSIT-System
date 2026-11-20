@@ -56,7 +56,8 @@ public sealed class KmAnalysisCallbackService(IDbContextFactory<AppDbContext> db
             switch (callback.Status)
             {
                 case "Processing": outbox.CallbackProcessing(now); break;
-                case "Failed": outbox.CallbackFailed(callback.Error!.Code, callback.Error.Message, now); break;
+                case "Failed": outbox.CallbackFailed(callback.Error!.Code, callback.Error.Message, now,
+                    callback.Error.Retryable); break;
                 case "Completed": outbox.CallbackCompleted(now); break;
             }
         }

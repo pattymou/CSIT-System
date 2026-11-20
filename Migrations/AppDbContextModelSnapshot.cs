@@ -1912,6 +1912,14 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("event_id");
 
+                    b.Property<int?>("ManualAttemptNumber")
+                        .HasColumnType("integer")
+                        .HasColumnName("manual_attempt_number");
+
+                    b.Property<Guid?>("NewOutboxId")
+                        .HasColumnType("uuid")
+                        .HasColumnName("new_outbox_id");
+
                     b.Property<Guid>("OutboxId")
                         .HasColumnType("uuid")
                         .HasColumnName("outbox_id");
@@ -1925,6 +1933,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)")
                         .HasColumnName("previous_error_message");
+
+                    b.Property<string>("PreviousKmJobId")
+                        .HasMaxLength(150)
+                        .HasColumnType("character varying(150)")
+                        .HasColumnName("previous_km_job_id");
 
                     b.Property<int>("PreviousRetryCount")
                         .HasColumnType("integer")
@@ -1958,11 +1971,15 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.HasKey("Id");
 
+                    b.HasIndex("NewOutboxId")
+                        .IsUnique()
+                        .HasFilter("new_outbox_id IS NOT NULL");
+
                     b.HasIndex("OutboxId", "RequestedAt");
 
                     b.ToTable("km_integration_manual_retry_audits", null, t =>
                         {
-                            t.HasCheckConstraint("ck_km_manual_retry_action", "action = 'ManualKmSyncRetry' AND previous_status = 'Failed'");
+                            t.HasCheckConstraint("ck_km_manual_retry_action", "action IN ('ManualKmSyncRetry', 'ManualReanalysis') AND previous_status = 'Failed' AND (action <> 'ManualReanalysis' OR (new_outbox_id IS NOT NULL AND previous_km_job_id IS NOT NULL AND manual_attempt_number > 0))");
 
                             t.HasCheckConstraint("ck_km_manual_retry_reason", "length(btrim(reason)) BETWEEN 5 AND 500");
                         });
@@ -2035,6 +2052,10 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasMaxLength(500)
                         .HasColumnType("character varying(500)")
                         .HasColumnName("last_error_message");
+
+                    b.Property<bool?>("LastErrorRetryable")
+                        .HasColumnType("boolean")
+                        .HasColumnName("last_error_retryable");
 
                     b.Property<DateTime?>("LeaseExpiresAt")
                         .HasColumnType("timestamp with time zone")
@@ -2114,13 +2135,14 @@ namespace SIT.DepartmentSystem.Web.Migrations
                     b.HasIndex("Status", "NextRetryAt");
 
                     b.HasIndex("SourceSystem", "DocumentId", "Version")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasFilter("status IN ('Pending', 'Dispatching', 'Sent', 'Processing', 'Completed')");
 
                     b.ToTable("km_integration_outbox", null, t =>
                         {
                             t.HasCheckConstraint("ck_km_outbox_sent_job", "status NOT IN ('Sent', 'Processing', 'Completed') OR km_job_id IS NOT NULL");
 
-                            t.HasCheckConstraint("ck_km_outbox_supported_event", "source_system = 'CSIT' AND ((event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND project_id IS NOT NULL) OR (event_type = 'VerificationApplicationAttachmentArchived' AND source_entity_type = 'VerificationApplicationFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived') AND source_entity_type = 'ApparatusFile' AND source_entity_id = document_id AND event_id = source_entity_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL))");
+                            t.HasCheckConstraint("ck_km_outbox_supported_event", "source_system = 'CSIT' AND ((event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND project_id IS NOT NULL) OR (event_type = 'VerificationApplicationAttachmentArchived' AND source_entity_type = 'VerificationApplicationFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived') AND source_entity_type = 'ApparatusFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL))");
 
                             t.HasCheckConstraint("ck_km_outbox_version_size", "version > 0 AND size_bytes > 0");
                         });

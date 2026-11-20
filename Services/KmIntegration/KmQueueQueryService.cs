@@ -38,11 +38,56 @@ public sealed class KmQueueQueryService(
             .ToListAsync(cancellationToken);
         var sources = await LoadSourcesAsync(db,
             rows.Select(x => (x.SourceEntityType, x.SourceEntityId)), cancellationToken);
+        var failedIds = rows.Where(x => x.Status == KmIntegrationStatus.Failed)
+            .Select(x => x.Id).ToArray();
+        var failedSourceIds = rows.Where(x => x.Status == KmIntegrationStatus.Failed)
+            .Select(x => x.SourceEntityId).ToArray();
+        var failedDocuments = rows.Where(x => x.Status == KmIntegrationStatus.Failed)
+            .Select(x => x.DocumentId).ToArray();
+        var callbackIds = await db.KmAnalysisCallbackReceipts.AsNoTracking()
+            .Where(x => failedIds.Contains(x.OutboxId) && x.Endpoint == "document-jobs/status" &&
+                x.Status == "Failed").Select(x => x.OutboxId).ToHashSetAsync(cancellationToken);
+        var vendorDeletionIds = await db.VendorFileDeletionJobs.AsNoTracking()
+            .Where(x => failedSourceIds.Contains(x.VendorFileId))
+            .Select(x => x.VendorFileId).ToHashSetAsync(cancellationToken);
+        var equipmentDeletionIds = await db.EquipmentFileDeletionJobs.AsNoTracking()
+            .Where(x => failedSourceIds.Contains(x.ApparatusFileId))
+            .Select(x => x.ApparatusFileId).ToHashSetAsync(cancellationToken);
+        var resultDocumentIds = await db.KmDocumentAnalysisResults.AsNoTracking()
+            .Where(x => failedDocuments.Contains(x.DocumentId))
+            .Select(x => x.DocumentId).ToHashSetAsync(cancellationToken);
+        var activeDocumentIds = await db.KmIntegrationOutbox.AsNoTracking()
+            .Where(x => failedDocuments.Contains(x.DocumentId) &&
+                (x.Status != KmIntegrationStatus.Failed || x.NextRetryAt != null))
+            .Select(x => x.DocumentId).ToHashSetAsync(cancellationToken);
+        var latestAttempts = await db.KmIntegrationOutbox.AsNoTracking()
+            .Where(x => failedDocuments.Contains(x.DocumentId))
+            .Select(x => new { x.DocumentId, x.Id, x.CreatedAt })
+            .ToListAsync(cancellationToken);
+        var latestAttemptIds = latestAttempts.GroupBy(x => x.DocumentId)
+            .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.CreatedAt)
+                .ThenByDescending(y => y.Id).First().Id);
+        var manualCounts = await db.KmIntegrationManualRetryAudits.AsNoTracking()
+            .Where(x => failedDocuments.Contains(x.DocumentId) && x.Action == "ManualReanalysis")
+            .GroupBy(x => x.DocumentId)
+            .Select(x => new { DocumentId = x.Key, Count = x.Count() })
+            .ToDictionaryAsync(x => x.DocumentId, x => x.Count, cancellationToken);
         var now = DateTime.UtcNow;
         var offset = (long)(page - 1) * PageSize;
         var items = rows.Select((row, index) =>
         {
             sources.TryGetValue((row.SourceEntityType, row.SourceEntityId), out var source);
+            var reason = KmManualReanalysisService.FailureReason(row);
+            if (reason is null && source is null) reason = "正式來源檔案不存在。";
+            if (reason is null && !callbackIds.Contains(row.Id)) reason = "原 KM 工作尚未確認失敗。";
+            if (reason is null && (vendorDeletionIds.Contains(row.SourceEntityId) ||
+                equipmentDeletionIds.Contains(row.SourceEntityId))) reason = "來源已進入刪除流程。";
+            if (reason is null && (resultDocumentIds.Contains(row.DocumentId) ||
+                activeDocumentIds.Contains(row.DocumentId))) reason = "同版本已有有效或進行中的分析工作。";
+            if (reason is null && latestAttemptIds.GetValueOrDefault(row.DocumentId) != row.Id)
+                reason = "請從此文件最新的失敗工作重新分析。";
+            if (reason is null && (!integrationOptions.Value.Enabled ||
+                !IsIngestionSourceEnabled(row.SourceEntityType))) reason = "來源派送功能目前停用。";
             return new KmQueueItemDto(
                 offset + index + 1, row.Id, source?.FileName ?? row.FileName,
                 SourceModule(row.SourceEntityType), source?.Uploader ?? "未記錄",
@@ -51,7 +96,10 @@ public sealed class KmQueueQueryService(
                 IngestionRetryState(row, now), row.LastErrorCode,
                 source is null && IsKnownIngestionSource(row.SourceEntityType)
                     ? MissingSourceDetail(row.LastErrorMessage)
-                    : Safe(row.LastErrorMessage));
+                    : Safe(row.LastErrorMessage),
+                KmJobId: row.KmJobId, CanReanalyze: reason is null,
+                ReanalysisReason: row.Status == KmIntegrationStatus.Failed ? reason : null,
+                ManualAttemptCount: manualCounts.GetValueOrDefault(row.DocumentId));
         }).ToList();
 
         return new(items, page, PageSize, total, stats, integrationOptions.Value.Enabled,

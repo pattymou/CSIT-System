@@ -64,7 +64,9 @@ public sealed class KmAnalysisIntegrationTests
         await using var db = await factory.CreateDbContextAsync();
         Assert.Empty(await db.KmDocumentAnalysisResults.ToListAsync());
         Assert.Equal(2, await db.KmAnalysisCallbackReceipts.CountAsync());
-        Assert.Equal(KmIntegrationStatus.Failed, (await db.KmIntegrationOutbox.SingleAsync()).Status);
+        var failed = await db.KmIntegrationOutbox.SingleAsync();
+        Assert.Equal(KmIntegrationStatus.Failed, failed.Status);
+        Assert.False(failed.LastErrorRetryable);
     }
 
     [Fact]

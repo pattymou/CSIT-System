@@ -278,12 +278,14 @@ public sealed class KmDeletionDispatchService(
                 ? await db.KmIntegrationOutbox.FromSqlInterpolated($"""
                     SELECT * FROM km_integration_outbox
                     WHERE event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile'
-                      AND source_entity_id = {job.VendorFileId} FOR UPDATE
+                      AND source_entity_id = {job.VendorFileId}
+                      AND event_id = {job.CanonicalIngestionEventId} FOR UPDATE
                     """).SingleOrDefaultAsync(cancellationToken)
                 : await db.KmIntegrationOutbox.SingleOrDefaultAsync(outbox =>
                     outbox.EventType == KmIntegrationEventTypes.VendorFileArchived &&
                     outbox.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile &&
-                    outbox.SourceEntityId == job.VendorFileId, cancellationToken);
+                    outbox.SourceEntityId == job.VendorFileId &&
+                    outbox.EventId == job.CanonicalIngestionEventId, cancellationToken);
             if (ingestion is null || ingestion.EventId != job.CanonicalIngestionEventId ||
                 ingestion.DocumentId != job.DocumentId || ingestion.Version != job.Version)
                 return false;
@@ -386,13 +388,15 @@ public sealed class KmDeletionDispatchService(
                     WHERE event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived')
                       AND source_entity_type = 'ApparatusFile'
                       AND source_entity_id = {job.ApparatusFileId}
+                      AND event_id = {job.CanonicalIngestionEventId}
                     FOR UPDATE
                     """).SingleOrDefaultAsync(cancellationToken)
                 : await db.KmIntegrationOutbox.SingleOrDefaultAsync(outbox =>
                     (outbox.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
                      outbox.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                     outbox.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
-                    outbox.SourceEntityId == job.ApparatusFileId, cancellationToken);
+                    outbox.SourceEntityId == job.ApparatusFileId &&
+                    outbox.EventId == job.CanonicalIngestionEventId, cancellationToken);
             if (ingestion is null || ingestion.EventId != job.CanonicalIngestionEventId ||
                 ingestion.DocumentId != job.DocumentId || ingestion.Version != job.Version)
                 return false;

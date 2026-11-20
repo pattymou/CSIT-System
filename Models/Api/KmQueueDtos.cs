@@ -17,7 +17,9 @@ public sealed record KmQueueItemDto(
     string UploadedBy, DateTime? UploadedAt, DateTime QueuedAt,
     string Status, string StatusDisplay, int RetryCount, DateTime? NextRetryAt,
     string RetryState, string? ErrorCode, string? Detail,
-    string? DeletionCategory = null, int? Priority = null, bool WaitsForKm = true);
+    string? DeletionCategory = null, int? Priority = null, bool WaitsForKm = true,
+    string? KmJobId = null, bool CanReanalyze = false, string? ReanalysisReason = null,
+    int ManualAttemptCount = 0);
 
 public sealed record KmQueuePageDto(
     IReadOnlyList<KmQueueItemDto> Items, int Page, int PageSize, int Total,

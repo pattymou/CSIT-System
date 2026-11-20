@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -12,6 +13,147 @@ namespace ApprovalFramework.Tests;
 
 public sealed class KmV2PostgreSqlClaimTests
 {
+    [Fact]
+    [Trait("Category", "PostgreSqlIntegration")]
+    public async Task PostgreSqlManualReanalysis_CreatesDistinctJobs_AndDeletionFindsCanonicalAttempt()
+    {
+        if (!KmMockE2EPostgreSql.TryGetConnection(
+                "CSIT_KM_V2_POSTGRES_CONNECTION", ["csit_km_v2_"], [55432], out var connection)) return;
+        var factory = new Factory(connection);
+        var root = Path.Combine(Path.GetTempPath(), "csit-km-reanalysis-pg-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            await using (var schema = await factory.CreateDbContextAsync())
+                Assert.True(await schema.Database.EnsureCreatedAsync());
+            await SeedVendorAsync(factory, root);
+            await SeedEquipmentImageAsync(factory, root);
+            var client = new CaptureClient();
+            var options = Options.Create(new KmIntegrationOptions
+            {
+                Enabled = true, VendorEnabled = true, EquipmentEnabled = true,
+                BaseUrl = "https://km.invalid/", ServiceBaseUrl = "https://csit.invalid/",
+                TimeoutSeconds = 2, LeaseSeconds = 30, MaxRetryCount = 3,
+                RetryScheduleSeconds = [1]
+            });
+            var worker = new KmSyncWorker(factory, client, options, NullLogger<KmSyncWorker>.Instance);
+            Assert.Equal(2, await worker.ProcessBatchAsync());
+            var originals = await ReadOutboxesAsync(factory);
+            var callback = new KmAnalysisCallbackService(factory);
+            foreach (var original in originals)
+                await callback.ApplyDocumentStatusAsync(Failed(original));
+
+            var service = new KmManualReanalysisService(factory, options);
+            var attempts = new List<Guid>();
+            foreach (var original in originals)
+            {
+                var requestId = Guid.NewGuid();
+                Assert.Equal(requestId, await service.CreateAsync(original.Id, requestId, "admin", default));
+                Assert.Equal(requestId, await service.CreateAsync(original.Id, requestId, "admin", default));
+                await Assert.ThrowsAsync<KmReanalysisRejectedException>(() =>
+                    service.CreateAsync(original.Id, Guid.NewGuid(), "admin", default));
+                attempts.Add(requestId);
+            }
+            await using (var check = await factory.CreateDbContextAsync())
+            {
+                Assert.Equal(4, await check.KmIntegrationOutbox.CountAsync());
+                Assert.Equal(2, await check.KmIntegrationManualRetryAudits.CountAsync(x =>
+                    x.Action == "ManualReanalysis"));
+                Assert.All(await check.KmIntegrationOutbox.Where(x => attempts.Contains(x.Id)).ToListAsync(),
+                    x => { Assert.Equal(0, x.RetryCount); Assert.Equal(KmIntegrationStatus.Pending, x.Status); });
+            }
+            Assert.Equal(2, await worker.ProcessBatchAsync());
+            foreach (var attempt in (await ReadOutboxesAsync(factory)).Where(x => attempts.Contains(x.Id)))
+                await callback.ApplyDocumentStatusAsync(Failed(attempt));
+            var equipmentOriginal = originals.Single(x =>
+                x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile);
+            var equipmentFailedAttempt = (await ReadOutboxesAsync(factory)).Single(x =>
+                attempts.Contains(x.Id) &&
+                x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile);
+            await File.WriteAllBytesAsync(Path.Combine(root, "front.png"), [12, 11, 10, 9]);
+            await Assert.ThrowsAsync<KmReanalysisRejectedException>(() =>
+                service.CreateAsync(equipmentFailedAttempt.Id, Guid.NewGuid(), "admin", default));
+            await File.WriteAllBytesAsync(Path.Combine(root, "front.png"), [9, 10, 11, 12]);
+            var competingIds = new[] { Guid.NewGuid(), Guid.NewGuid() };
+            var competing = await Task.WhenAll(competingIds.Select(async id =>
+            {
+                try { return await service.CreateAsync(equipmentFailedAttempt.Id, id, "admin", default) == id; }
+                catch (KmReanalysisRejectedException) { return false; }
+            }));
+            Assert.Single(competing, x => x);
+            var equipmentSecondAttempt = competingIds[Array.IndexOf(competing, true)];
+            Assert.Equal(1, await worker.ProcessBatchAsync());
+            var completedAttempt = (await ReadOutboxesAsync(factory)).Single(x => x.Id == equipmentSecondAttempt);
+            await callback.ApplyDocumentStatusAsync(Completed(completedAttempt));
+            await using (var check = await factory.CreateDbContextAsync())
+            {
+                Assert.Equal(2, await check.KmIntegrationManualRetryAudits.CountAsync(x =>
+                    x.DocumentId == equipmentOriginal.DocumentId && x.Action == "ManualReanalysis"));
+                Assert.Equal(KmIntegrationStatus.Completed,
+                    (await check.KmIntegrationOutbox.SingleAsync(x => x.Id == equipmentSecondAttempt)).Status);
+                Assert.Single(await check.KmDocumentAnalysisResults.Where(x =>
+                    x.OutboxId == equipmentSecondAttempt).ToListAsync());
+            }
+            await using (var check = await factory.CreateDbContextAsync())
+            {
+                var vendor = originals.Single(x => x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile);
+                var deletion = await new VendorFileDeletionService(check).RequestAsync(vendor.SourceEntityId, "admin");
+                Assert.NotNull(deletion);
+                var job = await check.VendorFileDeletionJobs.SingleAsync();
+                Assert.Equal(attempts[(originals.ToList().IndexOf(vendor))], job.CanonicalIngestionEventId);
+                Assert.Equal("DocumentVersion", job.ToRequest().Resource.Scope);
+                var equipmentDeletion = await new EquipmentFileDeletionService(check)
+                    .RequestAsync(equipmentOriginal.SourceEntityId, "admin");
+                Assert.NotNull(equipmentDeletion);
+                var equipmentJob = await check.EquipmentFileDeletionJobs.SingleAsync();
+                Assert.Equal(equipmentSecondAttempt, equipmentJob.CanonicalIngestionEventId);
+                Assert.Equal("DocumentVersion", equipmentJob.ToRequest().Resource.Scope);
+                Assert.Equal(5, await check.KmIntegrationOutbox.CountAsync());
+                var vendorFailedAttempt = (await ReadOutboxesAsync(factory)).Single(x =>
+                    attempts.Contains(x.Id) &&
+                    x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile);
+                await Assert.ThrowsAsync<KmReanalysisRejectedException>(() =>
+                    service.CreateAsync(vendorFailedAttempt.Id, Guid.NewGuid(), "admin", default));
+            }
+            Assert.All((await ReadOutboxesAsync(factory)).Where(x => originals.Any(o => o.Id == x.Id)),
+                x => Assert.Equal(KmIntegrationStatus.Failed, x.Status));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
+    private static async Task<List<KmIntegrationOutbox>> ReadOutboxesAsync(Factory factory)
+    {
+        await using var db = await factory.CreateDbContextAsync();
+        return await db.KmIntegrationOutbox.AsNoTracking().OrderBy(x => x.CreatedAt).ToListAsync();
+    }
+
+    private static KmV2DocumentJobStatusCallback Failed(KmIntegrationOutbox outbox)
+    {
+        var now = DateTimeOffset.UtcNow;
+        return new("2.0", Guid.NewGuid(), outbox.EventId, outbox.Id, outbox.KmJobId!,
+            "CSIT", outbox.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile
+                ? KmAnalysisSourceTypes.VendorFile : KmAnalysisSourceTypes.EquipmentAttachment,
+            outbox.SourceEntityId, outbox.DocumentId, outbox.Version,
+            outbox.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile
+                ? Convert.ToHexString(SHA256.HashData([5, 6, 7, 8])).ToLowerInvariant()
+                : Convert.ToHexString(SHA256.HashData([9, 10, 11, 12])).ToLowerInvariant(),
+            "Failed", new(now, null, now), null,
+            new("TRANSIENT_FAILURE", "Temporary analysis failure.", true));
+    }
+
+    private static KmV2DocumentJobStatusCallback Completed(KmIntegrationOutbox outbox)
+    {
+        const string json = """
+            {"metadataSchemaVersion":"2.0","document":{"title":"Equipment analysis","documentType":"Other","summary":null,"language":null,"documentDate":null,"authors":[],"department":null,"documentVersionLabel":null,"keywords":[],"tags":[]},"technical":{"productNames":[],"modelNumbers":[],"vendorNames":[],"technologies":[],"standards":[],"softwareVersions":[],"hardwareVersions":[],"projectNames":[],"testItems":[],"measurements":[],"issueKeys":[],"errorCodes":[]},"extraction":{"sourceFormat":"txt","method":"Text","pageCount":null,"sheetNames":[],"extractedCharacterCount":1,"ocrUsed":false},"indexing":{"status":"Completed","indexId":"idx-test","chunkCount":1,"indexedAt":"2026-11-05T01:08:24Z"},"warnings":[],"sourceSpecific":{}}
+            """;
+        var now = DateTimeOffset.UtcNow;
+        return new("2.0", Guid.NewGuid(), outbox.EventId, outbox.Id, outbox.KmJobId!,
+            "CSIT", KmAnalysisSourceTypes.EquipmentAttachment, outbox.SourceEntityId,
+            outbox.DocumentId, outbox.Version,
+            Convert.ToHexString(SHA256.HashData([9, 10, 11, 12])).ToLowerInvariant(),
+            "Completed", new(now.AddSeconds(-1), now, null),
+            JsonDocument.Parse(json).RootElement.Clone(), null);
+    }
     [Fact]
     [Trait("Category", "PostgreSqlIntegration")]
     public async Task PostgreSqlClaimDispatchesAllV2SourcesIncludingEquipmentImage()

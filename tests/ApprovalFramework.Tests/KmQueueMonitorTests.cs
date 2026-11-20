@@ -26,6 +26,16 @@ public sealed class KmQueueMonitorTests
     }
 
     [Fact]
+    public void ReanalysisEndpointRequiresAdministratorAndBusinessWritePolicies()
+    {
+        var endpoint = typeof(KmQueueController).GetMethod(nameof(KmQueueController.Reanalyze))!;
+        var policies = endpoint.GetCustomAttributes<AuthorizeAttribute>()
+            .Select(x => x.Policy).ToArray();
+        Assert.Contains(SystemAuthorization.Policies.AdminOnly, policies);
+        Assert.Contains(SystemAuthorization.Policies.BusinessWrite, policies);
+    }
+
+    [Fact]
     public void QueuePageUsesScopedDarkSurfacesAndVisibleInteractionStates()
     {
         var css = File.ReadAllText(Path.Combine(FindRepositoryRoot(), "Components", "Pages",

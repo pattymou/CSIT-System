@@ -59,23 +59,24 @@ public sealed class VendorFileDeletionService(AppDbContext db,
                     "Vendor attachment has no valid formal approval evidence for deletion.");
         }
 
-        var outbox = IsPostgres(db)
+        var outboxes = IsPostgres(db)
             ? await db.KmIntegrationOutbox.FromSqlInterpolated($"""
                 SELECT * FROM km_integration_outbox
                 WHERE event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile'
                   AND source_entity_id = {fileId} FOR UPDATE
-                """).SingleOrDefaultAsync(cancellationToken)
-            : await db.KmIntegrationOutbox.SingleOrDefaultAsync(x =>
+                """).ToListAsync(cancellationToken)
+            : await db.KmIntegrationOutbox.Where(x =>
                 x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile &&
-                x.SourceEntityId == fileId, cancellationToken);
-        var requiresKmDeletion = outbox is not null &&
-            !EquipmentFileDeletionService.CanProveNeverDispatched(outbox);
+                x.SourceEntityId == fileId).ToListAsync(cancellationToken);
+        var canonical = outboxes.Where(x => !EquipmentFileDeletionService.CanProveNeverDispatched(x))
+            .OrderByDescending(x => x.SentAt).FirstOrDefault();
+        var requiresKmDeletion = canonical is not null;
         var now = DateTime.UtcNow;
         var job = VendorFileDeletionJob.Create(file, actor, requiresKmDeletion, now,
-            requiresKmDeletion ? outbox!.EventId : null);
+            canonical?.EventId);
         db.VendorFileDeletionJobs.Add(job);
-        if (!requiresKmDeletion && outbox is not null) db.KmIntegrationOutbox.Remove(outbox);
+        if (!requiresKmDeletion) db.KmIntegrationOutbox.RemoveRange(outboxes);
         await db.SaveChangesAsync(cancellationToken);
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
 
@@ -144,6 +145,12 @@ public sealed class VendorFileDeletionService(AppDbContext db,
                     .Union(db.KmDocumentAnalysisResults
                         .Where(x => outboxIds.Contains(x.OutboxId))
                         .Select(x => x.OutboxId))
+                    .Union(db.KmIntegrationManualRetryAudits
+                        .Where(x => outboxIds.Contains(x.OutboxId))
+                        .Select(x => x.OutboxId))
+                    .Union(db.KmIntegrationManualRetryAudits
+                        .Where(x => x.NewOutboxId.HasValue && outboxIds.Contains(x.NewOutboxId.Value))
+                        .Select(x => x.NewOutboxId!.Value))
                     .ToHashSetAsync(cancellationToken);
             db.KmIntegrationOutbox.RemoveRange(
                 outboxes.Where(x => !auditedOutboxIds.Contains(x.Id)));

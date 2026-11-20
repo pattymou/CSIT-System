@@ -12,7 +12,7 @@ public static class KmIntegrationModelConfiguration
             entity.ToTable("km_integration_outbox", table =>
             {
                 table.HasCheckConstraint("ck_km_outbox_supported_event",
-                    "source_system = 'CSIT' AND ((event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND project_id IS NOT NULL) OR (event_type = 'VerificationApplicationAttachmentArchived' AND source_entity_type = 'VerificationApplicationFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived') AND source_entity_type = 'ApparatusFile' AND source_entity_id = document_id AND event_id = source_entity_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL))");
+                    "source_system = 'CSIT' AND ((event_type = 'TestReportCommitted' AND source_entity_type = 'TestReport' AND project_id IS NOT NULL) OR (event_type = 'VerificationApplicationAttachmentArchived' AND source_entity_type = 'VerificationApplicationFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'DocumentLibraryFileUploaded' AND source_entity_type = 'DocumentLibraryFile' AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type = 'VendorFileArchived' AND source_entity_type = 'VendorFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL) OR (event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived') AND source_entity_type = 'ApparatusFile' AND source_entity_id = document_id AND version = 1 AND project_id IS NULL AND case_id IS NULL AND task_id IS NULL))");
                 table.HasCheckConstraint("ck_km_outbox_version_size", "version > 0 AND size_bytes > 0");
                 table.HasCheckConstraint("ck_km_outbox_sent_job",
                     "status NOT IN ('Sent', 'Processing', 'Completed') OR km_job_id IS NOT NULL");
@@ -39,6 +39,7 @@ public static class KmIntegrationModelConfiguration
             entity.Property(x => x.NextRetryAt).HasColumnName("next_retry_at");
             entity.Property(x => x.LastErrorCode).HasColumnName("last_error_code").HasMaxLength(100);
             entity.Property(x => x.LastErrorMessage).HasColumnName("last_error_message").HasMaxLength(500);
+            entity.Property(x => x.LastErrorRetryable).HasColumnName("last_error_retryable");
             entity.Property(x => x.LastAttemptAt).HasColumnName("last_attempt_at");
             entity.Property(x => x.LeaseToken).HasColumnName("lease_token");
             entity.Property(x => x.LeaseExpiresAt).HasColumnName("lease_expires_at");
@@ -47,7 +48,8 @@ public static class KmIntegrationModelConfiguration
             entity.Property(x => x.SentAt).HasColumnName("sent_at");
             entity.Property(x => x.CompletedAt).HasColumnName("completed_at");
             entity.HasIndex(x => x.EventId).IsUnique();
-            entity.HasIndex(x => new { x.SourceSystem, x.DocumentId, x.Version }).IsUnique();
+            entity.HasIndex(x => new { x.SourceSystem, x.DocumentId, x.Version }).IsUnique()
+                .HasFilter("status IN ('Pending', 'Dispatching', 'Sent', 'Processing', 'Completed')");
             entity.HasIndex(x => new { x.Status, x.NextRetryAt });
             entity.HasIndex(x => new { x.Status, x.LeaseExpiresAt });
             entity.HasIndex(x => x.KmJobId).IsUnique().HasFilter("km_job_id IS NOT NULL");
@@ -61,7 +63,7 @@ public static class KmIntegrationModelConfiguration
                 table.HasCheckConstraint("ck_km_manual_retry_reason",
                     "length(btrim(reason)) BETWEEN 5 AND 500");
                 table.HasCheckConstraint("ck_km_manual_retry_action",
-                    "action = 'ManualKmSyncRetry' AND previous_status = 'Failed'");
+                    "action IN ('ManualKmSyncRetry', 'ManualReanalysis') AND previous_status = 'Failed' AND (action <> 'ManualReanalysis' OR (new_outbox_id IS NOT NULL AND previous_km_job_id IS NOT NULL AND manual_attempt_number > 0))");
             });
             entity.HasKey(x => x.Id);
             entity.Property(x => x.Id).HasColumnName("id");
@@ -77,7 +79,11 @@ public static class KmIntegrationModelConfiguration
             entity.Property(x => x.PreviousErrorCode).HasColumnName("previous_error_code").HasMaxLength(100);
             entity.Property(x => x.PreviousErrorMessage).HasColumnName("previous_error_message").HasMaxLength(500);
             entity.Property(x => x.PreviousRetryCount).HasColumnName("previous_retry_count");
+            entity.Property(x => x.NewOutboxId).HasColumnName("new_outbox_id");
+            entity.Property(x => x.PreviousKmJobId).HasColumnName("previous_km_job_id").HasMaxLength(150);
+            entity.Property(x => x.ManualAttemptNumber).HasColumnName("manual_attempt_number");
             entity.HasIndex(x => new { x.OutboxId, x.RequestedAt });
+            entity.HasIndex(x => x.NewOutboxId).IsUnique().HasFilter("new_outbox_id IS NOT NULL");
         });
     }
 }

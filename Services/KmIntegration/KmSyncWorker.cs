@@ -25,6 +25,26 @@ public sealed class KmSyncWorker(
     IOptions<DocumentStorageOptions>? documentStorage = null,
     IOptions<EquipmentAggregateAnalysisOptions>? aggregateConfigured = null)
 {
+    public static async Task<bool> ValidateManualReanalysisSourceAsync(AppDbContext db,
+        KmIntegrationOutbox attempt, KmIntegrationOptions options, CancellationToken cancellationToken) =>
+        attempt.SourceEntityType switch
+        {
+            KmIntegrationSourceEntityTypes.VendorFile =>
+                await BuildVendorRequestAsync(db, attempt, options, cancellationToken) is not null,
+            KmIntegrationSourceEntityTypes.ApparatusFile =>
+                await BuildEquipmentRequestAsync(db, attempt, options, cancellationToken) is not null,
+            _ => false
+        };
+
+    private static Task<bool> HasValidReanalysisIdentityAsync(AppDbContext db,
+        KmIntegrationOutbox row, CancellationToken cancellationToken) =>
+        db.KmIntegrationManualRetryAudits.AsNoTracking().AnyAsync(a =>
+            a.Action == "ManualReanalysis" && a.NewOutboxId == row.Id &&
+            a.OutboxId != row.Id && a.DocumentId == row.DocumentId &&
+            a.Version == row.Version && a.ManualAttemptNumber > 0 &&
+            db.KmIntegrationOutbox.Any(old => old.Id == a.OutboxId &&
+                old.Status == KmIntegrationStatus.Failed && old.KmJobId == a.PreviousKmJobId &&
+                old.SourceEntityId == row.SourceEntityId), cancellationToken);
     public async Task<int> ProcessBatchAsync(CancellationToken cancellationToken = default)
     {
         var options = configured.Value;
@@ -760,9 +780,11 @@ public sealed class KmSyncWorker(
         CancellationToken cancellationToken)
     {
         if (!options.VendorEnabled || row.Id == Guid.Empty || row.EventId == Guid.Empty || row.DocumentId == Guid.Empty ||
-            row.EventId != row.SourceEntityId || row.DocumentId != row.SourceEntityId || row.Version != 1 ||
+            row.DocumentId != row.SourceEntityId || row.Version != 1 ||
             !TryGetServiceBaseUri(options, out var serviceBase))
             return null;
+        if (row.EventId != row.SourceEntityId &&
+            !await HasValidReanalysisIdentityAsync(db, row, cancellationToken)) return null;
         if (await db.VendorFileDeletionJobs.AsNoTracking().AnyAsync(x =>
             x.VendorFileId == row.SourceEntityId, cancellationToken)) return null;
         var file = await db.VendorFiles.AsNoTracking().Include(x => x.Vendor)
@@ -807,9 +829,11 @@ public sealed class KmSyncWorker(
         CancellationToken cancellationToken)
     {
         if (!options.EquipmentEnabled || row.Id == Guid.Empty || row.EventId == Guid.Empty || row.DocumentId == Guid.Empty ||
-            row.EventId != row.SourceEntityId || row.DocumentId != row.SourceEntityId || row.Version != 1 ||
+            row.DocumentId != row.SourceEntityId || row.Version != 1 ||
             !TryGetServiceBaseUri(options, out var serviceBase))
             return null;
+        if (row.EventId != row.SourceEntityId &&
+            !await HasValidReanalysisIdentityAsync(db, row, cancellationToken)) return null;
         if (await db.EquipmentFileDeletionJobs.AsNoTracking().AnyAsync(x =>
             x.ApparatusFileId == row.SourceEntityId, cancellationToken))
             return null;

@@ -50,27 +50,28 @@ public sealed class EquipmentFileDeletionService(
         if (apparatus?.ModuleCode != "equipment")
             throw new InvalidOperationException("Equipment deletion lifecycle only accepts Equipment attachments.");
 
-        var outbox = IsPostgres(db)
+        var outboxes = IsPostgres(db)
             ? await db.KmIntegrationOutbox.FromSqlInterpolated($"""
                 SELECT * FROM km_integration_outbox
                 WHERE event_type IN ('EquipmentDocumentArchived', 'EquipmentAttachmentArchived')
                   AND source_entity_type = 'ApparatusFile'
                   AND source_entity_id = {fileId}
                 FOR UPDATE
-                """).SingleOrDefaultAsync(cancellationToken)
-            : await db.KmIntegrationOutbox.SingleOrDefaultAsync(x =>
+                """).ToListAsync(cancellationToken)
+            : await db.KmIntegrationOutbox.Where(x =>
                 (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
                  x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
-                x.SourceEntityId == fileId, cancellationToken);
+                x.SourceEntityId == fileId).ToListAsync(cancellationToken);
 
-        var requiresKmDeletion = outbox is not null && !CanProveNeverDispatched(outbox);
+        var canonical = outboxes.Where(x => !CanProveNeverDispatched(x))
+            .OrderByDescending(x => x.SentAt).FirstOrDefault();
+        var requiresKmDeletion = canonical is not null;
         var now = DateTime.UtcNow;
         var job = EquipmentFileDeletionJob.Create(file, actor, requiresKmDeletion, now,
-            requiresKmDeletion ? outbox!.EventId : null);
+            canonical?.EventId);
         db.EquipmentFileDeletionJobs.Add(job);
-        if (!requiresKmDeletion && outbox is not null)
-            db.KmIntegrationOutbox.Remove(outbox);
+        if (!requiresKmDeletion) db.KmIntegrationOutbox.RemoveRange(outboxes);
         await db.SaveChangesAsync(cancellationToken);
         if (transaction is not null) await transaction.CommitAsync(cancellationToken);
 
@@ -145,6 +146,12 @@ public sealed class EquipmentFileDeletionService(
                     .Union(db.KmDocumentAnalysisResults
                         .Where(x => outboxIds.Contains(x.OutboxId))
                         .Select(x => x.OutboxId))
+                    .Union(db.KmIntegrationManualRetryAudits
+                        .Where(x => outboxIds.Contains(x.OutboxId))
+                        .Select(x => x.OutboxId))
+                    .Union(db.KmIntegrationManualRetryAudits
+                        .Where(x => x.NewOutboxId.HasValue && outboxIds.Contains(x.NewOutboxId.Value))
+                        .Select(x => x.NewOutboxId!.Value))
                     .ToHashSetAsync(cancellationToken);
             db.KmIntegrationOutbox.RemoveRange(
                 outboxes.Where(x => !auditedOutboxIds.Contains(x.Id)));
