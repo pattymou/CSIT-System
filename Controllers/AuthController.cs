@@ -40,7 +40,7 @@ public class AuthController(AdAuthenticationService ad, IConfiguration configura
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SIT System Login</title>
+  <title>CSIT System Login</title>
   <style>
     :root {
       color-scheme: dark;
@@ -103,7 +103,7 @@ public class AuthController(AdAuthenticationService ad, IConfiguration configura
   <div class="shell">
     <form class="card" method="post" action="/auth/login">
       {{returnUrlInput}}
-      <h1>SIT System</h1>
+      <h1>CSIT System</h1>
       <p>使用公司 AD 帳號登入</p>
       {{errorHtml}}
       <input name="username" placeholder="AD 帳號" autocomplete="username" />

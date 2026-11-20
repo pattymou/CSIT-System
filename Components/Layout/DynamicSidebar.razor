@@ -7,7 +7,7 @@
 @inject IAuthorizationService AuthorizationService
 
 <div class="brand">
-    <div class="brand-title">SIT System</div>
+    <div class="brand-title">CSIT System</div>
 </div>
 
 <div class="nav-scroll">
@@ -36,6 +36,8 @@
                          .Where(x => x.SectionId == block.Id)
                          .Where(x => x.IsEnabled)
                          .Where(x => !x.AdminOnly || _isAdmin)
+                         .Where(x => !IsAdministrationSection(block) ||
+                             !string.Equals(x.RoutePath, "/system/menu-management", StringComparison.OrdinalIgnoreCase))
                          .OrderBy(x => x.SortOrder)
                          .ThenBy(x => x.Title))
             {
