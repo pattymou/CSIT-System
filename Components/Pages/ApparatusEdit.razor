@@ -4,8 +4,11 @@
 @page "/assets/{ModuleCode}/{Id}/edit"
 @attribute [Authorize(Policy = SystemAuthorization.Policies.CsitStaff)]
 @rendermode @(new InteractiveServerRenderMode(prerender: false))
+@implements IAsyncDisposable
 @using Microsoft.AspNetCore.Components.Forms
+@using Microsoft.AspNetCore.Components.Routing
 @using global::System.Text.Json
+@using SIT.DepartmentSystem.Web.Components.Shared
 @using SIT.DepartmentSystem.Web.Models.Api
 @using SIT.DepartmentSystem.Web.Services.Interfaces
 @inject BrowserApiClient Api
@@ -14,6 +17,7 @@
 @inject IJSRuntime JS
 @inject SIT.DepartmentSystem.Web.Services.Approval.ApprovalContextUploads ContextUploads
 @inject AuthenticationStateProvider AuthProvider
+@inject ILogger<ApparatusEdit> Logger
 
 <h3>@PageTitle</h3>
 
@@ -487,8 +491,11 @@
     <h4 class="attachment-section-title uploaded-attachment-title">已上傳附件</h4>
     @if (IsEquipment)
     {
+        @if (!string.IsNullOrWhiteSpace(_deletionStatusMessage)) { <div class="record-empty-box" role="status">@_deletionStatusMessage</div> }
         <SIT.DepartmentSystem.Web.Components.Shared.EquipmentFileTable Files="_files"
-            CanManageMetadata="true" OnDelete="DeleteFileAsync" OnChanged="LoadFilesAsync" />
+            CanManageMetadata="true" OnDelete="DeleteFileAsync" OnChanged="LoadFilesAsync"
+            OnRefreshDeletionStatus="RefreshDeletionStatusAsync" SubmittingFileIds="_deletionSubmitting"
+            AcceptedFileIds="_deletionAccepted" LongRunningFileIds="LongRunningDeletionIds" />
     }
     else if (_files.Count > 0)
     {
@@ -563,6 +570,18 @@
 
     private List<SelectedUploadFile> _selectedFiles = new();
     private List<ApparatusFileDto> _files = new();
+    private readonly HashSet<Guid> _deletionSubmitting = [];
+    private readonly HashSet<Guid> _deletionAccepted = [];
+    private readonly Dictionary<Guid, DateTimeOffset> _deletionStartedAt = [];
+    private CancellationTokenSource? _deletionPollingCts;
+    private Task? _deletionPollingTask;
+    private string? _deletionStatusMessage;
+    private bool _disposed;
+    private const int DeletionPollSeconds = 5;
+    private static readonly TimeSpan LongDeletionWait = TimeSpan.FromMinutes(2);
+    private IReadOnlySet<Guid> LongRunningDeletionIds => _deletionStartedAt
+        .Where(x => DateTimeOffset.UtcNow - x.Value >= LongDeletionWait)
+        .Select(x => x.Key).ToHashSet();
     private IReadOnlyList<SIT.DepartmentSystem.Web.Services.Approval.OwnApprovalUploadDto> _ownUploads = [];
 
     private List<SystemOptionDto> _apparatusKindOptions = new();
@@ -615,6 +634,7 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
+        if (firstRender) Nav.LocationChanged += OnLocationChanged;
         if (_reloadRequested)
         {
             _reloadRequested = false;
@@ -645,6 +665,11 @@
 
     private async Task InitializeAsync()
     {
+        StopDeletionPolling();
+        _deletionSubmitting.Clear();
+        _deletionAccepted.Clear();
+        _deletionStartedAt.Clear();
+        _deletionStatusMessage = null;
         _message = null;
         _form = new ApparatusUpsertRequest { ReservationStatus = "可借用" };
         _selectedFiles = new();
@@ -1054,34 +1079,182 @@
             return;
         }
 
-        Console.WriteLine($"[ApparatusEdit] LoadFiles start. moduleCode={EffectiveModuleCode}, id={_form.Id}");
-
-        _files = await Api.GetAsync<List<ApparatusFileDto>>(
-            $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(CurrentAssetId!)}/files");
+        await RefreshFileListAsync(CancellationToken.None);
         var user = (await AuthProvider.GetAuthenticationStateAsync()).User;
         _ownUploads = await ContextUploads.ForAssetAsync(user, EffectiveModuleCode, CurrentAssetId!);
-
-        Console.WriteLine($"[ApparatusEdit] LoadFiles done. id={_form.Id}, count={_files.Count}");
     }
 
     private async Task DeleteFileAsync(Guid fileId)
     {
+        if (IsEquipment && (_deletionSubmitting.Contains(fileId) || _deletionAccepted.Contains(fileId) ||
+            !_files.Any(file => file.Id == fileId && file.CanDelete && file.DeletionStatus is null))) return;
         if (!await JS.InvokeAsync<bool>("confirm", "確定要刪除此設備附件嗎？已送達 KM 的文件會先等待 KM 清理確認。"))
             return;
-        Console.WriteLine($"[ApparatusEdit] DeleteFile start. fileId={fileId}");
-
-        var response = await Api.DeleteAsync($"/api/assets/files/{fileId}");
-        var body = response.Body;
-
-        if (response.IsSuccessStatusCode)
+        if (IsEquipment)
         {
-            Console.WriteLine($"[ApparatusEdit] DeleteFile success. fileId={fileId}");
-            await LoadFilesAsync();
+            if (!_deletionSubmitting.Add(fileId) || _deletionAccepted.Contains(fileId)) return;
+            _deletionStatusMessage = null;
+            StateHasChanged();
+            try
+            {
+                var response = await Api.DeleteAsync($"/api/assets/files/{fileId}");
+                if (response.StatusCode is 202 or 204)
+                {
+                    _deletionAccepted.Add(fileId);
+                    _deletionStartedAt.TryAdd(fileId, DateTimeOffset.UtcNow);
+                    _deletionSubmitting.Remove(fileId);
+                    StateHasChanged();
+                    await RefreshDeletionStatusAsync();
+                    if (response.StatusCode == 204 && _files.Any(file => file.Id == fileId))
+                        _deletionStatusMessage = "伺服器已回覆刪除完成，但附件仍在清單；請重新整理刪除狀態。";
+                    EnsureDeletionPolling();
+                }
+                else
+                {
+                    Logger.LogWarning("Equipment file deletion request failed. FileId={FileId} StatusCode={StatusCode}",
+                        fileId, response.StatusCode);
+                    _deletionStatusMessage = "送出刪除要求失敗，請稍後重試或聯絡管理員。";
+                }
+            }
+            catch (Exception ex) when (ex is not JSDisconnectedException)
+            {
+                Logger.LogWarning("Equipment file deletion request failed. FileId={FileId} FailureType={FailureType}",
+                    fileId, ex.GetType().Name);
+                _deletionStatusMessage = "無法連線以送出刪除要求，請確認網路後重試。";
+            }
+            finally
+            {
+                _deletionSubmitting.Remove(fileId);
+            }
+            return;
         }
+        var otherResponse = await Api.DeleteAsync($"/api/assets/files/{fileId}");
+        if (otherResponse.IsSuccessStatusCode)
+            await LoadFilesAsync();
         else
         {
-            _message = $"刪除失敗：{response.StatusCode} {body}";
-            Console.WriteLine($"[ApparatusEdit] DeleteFile failed. fileId={fileId}, status={response.StatusCode}, body={body}");
+            _message = $"刪除失敗：{otherResponse.StatusCode} {otherResponse.Body}";
+        }
+    }
+
+    private async Task RefreshFileListAsync(CancellationToken cancellationToken)
+    {
+        var assetId = CurrentAssetId;
+        if (string.IsNullOrWhiteSpace(assetId)) return;
+        var refreshed = await Api.GetAsync<List<ApparatusFileDto>>(
+            $"/api/assets/{Uri.EscapeDataString(EffectiveModuleCode)}/{Uri.EscapeDataString(assetId)}/files",
+            cancellationToken);
+        if (_disposed || cancellationToken.IsCancellationRequested || CurrentAssetId != assetId) return;
+        _deletionStatusMessage = null;
+
+        if (IsEquipment)
+        {
+            var previousActive = _files.Where(file =>
+                EquipmentFileDeletionPresentation.IsActive(file.DeletionStatus))
+                .Select(file => file.Id).Concat(_deletionAccepted).Distinct().ToArray();
+            if (previousActive.Any(id => refreshed.All(file => file.Id != id)))
+                _deletionStatusMessage = "附件已刪除完成。";
+            foreach (var file in refreshed.Where(file =>
+                EquipmentFileDeletionPresentation.IsActive(file.DeletionStatus)))
+                _deletionStartedAt.TryAdd(file.Id, DateTimeOffset.UtcNow);
+            _deletionAccepted.RemoveWhere(id => refreshed.All(file => file.Id != id) ||
+                refreshed.Any(file => file.Id == id && file.DeletionStatus is not null));
+            foreach (var id in _deletionStartedAt.Keys.ToArray())
+                if (refreshed.All(file => file.Id != id ||
+                    !EquipmentFileDeletionPresentation.IsActive(file.DeletionStatus)) &&
+                    !_deletionAccepted.Contains(id)) _deletionStartedAt.Remove(id);
+        }
+        _files = refreshed;
+        EnsureDeletionPolling();
+    }
+
+    private async Task RefreshDeletionStatusAsync()
+    {
+        try
+        {
+            _deletionStatusMessage = null;
+            await RefreshFileListAsync(CancellationToken.None);
+        }
+        catch (Exception ex) when (ex is not JSDisconnectedException)
+        {
+            Logger.LogWarning("Equipment file deletion status refresh failed. FailureType={FailureType}",
+                ex.GetType().Name);
+            _deletionStatusMessage = "暫時無法取得刪除進度，請稍後重新整理。";
+        }
+    }
+
+    private bool HasActiveDeletion => IsEquipment &&
+        (_deletionAccepted.Count > 0 || _files.Any(file =>
+            EquipmentFileDeletionPresentation.IsActive(file.DeletionStatus)));
+
+    private void EnsureDeletionPolling()
+    {
+        if (_disposed || !HasActiveDeletion || _deletionPollingTask is { IsCompleted: false }) return;
+        _deletionPollingCts?.Dispose();
+        _deletionPollingCts = new CancellationTokenSource();
+        _deletionPollingTask = PollDeletionStatusesAsync(_deletionPollingCts.Token);
+    }
+
+    private async Task PollDeletionStatusesAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(DeletionPollSeconds));
+            while (HasActiveDeletion && await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                try
+                {
+                    await InvokeAsync(async () =>
+                    {
+                        if (cancellationToken.IsCancellationRequested || _disposed) return;
+                        await RefreshFileListAsync(cancellationToken);
+                        if (!_disposed && !cancellationToken.IsCancellationRequested) StateHasChanged();
+                    });
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { return; }
+                catch (JSDisconnectedException) { return; }
+                catch (ObjectDisposedException) when (cancellationToken.IsCancellationRequested || _disposed) { return; }
+                catch (Exception ex)
+                {
+                    if (cancellationToken.IsCancellationRequested || _disposed) return;
+                    Logger.LogWarning("Equipment file deletion status poll failed. FailureType={FailureType}",
+                        ex.GetType().Name);
+                    _deletionStatusMessage = "暫時無法取得刪除進度，請稍後重新整理。";
+                    await InvokeAsync(StateHasChanged);
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+        catch (JSDisconnectedException) { }
+        finally { if (!cancellationToken.IsCancellationRequested) _deletionPollingTask = null; }
+    }
+
+    private Task? StopDeletionPolling()
+    {
+        var task = _deletionPollingTask;
+        _deletionPollingTask = null;
+        var source = _deletionPollingCts;
+        _deletionPollingCts = null;
+        if (source is not null)
+        {
+            source.Cancel();
+            source.Dispose();
+        }
+        return task;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs args) => StopDeletionPolling();
+
+    public async ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        Nav.LocationChanged -= OnLocationChanged;
+        if (StopDeletionPolling() is { } task)
+        {
+            try { await task; }
+            catch (OperationCanceledException) { }
+            catch (JSDisconnectedException) { }
+            catch (ObjectDisposedException) { }
         }
     }
 

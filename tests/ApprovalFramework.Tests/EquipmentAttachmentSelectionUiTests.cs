@@ -59,7 +59,7 @@ public sealed class EquipmentAttachmentSelectionUiTests
         Assert.DoesNotContain("LocalDeletionClass", table);
         Assert.DoesNotContain("LocalDeletionError", table);
         Assert.DoesNotContain("\u672c\u5730\u522a\u9664\u72c0\u614b", table);
-        Assert.Contains("disabled=\"@(!file.CanDelete)\"", table);
+        Assert.Contains("EquipmentFileDeletionPresentation.DisableDelete(file", table);
         Assert.Contains("OnDelete.InvokeAsync(file.Id)", table);
         Assert.Contains("width: 26%", css);
         Assert.Contains("overflow-wrap: anywhere", css);

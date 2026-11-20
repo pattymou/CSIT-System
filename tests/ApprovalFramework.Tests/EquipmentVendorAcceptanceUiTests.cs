@@ -114,7 +114,7 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.DoesNotContain("<th>審核狀態</th>", files);
         Assert.Equal(6, Count(files, "<th>"));
         Assert.DoesNotContain("LocalDeletionText(file)", files);
-        Assert.Contains("disabled=\"@(!file.CanDelete)\"", files);
+        Assert.Contains("EquipmentFileDeletionPresentation.DisableDelete(file", files);
         Assert.DoesNotContain("file.DeletionError ?? file.KmError", files);
         Assert.Contains("equipment-file-uploader-column", fileCss);
     }

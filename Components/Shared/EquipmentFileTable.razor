@@ -4,7 +4,7 @@
 @using SIT.DepartmentSystem.Web.Services
 @inject BrowserApiClient Api
 
-@if (Files.Count == 0)
+@if (VisibleFiles.Count == 0)
 {
     <div class="record-empty-box"><strong>目前沒有設備文件或照片</strong></div>
 }
@@ -22,12 +22,13 @@ else
             </colgroup>
             <thead><tr><th>檔案名稱</th><th>類型</th><th>上傳者</th><th>正式入庫</th><th>KM 分析</th><th>操作</th></tr></thead>
             <tbody>
-                @foreach (var file in Files)
+                @foreach (var file in VisibleFiles)
                 {
-                    <tr>
+                    <tr @key="file.Id">
                         <td>
                             @if (file.IsImage) { <a href="@file.ImageUrl" target="_blank" rel="noopener"><img class="equipment-file-thumbnail" src="@file.ImageUrl" alt="@file.FileName" /></a> }
                             <strong class="equipment-file-name">@file.FileName</strong><small>@FormatSize(file.FileSize)</small>
+                            @if (DeletionMessage(file) is { } deletionMessage) { <small class="@(EquipmentFileDeletionPresentation.IsFailure(file.DeletionStatus) ? "error-text" : "")" role="status">@deletionMessage</small> }
                             @if (!string.IsNullOrWhiteSpace(file.MetadataJson))
                             {
                                 <details class="metadata-suggestion"><summary>查看 KM／AI Metadata 建議（@MetadataStatus(file.MetadataVerificationStatus)）</summary>
@@ -45,12 +46,19 @@ else
                         <td>@Display(file.UploadedBy)<small>@file.CreatedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</small></td>
                         <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Archive(file.IsFormalArchiveVerified ? FileArchiveStatuses.Archived : file.ArchiveStatus)" Title="@file.ArchiveError" />@if (!string.IsNullOrWhiteSpace(file.ArchiveError)) { <small class="error-text">@file.ArchiveError</small> }</td>
                         <td><AttachmentStatusPill Status="@AttachmentStatusPresentation.Km(file.HasKmSchedule, file.KmEnabled, file.KmStatus, file.IsImage)" Title="@file.KmError" />@if (!string.IsNullOrWhiteSpace(file.KmError)) { <small class="error-text">@file.KmError</small> }</td>
-                        <td class="action-cell"><div class="action-cell-content"><a class="table-link-btn" href="@file.DownloadUrl" target="_blank" rel="noopener" download>下載</a>@if (OnDelete.HasDelegate) { <button type="button" class="table-chip-btn danger" disabled="@(!file.CanDelete)" title="@(file.CanDelete ? "啟動安全刪除流程" : "設備附件刪除流程處理中")" @onclick="() => OnDelete.InvokeAsync(file.Id)">刪除</button> }</div></td>
+                        <td class="action-cell"><div class="action-cell-content"><a class="table-link-btn" href="@file.DownloadUrl" target="_blank" rel="noopener" download>下載</a>@if (OnDelete.HasDelegate) { <button type="button" class="table-chip-btn danger" disabled="@(EquipmentFileDeletionPresentation.DisableDelete(file, SubmittingFileIds.Contains(file.Id), AcceptedFileIds.Contains(file.Id)))" @onclick="() => OnDelete.InvokeAsync(file.Id)">@(SubmittingFileIds.Contains(file.Id) || AcceptedFileIds.Contains(file.Id) || EquipmentFileDeletionPresentation.IsActive(file.DeletionStatus) ? "刪除中…" : EquipmentFileDeletionPresentation.IsFailure(file.DeletionStatus) ? "刪除失敗" : "刪除")</button> }</div></td>
                     </tr>
                 }
             </tbody>
         </table>
     </div>
+    @if (OnRefreshDeletionStatus.HasDelegate &&
+        (AcceptedFileIds.Count > 0 || VisibleFiles.Any(file =>
+            EquipmentFileDeletionPresentation.IsActive(file.DeletionStatus) ||
+            EquipmentFileDeletionPresentation.IsFailure(file.DeletionStatus))))
+    {
+        <button type="button" class="table-chip-btn" @onclick="() => OnRefreshDeletionStatus.InvokeAsync()">重新整理刪除狀態</button>
+    }
 }
 
 @code {
@@ -58,7 +66,16 @@ else
     [Parameter] public bool CanManageMetadata { get; set; }
     [Parameter] public EventCallback<Guid> OnDelete { get; set; }
     [Parameter] public EventCallback OnChanged { get; set; }
+    [Parameter] public EventCallback OnRefreshDeletionStatus { get; set; }
+    [Parameter] public IReadOnlySet<Guid> SubmittingFileIds { get; set; } = new HashSet<Guid>();
+    [Parameter] public IReadOnlySet<Guid> AcceptedFileIds { get; set; } = new HashSet<Guid>();
+    [Parameter] public IReadOnlySet<Guid> LongRunningFileIds { get; set; } = new HashSet<Guid>();
     private readonly Dictionary<Guid, string> _metadataEdits = [];
+    private IReadOnlyList<ApparatusFileDto> VisibleFiles => Files
+        .Where(file => file.DeletionStatus != EquipmentFileDeletionStatuses.Completed).ToList();
+    private string? DeletionMessage(ApparatusFileDto file) => EquipmentFileDeletionPresentation.Message(
+        file, SubmittingFileIds.Contains(file.Id), AcceptedFileIds.Contains(file.Id),
+        LongRunningFileIds.Contains(file.Id));
 
     private string MetadataText(ApparatusFileDto file) =>
         _metadataEdits.TryGetValue(file.Id, out var value) ? value : file.MetadataJson ?? string.Empty;
