@@ -5,7 +5,7 @@
 
 <div class="form-card equipment-metadata-summary @(Compact ? "equipment-metadata-compact" : null)">
     <div class="case-card-head"><div><div class="case-kicker">KM / CONSOLIDATED ANALYSIS</div><h3>設備綜合分析</h3></div>
-        @if (_view is not null && !IsBlank) { <span class="record-status-pill">@StatusText(_view.Status)</span> }
+        @if (_view is not null && !IsBlank) { <span class="record-status-pill">@(_view.Status == "Completed" && _view.Result is not null && !HasSubstantiveAnalysis(_view.Result) ? "資料不足" : StatusText(_view.Status))</span> }
     </div>
     @if (_loading) { if (HasFiles != false) { <div class="record-empty-box"><strong>讀取設備綜合分析中...</strong></div> } }
     else if (IsBlank) { }
@@ -100,6 +100,6 @@
     private static string EmptyDescription(string status) => status switch { "FeatureDisabled" => "Feature Flag 保持關閉；CSIT 不會用單檔結果拼湊或產生假綜合分析。", "NoEligibleDocuments" => "只納入正式入庫、未進入刪除流程且具有有效 KM 單檔分析結果的文件。", _ => "完成後會顯示 KM 回傳快照；既有單檔 KM 工作不會重新派送。" };
     private static bool HasSubstantiveAnalysis(EquipmentAggregateAnalysisResult result) =>
         result.TechnicalSpecifications.Count > 0 || result.TestCapabilities.Count > 0 ||
-        result.Limitations.Count > 0 || result.Conflicts.Count > 0 || result.Evidence.Count > 0;
+        result.Limitations.Count > 0 || result.Conflicts.Count > 0;
     private static string ShortHash(string hash) => hash.Length <= 12 ? hash : hash[..12];
 }

@@ -1,5 +1,6 @@
 @page "/administration/km-metadata"
 @using global::System.Text.Json
+@using global::System.Text.Encodings.Web
 @using SIT.DepartmentSystem.Web.Services
 @using SIT.DepartmentSystem.Web.Services.KmIntegration
 @attribute [Authorize(Policy = SystemAuthorization.Policies.AdminOnly)]
@@ -89,7 +90,7 @@ else
                             <td>@item.MetadataSchemaVersion</td>
                             <td><span class="@WarningClass(item.WarningCount)">@item.WarningCount</span></td>
                             <td>@(item.MissingSummary ? "缺少" : "已有")</td>
-                            <td><button type="button" class="kmm-view" @onclick="() => ShowDetailAsync(item.Id)">查看</button></td>
+                            <td><button type="button" class="kmm-view" @onclick="() => ShowDetailAsync(item)">查看</button></td>
                         </tr>
                     }
                 }
@@ -121,29 +122,61 @@ else
             }
             else if (_detail is not null)
             {
+                var metadata = EquipmentKmMetadataProjection.Project(_detail.Result);
+                var technical = metadata.Technical.Where(x => x.Label != "測試項目" && x.Label != "量測資訊").ToList();
+                var testItems = metadata.Technical.FirstOrDefault(x => x.Label == "測試項目");
+                var measurements = metadata.Technical.FirstOrDefault(x => x.Label == "量測資訊");
                 <div class="kmm-detail-meta">
-                    <span>來源：@SourceLabel(_detail.SourceType)</span><span>KM Job：@_detail.KmJobId</span>
+                    <span>來源：@SourceLabel(_detail.SourceType)</span>
                     <span>Schema：@_detail.MetadataSchemaVersion</span>
-                    <span>分析時間：@_detail.AnalyzedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss")</span>
                 </div>
+                @if (!HasReadableAnalysis(metadata))
+                {
+                    <div class="kmm-message">資料不足：KM 未提供可閱讀的摘要、技術資訊、規格、測項或測試能力。請查看分析警告與原始 JSON。</div>
+                }
                 <div class="kmm-sections">
-                    @foreach (var section in MetadataSections(_detail.Result))
+                    <section class="kmm-section"><h3>文件摘要</h3>
+                        <dl class="kmm-fields">
+                            @if (!string.IsNullOrWhiteSpace(metadata.Document.Title ?? _detailFileName)) { <div><dt>文件名稱</dt><dd>@(metadata.Document.Title ?? _detailFileName)</dd></div> }
+                            @if (!string.IsNullOrWhiteSpace(metadata.Document.DocumentType)) { <div><dt>文件類型</dt><dd>@DocumentTypeLabel(metadata.Document.DocumentType)</dd></div> }
+                        </dl>
+                        @if (!string.IsNullOrWhiteSpace(metadata.Document.Summary)) { <p class="kmm-summary">@metadata.Document.Summary</p> }
+                        else { <p class="kmm-missing">KM 未提供內容摘要。</p> }
+                    </section>
+                    @if (technical.Count > 0)
                     {
-                        <section class="kmm-section">
-                            <h3>@section.Label</h3>
-                            @if (section.Value.HasValue)
-                            {
-                                <pre>@PrettyJson(section.Value.Value)</pre>
-                            }
-                            else
-                            {
-                                <div class="kmm-missing">此 Metadata 區段未提供。</div>
-                            }
+                        <section class="kmm-section"><h3>技術資訊</h3><dl class="kmm-fields">
+                            @foreach (var group in technical) { <div><dt>@group.Label</dt><dd>@string.Join("、", group.Values)</dd></div> }
+                        </dl></section>
+                    }
+                    @if (testItems is not null || measurements is not null || metadata.Specifications.Count > 0)
+                    {
+                        <section class="kmm-section"><h3>規格與量測</h3>
+                            @if (testItems is not null) { <h4>測項</h4><ul>@foreach (var item in testItems.Values) { <li>@item</li> }</ul> }
+                            @if (measurements is not null) { <h4>量測值、單位與上下文</h4><ul>@foreach (var item in measurements.Values) { <li>@item</li> }</ul> }
+                            @if (metadata.Specifications.Count > 0) { <h4>文件規格</h4><dl class="kmm-fields">@foreach (var spec in metadata.Specifications) { <div><dt>@spec.Field</dt><dd>@spec.Value</dd></div> }</dl> }
                         </section>
                     }
+                    @if (!string.IsNullOrWhiteSpace(metadata.CapabilitySummary) || metadata.Limitations.Count > 0)
+                    {
+                        <section class="kmm-section"><h3>測試能力與限制</h3>
+                            @if (!string.IsNullOrWhiteSpace(metadata.CapabilitySummary)) { <p class="kmm-summary">@metadata.CapabilitySummary</p> }
+                            @if (metadata.Limitations.Count > 0) { <h4>限制</h4><ul>@foreach (var item in metadata.Limitations) { <li>@item</li> }</ul> }
+                        </section>
+                    }
+                    <section class="kmm-section"><h3>分析資訊</h3><dl class="kmm-fields">
+                        <div><dt>KM Job</dt><dd>@_detail.KmJobId</dd></div>
+                        <div><dt>分析時間</dt><dd>@_detail.AnalyzedAt.ToLocalTime().ToString("yyyy/MM/dd HH:mm:ss")</dd></div>
+                        @if (!string.IsNullOrWhiteSpace(_detailFileName)) { <div><dt>來源檔案</dt><dd>@_detailFileName</dd></div> }
+                        @if (!string.IsNullOrWhiteSpace(metadata.Extraction.SourceFormat)) { <div><dt>來源格式</dt><dd>@metadata.Extraction.SourceFormat</dd></div> }
+                    </dl></section>
+                    @if (metadata.Warnings.Count > 0)
+                    {
+                        <section class="kmm-section"><h3>分析警告</h3><ul>@foreach (var warning in metadata.Warnings) { <li>@warning</li> }</ul></section>
+                    }
                 </div>
-                <details class="kmm-raw" open>
-                    <summary>完整原始 JSON</summary>
+                <details class="kmm-raw">
+                    <summary>查看原始 JSON</summary>
                     <div class="kmm-raw-actions">
                         <button type="button" class="kmm-view" @onclick="CopyRawJsonAsync">複製 JSON</button>
                         @if (!string.IsNullOrWhiteSpace(_copyStatus)) { <span>@_copyStatus</span> }
@@ -162,6 +195,7 @@ else
     private CancellationTokenSource? _detailCancellation;
     private KmMetadataAdminPage? _page;
     private KmAnalysisResultDetail? _detail;
+    private string? _detailFileName;
     private Guid? _detailId;
     private string _sourceType = string.Empty;
     private string _fileName = string.Empty;
@@ -239,14 +273,15 @@ else
         }
     }
 
-    private async Task ShowDetailAsync(Guid id)
+    private async Task ShowDetailAsync(KmMetadataAdminListItem item)
     {
         var version = Interlocked.Increment(ref _detailVersion);
         _detailCancellation?.Cancel();
         _detailCancellation?.Dispose();
         _detailCancellation = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
         var cancellationToken = _detailCancellation.Token;
-        _detailId = id;
+        _detailId = item.Id;
+        _detailFileName = item.FileName;
         _detail = null;
         _detailError = null;
         _copyStatus = null;
@@ -254,7 +289,7 @@ else
         try
         {
             var detail = await Api.GetAsync<KmAnalysisResultDetail>(
-                $"/api/administration/km-metadata/results/{id:D}", cancellationToken);
+                $"/api/administration/km-metadata/results/{item.Id:D}", cancellationToken);
             if (version == _detailVersion && !cancellationToken.IsCancellationRequested) _detail = detail;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -280,6 +315,7 @@ else
         _detailCancellation = null;
         _detailId = null;
         _detail = null;
+        _detailFileName = null;
         _detailError = null;
         _copyStatus = null;
     }
@@ -327,16 +363,19 @@ else
 
     private static string WarningClass(int count) => count > 0 ? "kmm-warning has-warning" : "kmm-warning";
     private static string PrettyJson(JsonElement value) => JsonSerializer.Serialize(value,
-        new JsonSerializerOptions { WriteIndented = true });
-    private static IReadOnlyList<MetadataSection> MetadataSections(JsonElement result) =>
-        new[]
-        {
-            ("Document", "document"), ("Technical", "technical"),
-            ("Extraction", "extraction"), ("Indexing", "indexing"),
-            ("SourceSpecific", "sourceSpecific"), ("Warnings", "warnings")
-        }.Select(definition => result.TryGetProperty(definition.Item2, out var value)
-            ? new MetadataSection(definition.Item1, value.Clone())
-            : new MetadataSection(definition.Item1, null)).ToList();
+        new JsonSerializerOptions { WriteIndented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+    private static bool HasReadableAnalysis(EquipmentKmMetadataView metadata) =>
+        !string.IsNullOrWhiteSpace(metadata.Document.Summary) || metadata.Technical.Count > 0 ||
+        metadata.Specifications.Count > 0 || !string.IsNullOrWhiteSpace(metadata.CapabilitySummary) ||
+        metadata.Limitations.Count > 0;
+
+    private static string DocumentTypeLabel(string type) => type switch
+    {
+        "Specification" => "規格書", "Manual" => "手冊", "TestReport" => "測試報告",
+        "SOP" => "標準作業程序", "MeetingMinutes" => "會議紀錄",
+        "IssueAnalysis" => "問題分析", "Presentation" => "簡報", "Other" => "其他",
+        _ => type
+    };
 
     public ValueTask DisposeAsync()
     {
@@ -350,5 +389,4 @@ else
         return ValueTask.CompletedTask;
     }
 
-    private sealed record MetadataSection(string Label, JsonElement? Value);
 }

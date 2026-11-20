@@ -49,7 +49,9 @@ public sealed class EquipmentAggregateAnalysisComponentTests
         var view = EmptyView() with
         {
             Status = "Completed", EligibleDocumentCount = 1,
-            Result = new EquipmentAggregateAnalysisResult("Verified overview", [], [], [], [], [], [])
+            Result = new EquipmentAggregateAnalysisResult("Verified overview",
+                [new EquipmentAggregateSpecification("速度", "1.2", "m/s", ["E1"])],
+                [], [], [], [], [])
         };
         var (html, _) = await RenderAsync(new BrowserApiResponse
         {
@@ -58,6 +60,24 @@ public sealed class EquipmentAggregateAnalysisComponentTests
 
         Assert.Contains("分析完成", html);
         Assert.Contains("Verified overview", html);
+    }
+
+    [Fact]
+    public async Task EmptyCompletedSnapshot_IsMarkedAsInsufficient()
+    {
+        var view = EmptyView() with
+        {
+            Status = "Completed", EligibleDocumentCount = 1,
+            Result = new EquipmentAggregateAnalysisResult(null, [], [], [], [], [], ["來源資訊不足"])
+        };
+        var (html, _) = await RenderAsync(new BrowserApiResponse
+        {
+            StatusCode = 200, Body = JsonSerializer.Serialize(view, JsonSerializerOptions.Web)
+        }, true);
+
+        Assert.Contains("資料不足", html);
+        Assert.Contains("來源資訊不足", html);
+        Assert.DoesNotContain("record-status-pill\">分析完成", html);
     }
 
     [Theory]

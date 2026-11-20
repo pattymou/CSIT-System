@@ -1,4 +1,6 @@
 using System.Reflection;
+using System.Text.Encodings.Web;
+using System.Text.Json;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using SIT.DepartmentSystem.Web.Controllers;
@@ -21,7 +23,7 @@ public sealed class KmMetadataAdministrationUiTests
     }
 
     [Fact]
-    public void PageUsesAdminPolicyPagedApiAllSectionsAndCopy()
+    public void PageUsesAdminPolicyPagedApiReadableSectionsAndCollapsedRawCopy()
     {
         var page = Read("Components", "Pages", "System", "KmMetadata.razor");
         var program = Read("Program.cs");
@@ -31,12 +33,28 @@ public sealed class KmMetadataAdministrationUiTests
         Assert.Contains("SystemAuthorization.Policies.AdminOnly", page);
         Assert.Contains("/api/administration/km-metadata/results?", page);
         Assert.Contains("pageSize={PageSize}", page);
-        foreach (var section in new[] { "Document", "Technical", "Extraction", "Indexing", "SourceSpecific", "Warnings" })
-            Assert.Contains($"(\"{section}\",", page);
+        foreach (var section in new[] { "文件摘要", "技術資訊", "規格與量測", "測試能力與限制", "分析資訊", "分析警告" })
+            Assert.Contains(section, page);
+        Assert.Contains("EquipmentKmMetadataProjection.Project", page);
+        Assert.Contains("JavaScriptEncoder.UnsafeRelaxedJsonEscaping", page);
+        Assert.Contains("<details class=\"kmm-raw\">", page);
+        Assert.DoesNotContain("<details class=\"kmm-raw\" open>", page);
         Assert.Contains("navigator.clipboard.writeText", page);
         Assert.Contains("RequireRole(\"Admin\")", program);
         Assert.Contains("RoutePath = \"/administration/km-metadata\"", sidebar);
         Assert.Contains("AdminOnly = true", sidebar);
+    }
+
+    [Fact]
+    public void RawMetadataJsonDisplaysEscapedChineseAsReadableText()
+    {
+        using var source = JsonDocument.Parse("{\"summary\":\"\\u4e2d\\u6587\"}");
+        var displayed = JsonSerializer.Serialize(source.RootElement,
+            new JsonSerializerOptions { WriteIndented = true,
+                Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+
+        Assert.Contains("中文", displayed);
+        Assert.DoesNotContain("\\u4e2d", displayed);
     }
 
     [Fact]
