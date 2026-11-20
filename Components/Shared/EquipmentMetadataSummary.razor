@@ -8,8 +8,8 @@
         @if (_view is not null && !IsBlank) { <span class="record-status-pill">@StatusText(_view.Status)</span> }
     </div>
     @if (_loading) { if (HasFiles != false) { <div class="record-empty-box"><strong>讀取設備綜合分析中...</strong></div> } }
-    else if (_error is not null) { <div class="record-empty-box"><strong>@_error</strong></div> }
     else if (IsBlank) { }
+    else if (_error is not null) { <div class="record-empty-box"><strong>@_error</strong></div> }
     else if (_view is null) { <div class="record-empty-box"><strong>尚無設備綜合分析</strong></div> }
     else
     {
@@ -67,7 +67,8 @@
     private string? _key, _error;
     private bool _loading;
     private int _loadVersion;
-    private bool IsBlank => EquipmentAggregateAnalysisPresentation.IsBlank(_view, HasFiles);
+    private bool IsBlank => HasFiles == false &&
+        (_view is null || EquipmentAggregateAnalysisPresentation.IsBlank(_view, HasFiles));
     protected override async Task OnParametersSetAsync()
     {
         var key = $"{ModuleCode}:{ApparatusId}:{RefreshKey}";

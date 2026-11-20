@@ -135,7 +135,10 @@ public sealed class EquipmentVendorAcceptanceUiTests
         Assert.Contains("/{Uri.EscapeDataString(id)}/files", view);
         Assert.Contains("_item.Files = refreshedFiles", view);
         Assert.Contains("FileStateFingerprint", view);
-        Assert.Contains("RefreshKey=\"FileStateFingerprint(_item.Files)\"", view);
+        Assert.Contains("ApparatusId=\"@_item.Id\"", view);
+        Assert.Contains("ModuleCode=\"@_item.ModuleCode\"", view);
+        Assert.Contains("HasFiles=\"@(_item.Files?.Count > 0)\"", view);
+        Assert.Contains("RefreshKey=\"@FileStateFingerprint(_item.Files)\"", view);
         Assert.Contains("CancelPageWork()", view);
         Assert.Contains("public async ValueTask DisposeAsync()", view);
         Assert.DoesNotContain("var refreshed = await Api.GetAsync<ApparatusDetailDto>", view);

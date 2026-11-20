@@ -70,7 +70,7 @@ public sealed class EquipmentAggregateAnalysisComponentTests
         var (html, logs) = await RenderAsync(new BrowserApiResponse
         {
             StatusCode = status, Body = body
-        }, false);
+        }, true);
 
         Assert.Contains("設備綜合分析暫時無法取得", html);
         Assert.DoesNotContain("private diagnostic JSON", html);
@@ -78,6 +78,25 @@ public sealed class EquipmentAggregateAnalysisComponentTests
         Assert.DoesNotContain("\"status\"", html);
         Assert.Contains(logs, line => line.Contains($"StatusCode={status}") && line.Contains(Trace));
         Assert.DoesNotContain(logs, line => line.Contains("private diagnostic JSON"));
+    }
+
+    [Theory]
+    [InlineData(404)]
+    [InlineData(500)]
+    public async Task ApiFailure_WithoutFiles_RendersOnlyHeadingButKeepsDiagnostic(int status)
+    {
+        var body = "{\"status\":" + status + ",\"traceId\":\"" + Trace +
+            "\",\"detail\":\"private diagnostic JSON\"}";
+        var (html, logs) = await RenderAsync(new BrowserApiResponse
+        {
+            StatusCode = status, Body = body
+        }, false);
+
+        Assert.Contains("設備綜合分析", html);
+        Assert.DoesNotContain("設備綜合分析暫時無法取得", html);
+        Assert.DoesNotContain("private diagnostic JSON", html);
+        Assert.DoesNotContain("Manifest", html);
+        Assert.Contains(logs, line => line.Contains($"StatusCode={status}") && line.Contains(Trace));
     }
 
     private static EquipmentAggregateAnalysisView EmptyView() => new(
