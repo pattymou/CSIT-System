@@ -1,16 +1,25 @@
-export async function request(method, url, body) {
+export async function request(method, url, body, correlationId = null) {
     const options = {
         method,
         credentials: "same-origin",
         headers: { "Accept": "application/json" }
     };
 
+    if (correlationId) options.headers["X-Correlation-Id"] = correlationId;
+
     if (body !== null && body !== undefined) {
         options.headers["Content-Type"] = "application/json";
         options.body = JSON.stringify(body);
     }
 
-    return toResult(await fetch(url, options));
+    const response = await fetch(url, options);
+    if (correlationId && response.redirected) {
+        const destination = new URL(response.url);
+        if (destination.origin === window.location.origin && destination.pathname === "/signin") {
+            return { status: 401, body: "", correlationId };
+        }
+    }
+    return toResult(response);
 }
 
 export async function uploadFiles(url, inputContainer, fileNames = null, clearInput = true) {
@@ -137,6 +146,7 @@ function createUploadFileId() {
 async function toResult(response) {
     return {
         status: response.status,
-        body: await response.text()
+        body: await response.text(),
+        correlationId: response.headers.get("X-Correlation-Id")
     };
 }

@@ -26,6 +26,24 @@ public sealed class BrowserApiClient(IJSRuntime js) : IAsyncDisposable
             ?? throw new InvalidOperationException("伺服器回傳空白資料。");
     }
 
+    public async Task<T> GetQueueAsync<T>(string url, string correlationId,
+        CancellationToken cancellationToken)
+    {
+        var module = await GetModuleAsync();
+        var response = await module.InvokeAsync<BrowserApiResponse>(
+            "request", cancellationToken, "GET", url, null, correlationId);
+        response.EnsureSuccess();
+        try
+        {
+            return JsonSerializer.Deserialize<T>(response.Body, JsonOptions)
+                ?? throw new JsonException("Empty queue response.");
+        }
+        catch (JsonException)
+        {
+            throw new BrowserApiDeserializationException(correlationId);
+        }
+    }
+
     public async Task<T?> GetOptionalAsync<T>(string url) where T : class
     {
         var response = await SendAsync("GET", url, null);
@@ -141,20 +159,31 @@ public sealed class BrowserApiResponse
     [JsonPropertyName("body")]
     public string Body { get; set; } = string.Empty;
 
+    [JsonPropertyName("correlationId")]
+    public string? CorrelationId { get; set; }
+
     public bool IsSuccessStatusCode => StatusCode is >= 200 and < 300;
 
     public void EnsureSuccess()
     {
         if (!IsSuccessStatusCode)
-            throw new BrowserApiException(StatusCode, Body);
+            throw new BrowserApiException(StatusCode, Body, CorrelationId);
     }
 }
 
-public sealed class BrowserApiException(int statusCode, string responseBody)
+public sealed class BrowserApiException(int statusCode, string responseBody,
+    string? correlationId = null)
     : Exception(string.IsNullOrWhiteSpace(responseBody)
         ? $"伺服器處理失敗（{statusCode}）。"
         : responseBody)
 {
     public int StatusCode { get; } = statusCode;
     public string ResponseBody { get; } = responseBody;
+    public string? CorrelationId { get; } = correlationId;
+}
+
+public sealed class BrowserApiDeserializationException(string correlationId)
+    : Exception("KM queue response could not be decoded.")
+{
+    public string CorrelationId { get; } = correlationId;
 }

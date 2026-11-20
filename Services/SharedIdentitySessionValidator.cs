@@ -69,6 +69,7 @@ public sealed class SharedIdentityCookieEvents(SharedIdentitySessionValidator va
             OidcDiagnostics.Flow(context.Properties));
         if (!result.IsCurrent)
         {
+            context.HttpContext.Items[KmIntegration.KmQueueRequestDiagnostics.SessionFailureItem] = result.Kind;
             context.RejectPrincipal();
             await context.HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
         }

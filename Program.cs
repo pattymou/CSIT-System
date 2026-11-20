@@ -565,6 +565,7 @@ if (useSharedIdentity)
                 status: context.Response.StatusCode);
     });
 }
+app.UseMiddleware<KmQueueRequestDiagnostics>();
 app.UseAuthentication();
 app.UseAuthorization();
 
