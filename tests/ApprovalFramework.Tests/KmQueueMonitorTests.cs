@@ -126,7 +126,7 @@ public sealed class KmQueueMonitorTests
             Options.Create(new KmDeletionOptions { Enabled = true }));
         var result = await service.GetIngestionAsync(KmQueueFilters.Unfinished, 1);
         Assert.Equal(string.Empty, result.Items[0].RetryState);
-        Assert.Null(result.Items[0].Detail);
+        Assert.Contains("來源檔案紀錄不存在", result.Items[0].Detail);
 
         service = new KmQueueQueryService(factory,
             Options.Create(new KmIntegrationOptions { Enabled = false }),
@@ -165,6 +165,222 @@ public sealed class KmQueueMonitorTests
         var recent = await service.GetDeletionAsync(KmQueueFilters.Completed, 1);
         Assert.Single(recent.Items);
         Assert.Equal(completed.Id, recent.Items[0].Id);
+    }
+
+    [Theory]
+    [InlineData(KmIntegrationSourceEntityTypes.TestReport)]
+    [InlineData(KmIntegrationSourceEntityTypes.DocumentLibraryFile)]
+    [InlineData(KmIntegrationSourceEntityTypes.VerificationApplicationFile)]
+    [InlineData(KmIntegrationSourceEntityTypes.VendorFile)]
+    [InlineData(KmIntegrationSourceEntityTypes.ApparatusFile)]
+    public async Task IngestionHidesOnlySourceMissingAfterCompletedSafeDeletion(string sourceType)
+    {
+        var factory = new InMemoryFactory();
+        var outbox = Outbox(KmIntegrationStatus.Failed, Now, sourceType: sourceType,
+            kmJobId: "km-accepted", sentAt: Now);
+        object deletion;
+        VerificationCaseDeletionTarget? target;
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.KmIntegrationOutbox.Add(outbox);
+            (deletion, target) = AddDeletionEvidence(db, sourceType, outbox.SourceEntityId,
+                "Pending");
+            await db.SaveChangesAsync();
+        }
+        var service = Queue(factory);
+        var pending = await service.GetIngestionAsync(KmQueueFilters.Failed, 1);
+        Assert.Equal(1, pending.Total);
+        Assert.Contains("未找到已完成的安全刪除紀錄", Assert.Single(pending.Items).Detail);
+
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            Set(deletion, "Status", "Completed");
+            if (target is not null) Set(target, "Status", "Completed");
+            db.Update(deletion);
+            if (target is not null) db.Update(target);
+            await db.SaveChangesAsync();
+        }
+        var hidden = await service.GetIngestionAsync(KmQueueFilters.Failed, 1);
+        Assert.Equal(0, hidden.Total);
+        Assert.Equal(0, hidden.Stats.Failed);
+        Assert.Empty(hidden.Items);
+        var deletionQueue = await service.GetDeletionAsync(KmQueueFilters.Completed, 1);
+        Assert.NotEmpty(deletionQueue.Items);
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            Assert.Single(await db.KmIntegrationOutbox.ToListAsync());
+            AddSource(db, sourceType, outbox.SourceEntityId);
+            await db.SaveChangesAsync();
+        }
+        var present = await service.GetIngestionAsync(KmQueueFilters.Failed, 1);
+        Assert.Equal(1, present.Total);
+        Assert.DoesNotContain("來源檔案紀錄不存在", Assert.Single(present.Items).Detail ?? "");
+    }
+
+    [Fact]
+    public async Task IngestionCountsAndPagesExcludeCompletedDeletionBeforePagination()
+    {
+        var factory = new InMemoryFactory();
+        var hiddenFailed = Outbox(KmIntegrationStatus.Failed, Now.AddMinutes(-5),
+            sourceType: KmIntegrationSourceEntityTypes.DocumentLibraryFile);
+        var hiddenCompleted = Outbox(KmIntegrationStatus.Completed, Now.AddMinutes(-4),
+            sourceType: KmIntegrationSourceEntityTypes.DocumentLibraryFile, completedAt: Now);
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.KmIntegrationOutbox.AddRange(hiddenFailed, hiddenCompleted);
+            AddDeletionEvidence(db, KmIntegrationSourceEntityTypes.DocumentLibraryFile,
+                hiddenFailed.SourceEntityId, "Completed");
+            AddDeletionEvidence(db, KmIntegrationSourceEntityTypes.DocumentLibraryFile,
+                hiddenCompleted.SourceEntityId, "Completed");
+            db.KmIntegrationOutbox.Add(Outbox(KmIntegrationStatus.Pending, Now));
+            db.KmIntegrationOutbox.Add(Outbox(KmIntegrationStatus.Dispatching, Now));
+            db.KmIntegrationOutbox.Add(Outbox(KmIntegrationStatus.Failed, Now));
+            db.KmIntegrationOutbox.Add(Outbox(KmIntegrationStatus.Completed, Now,
+                completedAt: Now));
+            for (var i = 0; i < 50; i++)
+                db.KmIntegrationOutbox.Add(Outbox(KmIntegrationStatus.Pending,
+                    Now.AddSeconds(i + 1)));
+            await db.SaveChangesAsync();
+        }
+        var service = Queue(factory);
+        var first = await service.GetIngestionAsync(KmQueueFilters.Unfinished, 1);
+        var second = await service.GetIngestionAsync(KmQueueFilters.Unfinished, 2);
+        Assert.Equal(53, first.Total);
+        Assert.Equal(50, first.Items.Count);
+        Assert.Equal(3, second.Items.Count);
+        Assert.DoesNotContain(first.Items.Concat(second.Items), x => x.Id == hiddenFailed.Id);
+        Assert.Equal(new KmQueueStatsDto(53, 51, 1, 1, 1), first.Stats);
+        Assert.Equal(51, (await service.GetIngestionAsync(KmQueueFilters.Waiting, 1)).Total);
+        Assert.Equal(1, (await service.GetIngestionAsync(KmQueueFilters.Processing, 1)).Total);
+        Assert.Equal(1, (await service.GetIngestionAsync(KmQueueFilters.Failed, 1)).Total);
+        Assert.Equal(1, (await service.GetIngestionAsync(KmQueueFilters.Completed, 1)).Total);
+        await using var auditDb = await factory.CreateDbContextAsync();
+        Assert.Equal(56, await auditDb.KmIntegrationOutbox.CountAsync());
+    }
+
+    [Theory]
+    [InlineData(KmIntegrationSourceEntityTypes.TestReport)]
+    [InlineData(KmIntegrationSourceEntityTypes.VerificationApplicationFile)]
+    public async Task CompletedCaseCleanupHidesSourceWithoutKmDeletionDispatch(string sourceType)
+    {
+        var factory = new InMemoryFactory();
+        var outbox = Outbox(KmIntegrationStatus.Failed, Now, sourceType: sourceType);
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.KmIntegrationOutbox.Add(outbox);
+            var (job, target) = AddDeletionEvidence(db, sourceType, outbox.SourceEntityId,
+                "NotDispatched");
+            Set(job, "Status", "Completed");
+            Assert.NotNull(target);
+            await db.SaveChangesAsync();
+        }
+        Assert.Equal(0, (await Queue(factory).GetIngestionAsync(KmQueueFilters.Failed, 1)).Total);
+    }
+
+    [Fact]
+    public void AcceptedFailedKmJobCannotUsePreAcceptanceManualRetry()
+    {
+        var row = Outbox(KmIntegrationStatus.Failed, Now,
+            kmJobId: "km-accepted", sentAt: Now);
+        Assert.False(row.CanManualRetry(Now));
+        Assert.Throws<InvalidOperationException>(() => row.RequeueManually(Now));
+        Assert.Throws<InvalidOperationException>(() => row.CallbackProcessing(Now));
+        Assert.Throws<InvalidOperationException>(() => row.CallbackCompleted(Now));
+    }
+
+    private static KmQueueQueryService Queue(InMemoryFactory factory) => new(factory,
+        Options.Create(new KmIntegrationOptions { Enabled = true, MaxRetryCount = 8 }),
+        Options.Create(new KmDeletionOptions { Enabled = true, EquipmentEnabled = true }));
+
+    private static (object Job, VerificationCaseDeletionTarget? Target) AddDeletionEvidence(
+        AppDbContext db, string type, Guid id, string status)
+    {
+        if (type is KmIntegrationSourceEntityTypes.TestReport or
+            KmIntegrationSourceEntityTypes.VerificationApplicationFile)
+        {
+            var job = (VerificationCaseDeletionJob)Activator.CreateInstance(
+                typeof(VerificationCaseDeletionJob), nonPublic: true)!;
+            Set(job, nameof(VerificationCaseDeletionJob.Id), Guid.NewGuid());
+            Set(job, nameof(VerificationCaseDeletionJob.ApplicationId), Guid.NewGuid());
+            Set(job, nameof(VerificationCaseDeletionJob.RecordId), Guid.NewGuid());
+            Set(job, nameof(VerificationCaseDeletionJob.RequestedBy), "tester");
+            Set(job, nameof(VerificationCaseDeletionJob.Reason), "Safe deletion test");
+            Set(job, nameof(VerificationCaseDeletionJob.RequestedAt), Now);
+            Set(job, nameof(VerificationCaseDeletionJob.Status), status);
+            Set(job, nameof(VerificationCaseDeletionJob.UpdatedAt), Now);
+            var target = (VerificationCaseDeletionTarget)Activator.CreateInstance(
+                typeof(VerificationCaseDeletionTarget), nonPublic: true)!;
+            Set(target, nameof(VerificationCaseDeletionTarget.Id), Guid.NewGuid());
+            Set(target, nameof(VerificationCaseDeletionTarget.JobId), job.Id);
+            Set(target, nameof(VerificationCaseDeletionTarget.SourceType),
+                type == KmIntegrationSourceEntityTypes.TestReport
+                    ? KmIntegrationSourceEntityTypes.TestReport
+                    : KmAnalysisSourceTypes.VerificationApplicationAttachment);
+            Set(target, nameof(VerificationCaseDeletionTarget.SourceEntityId), (Guid?)id);
+            Set(target, nameof(VerificationCaseDeletionTarget.Status), status);
+            Set(target, nameof(VerificationCaseDeletionTarget.RequestedAt), Now);
+            Set(target, nameof(VerificationCaseDeletionTarget.UpdatedAt), Now);
+            db.VerificationCaseDeletionJobs.Add(job);
+            db.VerificationCaseDeletionTargets.Add(target);
+            return (job, target);
+        }
+        if (type == KmIntegrationSourceEntityTypes.DocumentLibraryFile)
+        {
+            var job = DocumentDeletionJob(status, Now, status == "Completed" ? Now : null);
+            Set(job, nameof(DocumentLibraryFileDeletionJob.DocumentFileId), id);
+            db.DocumentLibraryFileDeletionJobs.Add(job);
+            return (job, null);
+        }
+        if (type == KmIntegrationSourceEntityTypes.VendorFile)
+        {
+            var job = (VendorFileDeletionJob)Activator.CreateInstance(
+                typeof(VendorFileDeletionJob), nonPublic: true)!;
+            Set(job, nameof(VendorFileDeletionJob.Id), Guid.NewGuid());
+            Set(job, nameof(VendorFileDeletionJob.VendorFileId), id);
+            Set(job, nameof(VendorFileDeletionJob.RequestedAt), Now);
+            Set(job, nameof(VendorFileDeletionJob.Status), status);
+            db.VendorFileDeletionJobs.Add(job);
+            return (job, null);
+        }
+        if (type == KmIntegrationSourceEntityTypes.ApparatusFile)
+        {
+            var job = (EquipmentFileDeletionJob)Activator.CreateInstance(
+                typeof(EquipmentFileDeletionJob), nonPublic: true)!;
+            Set(job, nameof(EquipmentFileDeletionJob.Id), Guid.NewGuid());
+            Set(job, nameof(EquipmentFileDeletionJob.ApparatusFileId), id);
+            Set(job, nameof(EquipmentFileDeletionJob.RequestedAt), Now);
+            Set(job, nameof(EquipmentFileDeletionJob.Status), status);
+            db.EquipmentFileDeletionJobs.Add(job);
+            return (job, null);
+        }
+        throw new ArgumentOutOfRangeException(nameof(type));
+    }
+
+    private static void AddSource(AppDbContext db, string type, Guid id)
+    {
+        switch (type)
+        {
+            case KmIntegrationSourceEntityTypes.TestReport:
+                db.ModuleCaseFiles.Add(new ModuleCaseFile { Id = id, RecordId = Guid.NewGuid(),
+                    DocumentId = Guid.NewGuid(), VersionNo = 1, FileName = "report.pdf" });
+                break;
+            case KmIntegrationSourceEntityTypes.DocumentLibraryFile:
+                db.DocumentLibraryFiles.Add(new DocumentLibraryFile { Id = id,
+                    FolderId = Guid.NewGuid(), OriginalFileName = "library.pdf" });
+                break;
+            case KmIntegrationSourceEntityTypes.VerificationApplicationFile:
+                db.VerificationApplicationFiles.Add(new VerificationApplicationFile { Id = id,
+                    VerificationApplicationId = Guid.NewGuid(), FileName = "verify.pdf" });
+                break;
+            case KmIntegrationSourceEntityTypes.VendorFile:
+                db.VendorFiles.Add(new VendorFile { Id = id, VendorId = Guid.NewGuid(),
+                    OriginalFileName = "vendor.pdf" });
+                break;
+            case KmIntegrationSourceEntityTypes.ApparatusFile:
+                db.ApparatusFiles.Add(new ApparatusFile { Id = id, ApparatusId = "EQ-TEST",
+                    FileName = "equipment.pdf" });
+                break;
+        }
     }
 
     private static ClaimsPrincipal User(string account, string? role, bool csitStaff)

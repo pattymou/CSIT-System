@@ -19,7 +19,7 @@ public sealed class KmQueueQueryService(
         filter = NormalizeFilter(filter);
         page = Math.Max(1, page);
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var all = db.KmIntegrationOutbox.AsNoTracking();
+        var all = HideCompletedSourceDeletions(db, db.KmIntegrationOutbox.AsNoTracking());
         var stats = new KmQueueStatsDto(
             await all.CountAsync(x => x.Status != KmIntegrationStatus.Completed, cancellationToken),
             await all.CountAsync(x => x.Status == KmIntegrationStatus.Pending, cancellationToken),
@@ -48,7 +48,10 @@ public sealed class KmQueueQueryService(
                 SourceModule(row.SourceEntityType), source?.Uploader ?? "未記錄",
                 source?.UploadedAt, row.CreatedAt, row.Status.ToString(),
                 IngestionStatusDisplay(row.Status), row.RetryCount, row.NextRetryAt,
-                IngestionRetryState(row, now), row.LastErrorCode, Safe(row.LastErrorMessage));
+                IngestionRetryState(row, now), row.LastErrorCode,
+                source is null && IsKnownIngestionSource(row.SourceEntityType)
+                    ? MissingSourceDetail(row.LastErrorMessage)
+                    : Safe(row.LastErrorMessage));
         }).ToList();
 
         return new(items, page, PageSize, total, stats, integrationOptions.Value.Enabled,
@@ -111,6 +114,60 @@ public sealed class KmQueueQueryService(
         KmQueueFilters.Completed => query.Where(x => x.Status == KmIntegrationStatus.Completed),
         _ => query.Where(x => x.Status != KmIntegrationStatus.Completed)
     };
+
+    // Keep unexplained missing sources visible for investigation. A completed deletion
+    // record alone is insufficient when the source file is still present.
+    private static IQueryable<KmIntegrationOutbox> HideCompletedSourceDeletions(
+        AppDbContext db, IQueryable<KmIntegrationOutbox> query) => query.Where(row =>
+            !(row.SourceEntityType == KmIntegrationSourceEntityTypes.TestReport &&
+              !db.ModuleCaseFiles.Any(file => file.Id == row.SourceEntityId) &&
+              db.VerificationCaseDeletionTargets.Any(target =>
+                  target.SourceType == KmIntegrationSourceEntityTypes.TestReport &&
+                  target.SourceEntityId == row.SourceEntityId &&
+                  (target.Status == "Completed" || target.Status == "NotDispatched") &&
+                  db.VerificationCaseDeletionJobs.Any(job =>
+                      job.Id == target.JobId && job.Status == "Completed"))) &&
+            !(row.SourceEntityType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
+              !db.DocumentLibraryFiles.Any(file => file.Id == row.SourceEntityId) &&
+              (db.DocumentLibraryFileDeletionJobs.Any(job =>
+                   job.DocumentFileId == row.SourceEntityId &&
+                   job.Status == DocumentLibraryFileDeletionStatuses.Completed) ||
+               db.VerificationCaseDeletionTargets.Any(target =>
+                   target.SourceType == KmIntegrationSourceEntityTypes.DocumentLibraryFile &&
+                   target.DocumentFileId == row.SourceEntityId &&
+                   (target.Status == "Completed" || target.Status == "NotDispatched") &&
+                   db.VerificationCaseDeletionJobs.Any(job =>
+                       job.Id == target.JobId && job.Status == "Completed")))) &&
+            !(row.SourceEntityType == KmIntegrationSourceEntityTypes.VerificationApplicationFile &&
+              !db.VerificationApplicationFiles.Any(file => file.Id == row.SourceEntityId) &&
+              db.VerificationCaseDeletionTargets.Any(target =>
+                  target.SourceType == KmAnalysisSourceTypes.VerificationApplicationAttachment &&
+                  target.SourceEntityId == row.SourceEntityId &&
+                  (target.Status == "Completed" || target.Status == "NotDispatched") &&
+                  db.VerificationCaseDeletionJobs.Any(job =>
+                      job.Id == target.JobId && job.Status == "Completed"))) &&
+            !(row.SourceEntityType == KmIntegrationSourceEntityTypes.VendorFile &&
+              !db.VendorFiles.Any(file => file.Id == row.SourceEntityId) &&
+              db.VendorFileDeletionJobs.Any(job =>
+                  job.VendorFileId == row.SourceEntityId &&
+                  job.Status == VendorFileDeletionStatuses.Completed)) &&
+            !(row.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
+              !db.ApparatusFiles.Any(file => file.Id == row.SourceEntityId) &&
+              db.EquipmentFileDeletionJobs.Any(job =>
+                  job.ApparatusFileId == row.SourceEntityId &&
+                  job.Status == EquipmentFileDeletionStatuses.Completed)));
+
+    private static bool IsKnownIngestionSource(string sourceType) => sourceType is
+        KmIntegrationSourceEntityTypes.TestReport or
+        KmIntegrationSourceEntityTypes.DocumentLibraryFile or
+        KmIntegrationSourceEntityTypes.VerificationApplicationFile or
+        KmIntegrationSourceEntityTypes.VendorFile or
+        KmIntegrationSourceEntityTypes.ApparatusFile;
+
+    private static string MissingSourceDetail(string? error) =>
+        string.IsNullOrWhiteSpace(error)
+            ? "來源檔案紀錄不存在，且未找到已完成的安全刪除紀錄；請查核來源與刪除稽核。"
+            : $"{Safe(error)} 來源檔案紀錄不存在，且未找到已完成的安全刪除紀錄；請查核來源與刪除稽核。";
 
     private async Task<DeletionResult> LoadVerificationRowsAsync(
         AppDbContext db, string filter, int page, CancellationToken cancellationToken)
