@@ -47,6 +47,7 @@ public sealed class KmAnalysisQueryService(IDbContextFactory<AppDbContext> dbFac
         IQueryable<KmDocumentAnalysisResult> query = useDatabaseJsonFilters
             ? JsonFiltered(db, hasWarnings, missingSummary)
             : db.KmDocumentAnalysisResults.AsNoTracking();
+        query = ExistingSources(db, query);
         if (!string.IsNullOrWhiteSpace(sourceType)) query = query.Where(x => x.SourceType == sourceType);
         if (normalizedJobId is not null)
             query = query.Where(x => x.KmJobId.ToLower().Contains(normalizedJobId));
@@ -175,6 +176,19 @@ public sealed class KmAnalysisQueryService(IDbContextFactory<AppDbContext> dbFac
                     (file.Apparatus.CustodianAccount == account ||
                      file.Apparatus.OwnerTeamOptionId.HasValue && teams.Contains(file.Apparatus.OwnerTeamOptionId.Value))));
     }
+
+    private static IQueryable<KmDocumentAnalysisResult> ExistingSources(AppDbContext db,
+        IQueryable<KmDocumentAnalysisResult> query) => query.Where(result =>
+            result.SourceType == KmAnalysisSourceTypes.TestReport &&
+                db.ModuleCaseFiles.Any(file => file.Id == result.SourceEntityId) ||
+            result.SourceType == KmAnalysisSourceTypes.DocumentLibraryFile &&
+                db.DocumentLibraryFiles.Any(file => file.Id == result.SourceEntityId) ||
+            result.SourceType == KmAnalysisSourceTypes.VerificationApplicationAttachment &&
+                db.VerificationApplicationFiles.Any(file => file.Id == result.SourceEntityId) ||
+            result.SourceType == KmAnalysisSourceTypes.VendorFile &&
+                db.VendorFiles.Any(file => file.Id == result.SourceEntityId) ||
+            result.SourceType == KmAnalysisSourceTypes.EquipmentAttachment &&
+                db.ApparatusFiles.Any(file => file.Id == result.SourceEntityId));
 
     private static async Task<Access> ResolveAccessAsync(AppDbContext db, ClaimsPrincipal user,
         CancellationToken cancellationToken)

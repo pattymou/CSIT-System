@@ -198,6 +198,9 @@ public sealed class KmAnalysisIntegrationTests
         Assert.Equal(history[0].Id, history[1].SupersedesResultId);
         Assert.All(await db.KmIntegrationOutbox.ToListAsync(),
             x => Assert.Equal(KmIntegrationStatus.Completed, x.Status));
+        var adminPage = await new KmAnalysisQueryService(factory).ListAdminAsync(
+            AdminUser(), KmAnalysisSourceTypes.TestReport, null, null, null, null, 1, 25);
+        Assert.Equal(2, adminPage.TotalCount);
     }
 
     [Fact]
@@ -259,6 +262,129 @@ public sealed class KmAnalysisIntegrationTests
         Assert.NotNull(await service.GetAdminAsync(AdminUser(), item.Id));
         await Assert.ThrowsAsync<UnauthorizedAccessException>(() => service.ListAdminAsync(
             User("staff", true), null, null, null, null, null, 1, 25));
+    }
+
+    [Theory]
+    [InlineData(KmAnalysisSourceTypes.TestReport)]
+    [InlineData(KmAnalysisSourceTypes.DocumentLibraryFile)]
+    [InlineData(KmAnalysisSourceTypes.VerificationApplicationAttachment)]
+    [InlineData(KmAnalysisSourceTypes.VendorFile)]
+    [InlineData(KmAnalysisSourceTypes.EquipmentAttachment)]
+    public async Task AdminMetadataQuery_ExcludesDeletedSourceButPreservesAnalysisAudit(string sourceType)
+    {
+        var factory = new Factory();
+        var outbox = sourceType switch
+        {
+            KmAnalysisSourceTypes.TestReport => await SeedTestReportAsync(factory, true, "KM-SOURCE-REPORT"),
+            KmAnalysisSourceTypes.DocumentLibraryFile => await SeedDocumentLibraryAsync(factory, "KM-SOURCE-LIBRARY"),
+            KmAnalysisSourceTypes.VerificationApplicationAttachment =>
+                await SeedVerificationAsync(factory, true, "KM-SOURCE-VERIFICATION"),
+            KmAnalysisSourceTypes.VendorFile => await SeedVendorAsync(factory, "source.pdf", ShaA, "KM-SOURCE-VENDOR"),
+            KmAnalysisSourceTypes.EquipmentAttachment => await SeedEquipmentAsync(factory, true, "KM-SOURCE-EQUIPMENT"),
+            _ => throw new ArgumentOutOfRangeException(nameof(sourceType))
+        };
+        var callback = Completed(outbox, sourceType,
+            sourceType == KmAnalysisSourceTypes.EquipmentAttachment ? ShaB : ShaA, "Source result");
+        if (sourceType == KmAnalysisSourceTypes.TestReport)
+            await new KmAnalysisCallbackService(factory).ApplyTestReportResultAsync(
+                Analysis(outbox, Guid.NewGuid(), null, "Source result"));
+        else
+            await new KmAnalysisCallbackService(factory).ApplyDocumentStatusAsync(callback);
+        var query = new KmAnalysisQueryService(factory);
+        var before = await query.ListAdminAsync(AdminUser(), null, null, null, null, null, 1, 25);
+        var resultId = Assert.Single(before.Items).Id;
+
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            switch (sourceType)
+            {
+                case KmAnalysisSourceTypes.TestReport:
+                    db.ModuleCaseFiles.Remove(await db.ModuleCaseFiles.SingleAsync(x => x.Id == outbox.SourceEntityId));
+                    break;
+                case KmAnalysisSourceTypes.DocumentLibraryFile:
+                    db.DocumentLibraryFiles.Remove(await db.DocumentLibraryFiles.SingleAsync(x => x.Id == outbox.SourceEntityId));
+                    break;
+                case KmAnalysisSourceTypes.VerificationApplicationAttachment:
+                    db.VerificationApplicationFiles.Remove(await db.VerificationApplicationFiles.SingleAsync(x => x.Id == outbox.SourceEntityId));
+                    break;
+                case KmAnalysisSourceTypes.VendorFile:
+                    db.VendorFiles.Remove(await db.VendorFiles.SingleAsync(x => x.Id == outbox.SourceEntityId));
+                    break;
+                case KmAnalysisSourceTypes.EquipmentAttachment:
+                    db.ApparatusFiles.Remove(await db.ApparatusFiles.SingleAsync(x => x.Id == outbox.SourceEntityId));
+                    break;
+            }
+            await db.SaveChangesAsync();
+        }
+
+        var after = await query.ListAdminAsync(AdminUser(), null, null, null, null, null, 1, 25);
+        Assert.Empty(after.Items);
+        Assert.Equal(0, after.TotalCount);
+        Assert.Empty((await query.ListAdminAsync(AdminUser(), sourceType, null, null, null, null, 1, 25)).Items);
+        Assert.Empty((await query.ListAdminAsync(AdminUser(), null, null, outbox.KmJobId, null, null, 1, 25)).Items);
+        Assert.NotNull(await query.GetAdminAsync(AdminUser(), resultId));
+        await using var auditDb = await factory.CreateDbContextAsync();
+        Assert.Equal(1, await auditDb.KmDocumentAnalysisResults.CountAsync());
+        Assert.Equal(1, await auditDb.KmAnalysisCallbackReceipts.CountAsync());
+        Assert.Equal(1, await auditDb.KmIntegrationOutbox.CountAsync());
+    }
+
+    [Fact]
+    public async Task AdminMetadataQuery_CountsAndPagesAfterSourceAndExistingFilters()
+    {
+        var factory = new Factory();
+        var first = await SeedVendorAsync(factory, "source-one.pdf", ShaA, "KM-SOURCE-ONE");
+        var second = await SeedVendorAsync(factory, "source-two.pdf", ShaA, "KM-SOURCE-TWO");
+        var deleted = await SeedVendorAsync(factory, "source-deleted.pdf", ShaA, "KM-SOURCE-DELETED");
+        var callbacks = new KmAnalysisCallbackService(factory);
+        foreach (var outbox in new[] { first, second, deleted })
+            await callbacks.ApplyDocumentStatusAsync(Completed(outbox, KmAnalysisSourceTypes.VendorFile,
+                ShaA, "Vendor result"));
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.VendorFiles.Remove(await db.VendorFiles.SingleAsync(x => x.Id == deleted.SourceEntityId));
+            await db.SaveChangesAsync();
+        }
+
+        var query = new KmAnalysisQueryService(factory);
+        var firstPage = await query.ListAdminAsync(AdminUser(), KmAnalysisSourceTypes.VendorFile,
+            null, null, false, true, 1, 1);
+        var secondPage = await query.ListAdminAsync(AdminUser(), KmAnalysisSourceTypes.VendorFile,
+            null, null, false, true, 2, 1);
+        Assert.Equal(2, firstPage.TotalCount);
+        Assert.Equal(2, secondPage.TotalCount);
+        Assert.Single(firstPage.Items);
+        Assert.Single(secondPage.Items);
+        Assert.NotEqual(firstPage.Items[0].Id, secondPage.Items[0].Id);
+        Assert.Equal(1, (await query.ListAdminAsync(AdminUser(), null, "source-one", null,
+            null, null, 1, 25)).TotalCount);
+        Assert.Equal(1, (await query.ListAdminAsync(AdminUser(), null, null, "source-two",
+            null, null, 1, 25)).TotalCount);
+        Assert.Equal(0, (await query.ListAdminAsync(AdminUser(), null, "source-deleted", null,
+            null, null, 1, 25)).TotalCount);
+        await using var auditDb = await factory.CreateDbContextAsync();
+        Assert.Equal(3, await auditDb.KmDocumentAnalysisResults.CountAsync());
+    }
+
+    [Fact]
+    public async Task AdminMetadataQuery_KeepsSourceDuringPendingSafeDeletion()
+    {
+        var factory = new Factory();
+        var outbox = await SeedEquipmentAsync(factory, true, "KM-SAFE-DELETION");
+        await new KmAnalysisCallbackService(factory).ApplyDocumentStatusAsync(
+            Completed(outbox, KmAnalysisSourceTypes.EquipmentAttachment, ShaB, "Equipment result"));
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            var file = await db.ApparatusFiles.SingleAsync(x => x.Id == outbox.SourceEntityId);
+            db.EquipmentFileDeletionJobs.Add(EquipmentFileDeletionJob.Create(
+                file, "admin", true, DateTime.UtcNow, outbox.EventId));
+            await db.SaveChangesAsync();
+        }
+
+        var page = await new KmAnalysisQueryService(factory).ListAdminAsync(
+            AdminUser(), null, null, null, null, null, 1, 25);
+        Assert.Equal(1, page.TotalCount);
+        Assert.Single(page.Items);
     }
 
     [Fact]
@@ -441,6 +567,34 @@ public sealed class KmAnalysisIntegrationTests
         db.ApprovalAuditEvents.Add(ApprovalAuditEvent.Create(file.ApprovalOperationId!.Value,
             "vendors", "vendor", ApprovalAuditActions.ApprovalBypassed,
             "leader", now, null, null));
+        await db.SaveChangesAsync();
+        return outbox;
+    }
+
+    private static async Task<KmIntegrationOutbox> SeedDocumentLibraryAsync(
+        IDbContextFactory<AppDbContext> factory, string jobId)
+    {
+        var now = DateTime.UtcNow;
+        var file = new DocumentLibraryFile
+        {
+            Id = Guid.NewGuid(), DocumentId = Guid.NewGuid(), Version = 2,
+            FolderId = Guid.NewGuid(), OriginalFileName = "library.pdf",
+            StandardFileName = "standard-library.pdf", ContentType = "application/pdf",
+            UploadedBy = "uploader", UploadedAt = now, FileSize = 20, Sha256 = ShaA,
+            RelativePath = "formal\\standard-library.pdf", StorageArea = DocumentStorageAreas.Library
+        };
+        var job = new DocumentProcessingJob
+        {
+            Id = Guid.NewGuid(), DocumentFileId = file.Id, DocumentFile = file,
+            Status = DocumentProcessingStatuses.Accepted,
+            ArchiveStatus = DocumentArchiveStatuses.Completed, ArchivedAt = now,
+            CreatedAt = now, UpdatedAt = now
+        };
+        file.ProcessingJob = job;
+        var outbox = Sent(KmIntegrationOutbox.ForDocumentLibraryFile(file, job, now), jobId, now);
+        await using var db = await factory.CreateDbContextAsync();
+        db.DocumentLibraryFiles.Add(file);
+        db.KmIntegrationOutbox.Add(outbox);
         await db.SaveChangesAsync();
         return outbox;
     }
