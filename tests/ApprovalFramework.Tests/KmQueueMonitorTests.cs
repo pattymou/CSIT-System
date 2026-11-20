@@ -142,6 +142,87 @@ public sealed class KmQueueMonitorTests
         Assert.Equal(completed.Id, recent.Items[0].Id);
     }
 
+    [Theory]
+    [InlineData(KmIntegrationStatus.Pending, KmQueueFilters.Waiting, "等待派送")]
+    [InlineData(KmIntegrationStatus.Processing, KmQueueFilters.Processing, "KM 處理中")]
+    [InlineData(KmIntegrationStatus.Failed, KmQueueFilters.Failed, "重新分析失敗")]
+    [InlineData(KmIntegrationStatus.Completed, KmQueueFilters.Completed, "重新分析完成")]
+    public async Task IngestionUsesLatestManualAttemptForStatusAndCounts(
+        KmIntegrationStatus latestStatus, string filter, string statusDisplay)
+    {
+        var factory = new InMemoryFactory();
+        var original = Outbox(KmIntegrationStatus.Failed, Now.AddMinutes(-5),
+            sourceType: KmIntegrationSourceEntityTypes.ApparatusFile, kmJobId: "KM-ING-OLD");
+        Set(original, nameof(KmIntegrationOutbox.FileName), "equipment.xlsx");
+        Set(original, nameof(KmIntegrationOutbox.LastErrorCode), "HTTP_404");
+        var latest = KmIntegrationOutbox.ForManualReanalysis(original, Guid.NewGuid(), Now);
+        Set(latest, nameof(KmIntegrationOutbox.Status), latestStatus);
+        if (latestStatus == KmIntegrationStatus.Failed)
+        {
+            Set(latest, nameof(KmIntegrationOutbox.KmJobId), "KM-ING-NEW");
+            Set(latest, nameof(KmIntegrationOutbox.LastErrorCode), "PROCESSING_FAILED");
+            Set(latest, nameof(KmIntegrationOutbox.LastErrorMessage), "Latest extraction failed");
+        }
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            db.KmIntegrationOutbox.AddRange(original, latest);
+            db.KmIntegrationManualRetryAudits.Add(KmIntegrationManualRetryAudit.CreateReanalysis(
+                original, latest, "admin", 1, Now));
+            await db.SaveChangesAsync();
+        }
+
+        var service = Queue(factory);
+        var current = await service.GetIngestionAsync(filter, 1);
+        var item = Assert.Single(current.Items);
+        Assert.Equal(latest.Id, item.Id);
+        Assert.Equal(statusDisplay, item.StatusDisplay);
+        Assert.Equal(1, item.ManualAttemptCount);
+        Assert.False(item.CanReanalyze);
+        Assert.Equal(latestStatus == KmIntegrationStatus.Failed ? 1 : 0, current.Stats.Failed);
+        Assert.Equal(latestStatus == KmIntegrationStatus.Completed ? 1 : 0, current.Stats.Completed);
+        Assert.Equal(latestStatus == KmIntegrationStatus.Failed ? "PROCESSING_FAILED" : null, item.ErrorCode);
+        Assert.Empty((await service.GetIngestionAsync(
+            latestStatus == KmIntegrationStatus.Failed ? KmQueueFilters.Completed : KmQueueFilters.Failed, 1)).Items);
+        await using var verify = await factory.CreateDbContextAsync();
+        Assert.Equal(2, await verify.KmIntegrationOutbox.CountAsync());
+    }
+
+    [Fact]
+    public async Task LatestFailedManualAttemptCanBeReanalyzedAgainWhenEligible()
+    {
+        var factory = new InMemoryFactory();
+        var original = Outbox(KmIntegrationStatus.Failed, Now.AddMinutes(-5),
+            sourceType: KmIntegrationSourceEntityTypes.ApparatusFile, kmJobId: "KM-ING-OLD");
+        var latest = KmIntegrationOutbox.ForManualReanalysis(original, Guid.NewGuid(), Now);
+        Set(latest, nameof(KmIntegrationOutbox.Status), KmIntegrationStatus.Failed);
+        Set(latest, nameof(KmIntegrationOutbox.KmJobId), "KM-ING-NEW");
+        Set(latest, nameof(KmIntegrationOutbox.LastErrorCode), "PROCESSING_FAILED");
+        Set(latest, nameof(KmIntegrationOutbox.LastErrorMessage), "Latest extraction failed");
+        await using (var db = await factory.CreateDbContextAsync())
+        {
+            AddSource(db, KmIntegrationSourceEntityTypes.ApparatusFile, latest.SourceEntityId);
+            db.KmIntegrationOutbox.AddRange(original, latest);
+            db.KmIntegrationManualRetryAudits.Add(KmIntegrationManualRetryAudit.CreateReanalysis(
+                original, latest, "admin", 1, Now));
+            db.KmAnalysisCallbackReceipts.Add(new KmAnalysisCallbackReceipt
+            {
+                CallbackId = Guid.NewGuid(), OutboxId = latest.Id,
+                Endpoint = "document-jobs/status", Status = "Failed", ReceivedAt = Now
+            });
+            await db.SaveChangesAsync();
+        }
+        var service = new KmQueueQueryService(factory,
+            Options.Create(new KmIntegrationOptions
+                { Enabled = true, EquipmentEnabled = true, MaxRetryCount = 8 }),
+            Options.Create(new KmDeletionOptions { Enabled = true, EquipmentEnabled = true }));
+        var item = Assert.Single((await service.GetIngestionAsync(KmQueueFilters.Failed, 1)).Items);
+        Assert.Equal(latest.Id, item.Id);
+        Assert.True(item.CanReanalyze);
+        Assert.Equal("PROCESSING_FAILED", item.ErrorCode);
+        Assert.Equal("Latest extraction failed", item.Detail);
+        Assert.Equal(1, item.ManualAttemptCount);
+    }
+
     [Fact]
     public async Task VerificationAttachmentIsVisibleAndWaitsForAutomaticDispatch()
     {

@@ -352,6 +352,23 @@ public sealed class EquipmentVendorManagementTests
             Assert.Contains(Path.Combine("設備儀器管理", "設備資訊", "ASSET-1234 - Wi-Fi 7 Tester"),
                 (await db.ApparatusFiles.FirstAsync()).FilePath);
 
+            var reanalyzedFile = await db.ApparatusFiles.FirstAsync(x =>
+                x.ApparatusId == equipmentId && x.OriginalFileName == "manual.pdf");
+            var latestOutbox = KmIntegrationOutbox.ForArchivedEquipmentDocument(
+                stored, reanalyzedFile, now.AddMinutes(5));
+            typeof(KmIntegrationOutbox).GetProperty(nameof(KmIntegrationOutbox.Status))!
+                .SetValue(latestOutbox, KmIntegrationStatus.Completed);
+            db.KmIntegrationOutbox.Add(latestOutbox);
+            await db.SaveChangesAsync();
+            var updatedDetail = await apparatus.GetByIdAsync("equipment", equipmentId);
+            Assert.Equal(KmIntegrationStatus.Completed.ToString(),
+                Assert.Single(updatedDetail!.Files, x => x.Id == reanalyzedFile.Id).KmStatus);
+            var updatedFiles = await apparatus.GetFilesAsync("equipment", equipmentId);
+            Assert.Equal(KmIntegrationStatus.Completed.ToString(),
+                Assert.Single(updatedFiles, x => x.Id == reanalyzedFile.Id).KmStatus);
+            Assert.Equal(2, await db.KmIntegrationOutbox.CountAsync(x =>
+                x.SourceEntityId == reanalyzedFile.Id));
+
             var vendor = await db.Vendors.SingleAsync(x => x.Id == vendorId);
             vendor.IsActive = false;
             await db.SaveChangesAsync();

@@ -19,7 +19,14 @@ public sealed class KmQueueQueryService(
         filter = NormalizeFilter(filter);
         page = Math.Max(1, page);
         await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-        var all = HideCompletedSourceDeletions(db, db.KmIntegrationOutbox.AsNoTracking());
+        var latest = db.KmIntegrationOutbox.AsNoTracking().Where(row =>
+            row.Id == db.KmIntegrationOutbox
+                .Where(candidate => candidate.SourceSystem == row.SourceSystem &&
+                    candidate.DocumentId == row.DocumentId && candidate.Version == row.Version)
+                .OrderByDescending(candidate => candidate.CreatedAt)
+                .ThenByDescending(candidate => candidate.Id)
+                .Select(candidate => candidate.Id).FirstOrDefault());
+        var all = HideCompletedSourceDeletions(db, latest);
         var stats = new KmQueueStatsDto(
             await all.CountAsync(x => x.Status != KmIntegrationStatus.Completed, cancellationToken),
             await all.CountAsync(x => x.Status == KmIntegrationStatus.Pending, cancellationToken),
@@ -67,8 +74,9 @@ public sealed class KmQueueQueryService(
         var latestAttemptIds = latestAttempts.GroupBy(x => x.DocumentId)
             .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.CreatedAt)
                 .ThenByDescending(y => y.Id).First().Id);
+        var displayedDocuments = rows.Select(x => x.DocumentId).ToArray();
         var manualCounts = await db.KmIntegrationManualRetryAudits.AsNoTracking()
-            .Where(x => failedDocuments.Contains(x.DocumentId) && x.Action == "ManualReanalysis")
+            .Where(x => displayedDocuments.Contains(x.DocumentId) && x.Action == "ManualReanalysis")
             .GroupBy(x => x.DocumentId)
             .Select(x => new { DocumentId = x.Key, Count = x.Count() })
             .ToDictionaryAsync(x => x.DocumentId, x => x.Count, cancellationToken);
@@ -92,7 +100,8 @@ public sealed class KmQueueQueryService(
                 offset + index + 1, row.Id, source?.FileName ?? row.FileName,
                 SourceModule(row.SourceEntityType), source?.Uploader ?? "未記錄",
                 source?.UploadedAt, row.CreatedAt, row.Status.ToString(),
-                IngestionStatusDisplay(row.Status), row.RetryCount, row.NextRetryAt,
+                IngestionStatusDisplay(row.Status, manualCounts.GetValueOrDefault(row.DocumentId)),
+                row.RetryCount, row.NextRetryAt,
                 IngestionRetryState(row, now), row.LastErrorCode,
                 source is null && IsKnownIngestionSource(row.SourceEntityType)
                     ? MissingSourceDetail(row.LastErrorMessage)
@@ -458,7 +467,13 @@ public sealed class KmQueueQueryService(
         _ => "未知來源"
     };
 
-    private static string IngestionStatusDisplay(KmIntegrationStatus status) => status switch
+    private static string IngestionStatusDisplay(KmIntegrationStatus status, int manualAttemptCount) =>
+        manualAttemptCount > 0 ? status switch
+        {
+            KmIntegrationStatus.Completed => "重新分析完成",
+            KmIntegrationStatus.Failed => "重新分析失敗",
+            _ => IngestionStatusDisplay(status, 0)
+        } : status switch
     {
         KmIntegrationStatus.Pending => "等待派送",
         KmIntegrationStatus.Dispatching => "正在送出 KM 要求",

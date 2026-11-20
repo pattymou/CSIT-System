@@ -1115,12 +1115,15 @@ public class ApparatusService : IApparatusService
     {
         var ids = files.Select(x => x.Id).ToArray();
         if (ids.Length == 0) return new Dictionary<Guid, KmIntegrationOutbox>();
-        return await _db.KmIntegrationOutbox.AsNoTracking()
+        var rows = await _db.KmIntegrationOutbox.AsNoTracking()
             .Where(x => (x.EventType == KmIntegrationEventTypes.EquipmentDocumentArchived ||
                          x.EventType == KmIntegrationEventTypes.EquipmentAttachmentArchived) &&
                 x.SourceEntityType == KmIntegrationSourceEntityTypes.ApparatusFile &&
                 ids.Contains(x.SourceEntityId))
-            .ToDictionaryAsync(x => x.SourceEntityId);
+            .ToListAsync();
+        return rows.GroupBy(x => x.SourceEntityId)
+            .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.CreatedAt)
+                .ThenByDescending(y => y.Id).First());
     }
 
     private async Task<IReadOnlyDictionary<Guid, EquipmentFileDeletionJob>> LoadEquipmentDeletionsAsync(

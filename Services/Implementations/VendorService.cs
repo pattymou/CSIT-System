@@ -52,10 +52,13 @@ public sealed class VendorService(
             .SingleOrDefaultAsync(x => x.Id == id, cancellationToken);
         if (vendor is null) return null;
         var fileIds = vendor.Files.Select(x => x.Id).ToArray();
-        var outboxes = await db.KmIntegrationOutbox.AsNoTracking()
+        var outboxRows = await db.KmIntegrationOutbox.AsNoTracking()
             .Where(x => x.EventType == KmIntegrationEventTypes.VendorFileArchived &&
                 fileIds.Contains(x.SourceEntityId))
-            .ToDictionaryAsync(x => x.SourceEntityId, cancellationToken);
+            .ToListAsync(cancellationToken);
+        var outboxes = outboxRows.GroupBy(x => x.SourceEntityId)
+            .ToDictionary(x => x.Key, x => x.OrderByDescending(y => y.CreatedAt)
+                .ThenByDescending(y => y.Id).First());
         var approvedFileIds = (await db.PendingSubmissions.AsNoTracking()
             .Where(x => fileIds.Contains(x.Id) && x.Status == ApprovalStatus.Committed &&
                         x.ReviewerAccount != null && x.ReviewedAt != null)
