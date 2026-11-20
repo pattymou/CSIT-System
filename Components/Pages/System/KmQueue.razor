@@ -13,6 +13,7 @@
         <div>來源：@_pendingReanalysis.SourceModule</div>
         <div>原 KM JobId：@_pendingReanalysis.KmJobId</div>
         <div>失敗原因：@_pendingReanalysis.ErrorCode @(_pendingReanalysis.Detail)</div>
+        <div>請先確認原失敗原因已排除；重新分析仍可能再次失敗。</div>
         <button type="button" disabled="@_submitting" @onclick="SubmitReanalysisAsync">確認送出</button>
         <button type="button" disabled="@_submitting" @onclick="CancelReanalysis">取消</button>
     </div>

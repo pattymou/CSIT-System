@@ -17,19 +17,22 @@ public sealed class KmManualReanalysisService(
             KmIntegrationSourceEntityTypes.ApparatusFile)) return "此來源尚未完成安全整合。";
         if (row.Status != KmIntegrationStatus.Failed || row.KmJobId is null ||
             row.NextRetryAt is not null) return "只有 KM 已接收並回報失敗的工作可重新分析。";
-        if (row.LastErrorRetryable == false) return "KM 已判定此錯誤不可重試。";
         if (row.LastErrorCode?.StartsWith("MODEL_", StringComparison.OrdinalIgnoreCase) == true ||
             row.LastErrorCode?.StartsWith("EMBEDDING_", StringComparison.OrdinalIgnoreCase) == true ||
             row.LastErrorCode?.StartsWith("OCR_", StringComparison.OrdinalIgnoreCase) == true ||
             row.LastErrorCode is "UNSUPPORTED_FORMAT" or "UNSUPPORTED_FILE_TYPE" or
             "MODEL_UNAVAILABLE" or "MODEL_NOT_CONFIGURED" or "OCR_DISABLED" or
             "UNSUPPORTED_IMAGE") return "文件格式或必要模型服務尚不支援重新分析。";
-        // Rows failed before this column existed have no retryable flag. Only the
-        // deployed KM v2 worker's documented transient codes are safe to infer.
-        if (row.LastErrorRetryable is null &&
-            row.LastErrorCode is not ("STORAGE_UNAVAILABLE" or "PROCESSING_FAILED"))
-            return "缺少可重試的 KM 錯誤證據。";
-        return null;
+        // KM's retryable flag controls automatic retry of that failed job. A later
+        // administrator request may succeed after the semantic extraction service is fixed.
+        if (row.LastErrorRetryable == true ||
+            row.LastErrorCode is "STORAGE_UNAVAILABLE" or "PROCESSING_FAILED" or "TRANSIENT_FAILURE" ||
+            row.LastErrorCode == "HTTP_404" &&
+            (row.FileName.EndsWith(".xlsx", StringComparison.OrdinalIgnoreCase) ||
+             row.FileName.EndsWith(".xls", StringComparison.OrdinalIgnoreCase)) &&
+            row.LastErrorMessage?.Contains("semantic extraction:", StringComparison.OrdinalIgnoreCase) == true)
+            return null;
+        return "尚無可確認適合手動重新分析的失敗原因。";
     }
 
     public async Task<Guid> CreateAsync(Guid failedOutboxId, Guid requestId, string actor,

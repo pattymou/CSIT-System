@@ -35,6 +35,29 @@ public sealed class KmQueueMonitorTests
         Assert.Contains(SystemAuthorization.Policies.BusinessWrite, policies);
     }
 
+    [Theory]
+    [InlineData("HTTP_404", "semantic extraction: 404 Not Found", "quote.xlsx", null, true)]
+    [InlineData("HTTP_404", "semantic extraction: 404 Not Found", "quote.xlsx", false, true)]
+    [InlineData("PROCESSING_FAILED", "Processing failed", "quote.xlsx", false, true)]
+    [InlineData("HTTP_404", "File not found", "quote.xlsx", null, false)]
+    [InlineData("HTTP_404", "semantic extraction: 404 Not Found", "image.png", null, false)]
+    [InlineData("UNSUPPORTED_FORMAT", "OCR unavailable", "image.png", true, false)]
+    [InlineData("UNSUPPORTED_FORMAT", "OCR unavailable", "image.png", null, false)]
+    [InlineData("UNRECOGNIZED", "Unknown failure", "quote.xlsx", false, false)]
+    public void ManualReanalysisUsesFailureEvidenceRatherThanAutomaticRetryFlag(
+        string code, string message, string fileName, bool? retryable, bool allowed)
+    {
+        var row = Outbox(KmIntegrationStatus.Failed, Now, sourceType:
+            KmIntegrationSourceEntityTypes.ApparatusFile, kmJobId: "KM-ING-1");
+        Set(row, nameof(KmIntegrationOutbox.FileName), fileName);
+        Set(row, nameof(KmIntegrationOutbox.LastErrorCode), code);
+        Set(row, nameof(KmIntegrationOutbox.LastErrorMessage), message);
+        Set(row, nameof(KmIntegrationOutbox.LastErrorRetryable), retryable);
+        Assert.Equal(allowed, KmManualReanalysisService.FailureReason(row) is null);
+        Set(row, nameof(KmIntegrationOutbox.Status), KmIntegrationStatus.Completed);
+        Assert.NotNull(KmManualReanalysisService.FailureReason(row));
+    }
+
     [Fact]
     public void QueuePageUsesScopedDarkSurfacesAndVisibleInteractionStates()
     {

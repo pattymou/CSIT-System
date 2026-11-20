@@ -2,12 +2,17 @@
 
 Migration: `20261120045247_AddKmManualReanalysisAttempts`
 Target: CSIT DEV PostgreSQL only. No KM, Shared Identity, or Production migration.
+Generated forward SQL SHA256 (from predecessor migration): `B976CD1874EEC121F80F2A7DDA5169A24F45C42341E053141A6797E6BAE74BFD`.
 
 ## Purpose and application behavior
 
 An accepted KM v2 vendor or equipment attachment whose callback ended `Failed` may receive a new CSIT Outbox and EventId. The failed Outbox, original KM JobId, callback receipt, and prior error stay intact. A manual audit row links old and new Outboxes and records actor, original KM JobId, time, reason, and manual attempt number. The new Outbox starts `Pending`, with its own delivery retry counter. KM's v2 import contract accepts a new EventId after the prior canonical job is `Failed`, and its source/version deletion contract removes all related analysis jobs and index entries.
 
 The API requires `AdminOnly` and `BusinessWrite`. It locks the source row, verifies a terminal failed callback, absence of active/completed same-version work and deletion jobs, and validates formal archive, approval evidence, actual file size and SHA256 before committing. The worker rechecks these gates before delivery. Requests use a client-generated ID for idempotency. Existing v1 sources remain unavailable.
+
+KM's callback `retryable` value controls automatic retry of the failed job; it is not a permanent ban on a later administrator request. A supported Excel file with `HTTP_404` from `semantic extraction:` may be manually retried after that service is repaired, including old rows with a null retryable value. The confirmation displays the original error and warns that the new attempt may fail again. Known unsupported formats remain blocked.
+
+Read-only DEV preflight found four failed vendor/equipment jobs: three vendor PNG jobs (`b971f167`, `714e49f8`, `83f77234`) have `UNSUPPORTED_FORMAT` and will show the format restriction with no action; the equipment Excel job (`49a75cb7`) has the semantic extraction `HTTP_404` and will show **重新分析** to an authorized administrator. All four have a failed callback receipt and an existing source, with no deletion job, completed result, or conflicting work. The separate failed Document Library patch job is outside the supported source types.
 
 ## Schema changes to review
 
@@ -27,6 +32,7 @@ The PostgreSQL integration test created vendor and equipment archived files, dis
 
 - Review the exact pushed commit and generated migration SQL. Confirm the prior migration is `20261117055627_AddEquipmentAggregateDispatch` and the DEV database is `sit_department_system_dev`.
 - Confirm backup restore point, DEV runtime SHA, current migration history, no unexpected duplicate active source/version rows, and no pending KM deletion/ingestion deployment conflict.
+- The 2026-11-20 read-only preflight found predecessor `20261117055627_AddEquipmentAggregateDispatch`, zero duplicate active source/version rows, and a 15 MB DEV database. A restricted preflight custom-format backup was catalogued, fully decoded, and SHA256 checked. Take or reconfirm a fresh backup immediately before the approved migration if DEV data changes.
 - A DBA applies this migration to DEV through the approved database change process, then verifies the new ID in `__EFMigrationsHistory`, index predicate, constraints, and a read-only queue query. CSIT must not execute the DEV migration without that approval.
 - The protected review marker for the **exact commit SHA** is created by the existing `tools/dev-deploy/Approve-DevMigrationReview.ps1` procedure only after the migration is applied. The Ready Watcher requires the marker and applied migration before deployment.
 - After approval, run `Release-DevReady.ps1`; verify Ready Watcher, exact runtime SHA, deployment log, and smoke. Do not trigger reanalysis on a real document during smoke.
