@@ -13,7 +13,9 @@ public class AuthController(AdAuthenticationService ad, IConfiguration configura
     private bool UseOidc => configuration["AuthenticationMode"] == "Oidc";
     [HttpGet("/")]
     [AllowAnonymous]
-    public IActionResult Root() => Redirect("/signin");
+    public IActionResult Root() => UseOidc && User.Identity?.IsAuthenticated == true
+        ? Redirect(SharedIdentityOidcEvents.ResolveLanding(User, null))
+        : Redirect("/signin");
 
     [HttpGet("/signin")]
     [AllowAnonymous]
@@ -24,6 +26,8 @@ public class AuthController(AdAuthenticationService ad, IConfiguration configura
         {
             if (error == 1)
                 return Content("Shared Identity 登入失敗或未獲 CSIT 存取權限。", "text/plain; charset=utf-8");
+            if (User.Identity?.IsAuthenticated == true)
+                return Redirect(SharedIdentityOidcEvents.ResolveLanding(User, safeReturnUrl));
             return Challenge(new AuthenticationProperties { RedirectUri = safeReturnUrl ?? "/home" }, "oidc");
         }
         var hasError = error == 1;
@@ -151,6 +155,11 @@ public class AuthController(AdAuthenticationService ad, IConfiguration configura
     [HttpGet("/signed-out")]
     [AllowAnonymous]
     public IActionResult SignedOut() => Content("已登出 CSIT。Shared Identity 登入狀態仍可能有效。", "text/plain; charset=utf-8");
+
+    [HttpGet("/access-denied")]
+    [AllowAnonymous]
+    public IActionResult AccessDenied() => StatusCode(StatusCodes.Status403Forbidden,
+        "目前帳號沒有此 CSIT 頁面的存取權限。");
 
     private string? GetSafeReturnUrl(string? returnUrl)
     {

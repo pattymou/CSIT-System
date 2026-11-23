@@ -19,6 +19,11 @@
     <div class="content">
         <header class="topbar">
             <div>CSIT / Department System</div>
+            <AuthorizeView>
+                <Authorized>
+                    <a class="topbar-logout" href="/auth/logout" data-enhance-nav="false">登出</a>
+                </Authorized>
+            </AuthorizeView>
         </header>
 
         <main class="page-body">

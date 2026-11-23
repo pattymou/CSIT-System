@@ -129,6 +129,27 @@ a:hover{color:#bae6fd}
   z-index:10;
 }
 
+.topbar-actions{
+  display:flex;
+  align-items:center;
+  gap:14px;
+}
+
+.topbar-logout{
+  color:var(--text);
+  border:1px solid var(--border);
+  border-radius:8px;
+  padding:6px 12px;
+  text-decoration:none;
+  white-space:nowrap;
+}
+
+.topbar-logout:hover,.topbar-logout:focus-visible{
+  color:#fff;
+  border-color:var(--accent);
+  background:rgba(14,165,164,.12);
+}
+
 .page-body{
   padding:28px;
 }

@@ -11,14 +11,21 @@
     <div class="content">
         <header class="topbar">
             <div>CSIT / Department System</div>
-            @if (HostEnvironment.IsDevelopment() && BuildSha is { Length: 40 } && DeploymentTimeUtc is not null)
-            {
-                <AuthorizeView Policy="@SystemAuthorization.Policies.CsitStaff">
+            <div class="topbar-actions">
+                @if (HostEnvironment.IsDevelopment() && BuildSha is { Length: 40 } && DeploymentTimeUtc is not null)
+                {
+                    <AuthorizeView Policy="@SystemAuthorization.Policies.CsitStaff">
+                        <Authorized>
+                            <small class="dev-build-badge">DEV Build：@BuildSha[..8] · 部署：@DeploymentTimeUtc</small>
+                        </Authorized>
+                    </AuthorizeView>
+                }
+                <AuthorizeView>
                     <Authorized>
-                        <small class="dev-build-badge">DEV Build：@BuildSha[..8] · 部署：@DeploymentTimeUtc</small>
+                        <a class="topbar-logout" href="/auth/logout" data-enhance-nav="false">登出</a>
                     </Authorized>
                 </AuthorizeView>
-            }
+            </div>
         </header>
 
         <main class="page-body">

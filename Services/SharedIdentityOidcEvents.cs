@@ -70,10 +70,8 @@ public static class SharedIdentityOidcEvents
                 {
                     OidcDiagnostics.Write(context.HttpContext, "ClaimsMapping", "Accepted", flow);
                     context.Principal = mapped.Principal;
-                    if (context.Properties?.RedirectUri == "/home" &&
-                        mapped.Principal.HasClaim(SystemAuthorization.AccessScopeClaim,
-                            SystemAuthorization.AccessScopes.RdApplicant))
-                        context.Properties.RedirectUri = "/rd";
+                    context.ReturnUri = ResolveLanding(mapped.Principal,
+                        context.ReturnUri ?? context.Properties?.RedirectUri);
                 }
             },
             OnRemoteFailure = context =>
@@ -95,6 +93,17 @@ public static class SharedIdentityOidcEvents
                 return Task.CompletedTask;
             }
         };
+    }
+
+    public static string ResolveLanding(System.Security.Claims.ClaimsPrincipal principal, string? returnUri)
+    {
+        var isRd = principal.HasClaim(SystemAuthorization.AccessScopeClaim,
+            SystemAuthorization.AccessScopes.RdApplicant);
+        var defaultLanding = isRd ? "/rd" : "/home";
+        if (string.IsNullOrWhiteSpace(returnUri)) return defaultLanding;
+        var path = returnUri.Split('?', '#')[0].TrimEnd('/');
+        return path.Length == 0 || (isRd && path.Equals("/home", StringComparison.OrdinalIgnoreCase))
+            ? defaultLanding : returnUri;
     }
 
     private static string ClassifyOidcFailure(Exception? exception, HttpContext context)

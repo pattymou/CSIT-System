@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -31,6 +32,7 @@ public sealed class OidcMiddlewareFlowTests
     [InlineData("InvalidRole")]
     [InlineData("BindingConflict")]
     [InlineData("SessionRejected")]
+    [InlineData("RdApplicant")]
     public async Task RealMiddleware_HandlesCodeFlowAndFailureStages(string scenario)
     {
         using var provider = new FakeIdentityProvider();
@@ -63,6 +65,7 @@ public sealed class OidcMiddlewareFlowTests
                 options.Cookie.SameSite = Microsoft.AspNetCore.Http.SameSiteMode.Lax;
                 options.EventsType = typeof(SharedIdentityCookieEvents);
                 options.LoginPath = "/signin";
+                options.AccessDeniedPath = "/access-denied";
             })
             .AddOpenIdConnect("oidc", options =>
             {
@@ -70,7 +73,15 @@ public sealed class OidcMiddlewareFlowTests
                     "csit-test", "isolated-test-only");
                 options.BackchannelHttpHandler = provider;
             });
-        builder.Services.AddAuthorization();
+        builder.Services.AddAuthorization(options =>
+        {
+            options.AddPolicy(SystemAuthorization.Policies.CsitStaff, policy =>
+                policy.RequireAuthenticatedUser().RequireClaim(SystemAuthorization.AccessScopeClaim,
+                    SystemAuthorization.AccessScopes.CsitStaff));
+            options.AddPolicy(SystemAuthorization.Policies.RdApplicant, policy =>
+                policy.RequireAuthenticatedUser().RequireClaim(SystemAuthorization.AccessScopeClaim,
+                    SystemAuthorization.AccessScopes.RdApplicant));
+        });
 
         await using var app = builder.Build();
         app.UseAuthentication();
@@ -78,9 +89,14 @@ public sealed class OidcMiddlewareFlowTests
         app.MapGet("/signin", async context =>
             await context.ChallengeAsync("oidc", new AuthenticationProperties
             {
-                RedirectUri = "/protected"
+                RedirectUri = scenario == "RdApplicant" ? "/home" : "/protected"
             }));
         app.MapGet("/protected", () => "protected page reached").RequireAuthorization();
+        app.MapGet("/rd", () => "rd page reached")
+            .RequireAuthorization(SystemAuthorization.Policies.RdApplicant);
+        app.MapGet("/home", () => "staff page reached")
+            .RequireAuthorization(SystemAuthorization.Policies.CsitStaff);
+        app.MapGet("/access-denied", () => Results.StatusCode(StatusCodes.Status403Forbidden));
         await app.StartAsync();
         using var client = app.GetTestClient();
         client.BaseAddress = new Uri("https://csit.test");
@@ -110,6 +126,7 @@ public sealed class OidcMiddlewareFlowTests
         provider.InvalidNonce = scenario == "InvalidNonce";
         provider.TokenUnavailable = scenario == "TokenUnavailable";
         provider.SessionRejected = scenario == "SessionRejected";
+        provider.RdApplicant = scenario == "RdApplicant";
 
         var cookies = challenge.Headers.GetValues("Set-Cookie")
             .Select(header => header.Split(';')[0]).ToArray();
@@ -128,24 +145,36 @@ public sealed class OidcMiddlewareFlowTests
         callback.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", cookies));
         using var result = await client.SendAsync(callback);
 
-        if (scenario is "Success" or "SessionRejected")
+        if (scenario is "Success" or "SessionRejected" or "RdApplicant")
         {
             Assert.Equal(HttpStatusCode.Redirect, result.StatusCode);
-            Assert.Equal("/protected", result.Headers.Location?.OriginalString);
+            var landing = scenario == "RdApplicant" ? "/rd" : "/protected";
+            Assert.Equal(landing, result.Headers.Location?.OriginalString);
             var appCookie = result.Headers.GetValues("Set-Cookie")
                 .Single(value => value.StartsWith("CSIT.Dev.Oidc=", StringComparison.Ordinal))
                 .Split(';')[0];
-            using var protectedRequest = new HttpRequestMessage(HttpMethod.Get, "/protected");
+            using var protectedRequest = new HttpRequestMessage(HttpMethod.Get, landing);
             protectedRequest.Headers.TryAddWithoutValidation("Cookie", appCookie);
             using var protectedResponse = await client.SendAsync(protectedRequest);
-            Assert.Equal(scenario == "Success" ? HttpStatusCode.OK : HttpStatusCode.Redirect,
+            Assert.Equal(scenario == "SessionRejected" ? HttpStatusCode.Redirect : HttpStatusCode.OK,
                 protectedResponse.StatusCode);
-            if (scenario == "Success")
-                Assert.Equal("protected page reached", await protectedResponse.Content.ReadAsStringAsync());
-            Assert.Equal(1, provider.SessionChecks);
+            if (scenario != "SessionRejected")
+                Assert.Equal(scenario == "RdApplicant" ? "rd page reached" : "protected page reached",
+                    await protectedResponse.Content.ReadAsStringAsync());
+            if (scenario == "RdApplicant")
+            {
+                using var deniedRequest = new HttpRequestMessage(HttpMethod.Get, "/home");
+                deniedRequest.Headers.TryAddWithoutValidation("Cookie", appCookie);
+                using var denied = await client.SendAsync(deniedRequest);
+                Assert.Equal(HttpStatusCode.Redirect, denied.StatusCode);
+                Assert.Equal("/access-denied", new Uri(client.BaseAddress!, denied.Headers.Location!).AbsolutePath);
+                using var deniedPage = await client.GetAsync(denied.Headers.Location);
+                Assert.Equal(HttpStatusCode.Forbidden, deniedPage.StatusCode);
+            }
+            Assert.Equal(scenario == "RdApplicant" ? 2 : 1, provider.SessionChecks);
             Assert.Contains(logs.Entries, entry => entry.Contains("Stage=CookieIssued"));
             Assert.Contains(logs.Entries, entry => entry.Contains("Stage=SessionValidation") &&
-                entry.Contains(scenario == "Success" ? "Kind=Accepted" : "Kind=IdentityStatus"));
+                entry.Contains(scenario == "SessionRejected" ? "Kind=IdentityStatus" : "Kind=Accepted"));
             var challengeFlow = Regex.Match(logs.Entries.Single(entry => entry.Contains("Stage=Challenge")),
                 @"FlowId=([0-9a-f]{32})").Groups[1].Value;
             var exchangeFlow = Regex.Match(logs.Entries.Single(entry => entry.Contains("Stage=CodeExchangeStart")),
@@ -242,6 +271,7 @@ public sealed class OidcMiddlewareFlowTests
         public bool InvalidNonce { get; set; }
         public bool TokenUnavailable { get; set; }
         public bool SessionRejected { get; set; }
+        public bool RdApplicant { get; set; }
         public int TokenCalls { get; private set; }
         public int SessionChecks { get; private set; }
         public string LastToken { get; private set; } = "token-not-created";
@@ -288,7 +318,7 @@ public sealed class OidcMiddlewareFlowTests
                     new("account", "testreader"), new("name", "Test Reader"),
                     new("department", "DEV"), new("email", "reader@example.test"),
                     new("data_access_level", "ReadOnly"),
-                    new("csit_roles", InvalidRole ? "UnknownRole" : "CsitStaff")
+                    new("csit_roles", InvalidRole ? "UnknownRole" : RdApplicant ? "RdApplicant" : "CsitStaff")
                 };
                 var token = new JwtSecurityToken(Issuer, "csit-test", claims,
                     DateTime.UtcNow.AddMinutes(-1), DateTime.UtcNow.AddMinutes(5),

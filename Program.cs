@@ -133,7 +133,7 @@ var authentication = builder.Services
     {
         options.LoginPath = "/signin";
         options.LogoutPath = "/auth/logout";
-        options.AccessDeniedPath = "/signin";
+        options.AccessDeniedPath = useSharedIdentity ? "/access-denied" : "/signin";
         options.Cookie.Name = useSharedIdentity ? "CSIT.Dev.Oidc" : "CSIT.Legacy";
         options.Cookie.HttpOnly = true;
         options.Cookie.SecurePolicy = CookieSecurePolicy.Always;
