@@ -255,6 +255,66 @@ public sealed class OidcMiddlewareFlowTests
         Assert.DoesNotContain(logs.Entries, entry => entry.Contains("Stage=CallbackMessage"));
     }
 
+    [Fact]
+    public async Task SignOut_UsesDiscoveredEndSessionAndReturnsToSignedOutWithoutTokenInUrl()
+    {
+        using var provider = new FakeIdentityProvider();
+        var builder = WebApplication.CreateBuilder();
+        builder.WebHost.UseTestServer();
+        builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
+            .AddCookie()
+            .AddOpenIdConnect("oidc", options =>
+            {
+                SharedIdentityOidcConfiguration.Apply(options, FakeIdentityProvider.Issuer,
+                    "csit-test", "isolated-test-only");
+                options.BackchannelHttpHandler = provider;
+            });
+        await using var app = builder.Build();
+        app.UseAuthentication();
+        app.MapGet("/seed", async context =>
+        {
+            await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme,
+                new ClaimsPrincipal(new ClaimsIdentity([new Claim("sub", "isolated-user")],
+                    CookieAuthenticationDefaults.AuthenticationScheme)));
+        });
+        app.MapGet("/auth/logout", async context =>
+        {
+            await context.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+            await context.SignOutAsync("oidc", new AuthenticationProperties
+            {
+                RedirectUri = "/signed-out?signedOut=1"
+            });
+        });
+        app.MapGet("/signed-out", () => "signed out");
+        await app.StartAsync();
+        using var client = app.GetTestClient();
+        client.BaseAddress = new Uri("https://csit.test");
+
+        using var seed = await client.GetAsync("/seed");
+        var appCookie = seed.Headers.GetValues("Set-Cookie").Single().Split(';')[0];
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/auth/logout");
+        request.Headers.TryAddWithoutValidation("Cookie", appCookie);
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("https://idp.test/connect/logout", response.Headers.Location?.GetLeftPart(UriPartial.Path));
+        var query = ParseQuery(response.Headers.Location!.Query);
+        Assert.Equal("csit-test", query["client_id"]);
+        Assert.Equal("https://csit.test/signout-callback-oidc", query["post_logout_redirect_uri"]);
+        Assert.False(query.ContainsKey("id_token_hint"));
+        Assert.DoesNotContain("isolated-access-token", response.Headers.Location!.OriginalString);
+
+        var callbackCookies = response.Headers.GetValues("Set-Cookie")
+            .Select(header => header.Split(';')[0])
+            .Where(cookie => !cookie.StartsWith(".AspNetCore.Cookies=", StringComparison.Ordinal));
+        using var callback = new HttpRequestMessage(HttpMethod.Get,
+            "/signout-callback-oidc?state=" + Uri.EscapeDataString(query["state"]));
+        callback.Headers.TryAddWithoutValidation("Cookie", string.Join("; ", callbackCookies));
+        using var callbackResponse = await client.SendAsync(callback);
+        Assert.Equal(HttpStatusCode.Redirect, callbackResponse.StatusCode);
+        Assert.Equal("/signed-out?signedOut=1", callbackResponse.Headers.Location?.OriginalString);
+    }
+
     private static Dictionary<string, string> ParseQuery(string query) => query.TrimStart('?')
         .Split('&').Select(part => part.Split('=', 2)).ToDictionary(
             part => WebUtility.UrlDecode(part[0]),
@@ -287,6 +347,7 @@ public sealed class OidcMiddlewareFlowTests
                 {
                     issuer = Issuer,
                     authorization_endpoint = Issuer + "connect/authorize",
+                    end_session_endpoint = Issuer + "connect/logout",
                     token_endpoint = Issuer + "connect/token",
                     jwks_uri = Issuer + "jwks",
                     response_types_supported = new[] { "code" },

@@ -149,6 +149,8 @@ public class AuthController(AdAuthenticationService ad, IConfiguration configura
     public async Task<IActionResult> Logout()
     {
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
+        if (UseOidc)
+            return SignOut(new AuthenticationProperties { RedirectUri = "/signed-out?signedOut=1" }, "oidc");
         return Redirect("/signed-out?signedOut=1");
     }
 

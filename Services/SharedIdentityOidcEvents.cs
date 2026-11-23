@@ -15,6 +15,11 @@ public static class SharedIdentityOidcEvents
     {
         return new OpenIdConnectEvents
         {
+            OnRedirectToIdentityProviderForSignOut = context =>
+            {
+                context.ProtocolMessage.ClientId = context.Options.ClientId;
+                return Task.CompletedTask;
+            },
             OnRedirectToIdentityProvider = context =>
             {
                 OidcDiagnostics.Write(context.HttpContext, "Challenge", flow:

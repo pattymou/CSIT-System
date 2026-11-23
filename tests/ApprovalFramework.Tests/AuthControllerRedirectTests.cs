@@ -44,22 +44,36 @@ public sealed class AuthControllerRedirectTests
     }
 
     [Fact]
-    public async Task Logout_RevokesCookieThenOpensLoginPageWithoutOidcChallenge()
+    public async Task OidcLogout_RevokesCookieThenRequestsProviderSignOut()
     {
         var controller = CreateController(SystemAuthorization.AccessScopes.RdApplicant);
         var authentication = new RecordingAuthenticationService();
         controller.HttpContext.RequestServices = new ServiceCollection()
             .AddSingleton<IAuthenticationService>(authentication).BuildServiceProvider();
 
-        Assert.Equal("/signed-out?signedOut=1", Assert.IsType<RedirectResult>(await controller.Logout()).Url);
+        var result = Assert.IsType<SignOutResult>(await controller.Logout());
+        Assert.Equal("/signed-out?signedOut=1", result.Properties?.RedirectUri);
+        Assert.Equal(["oidc"], result.AuthenticationSchemes);
         Assert.Equal(CookieAuthenticationDefaults.AuthenticationScheme, authentication.SignedOutScheme);
         Assert.False(authentication.Challenged);
     }
 
-    private static AuthController CreateController(string scope)
+    [Fact]
+    public async Task LegacyLogout_RevokesCookieAndOpensSignedOutPage()
+    {
+        var controller = CreateController(SystemAuthorization.AccessScopes.CsitStaff, "Legacy");
+        var authentication = new RecordingAuthenticationService();
+        controller.HttpContext.RequestServices = new ServiceCollection()
+            .AddSingleton<IAuthenticationService>(authentication).BuildServiceProvider();
+
+        Assert.Equal("/signed-out?signedOut=1", Assert.IsType<RedirectResult>(await controller.Logout()).Url);
+        Assert.Equal(CookieAuthenticationDefaults.AuthenticationScheme, authentication.SignedOutScheme);
+    }
+
+    private static AuthController CreateController(string scope, string mode = "Oidc")
     {
         var configuration = new ConfigurationBuilder().AddInMemoryCollection(
-            new Dictionary<string, string?> { ["AuthenticationMode"] = "Oidc" }).Build();
+            new Dictionary<string, string?> { ["AuthenticationMode"] = mode }).Build();
         return new AuthController(null!, configuration)
         {
             ControllerContext = new ControllerContext
