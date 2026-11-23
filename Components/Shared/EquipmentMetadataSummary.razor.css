@@ -19,6 +19,17 @@
 .aggregate-pending-coverage { display:flex; gap:.6rem; align-items:baseline; margin-top:.9rem; padding:.75rem; border:1px solid rgba(56,189,248,.35); border-radius:9px; background:rgba(7,89,133,.16); color:#bae6fd; }
 .aggregate-pending-coverage span { color:#7dd3fc; font-size:.82rem; }
 .metadata-evidence-list { display:grid; gap:.65rem; }
+.equipment-evidence-link { border:0; padding:0; background:none; color:#7dd3fc; font:inherit; font-weight:700; text-decoration:underline; text-underline-offset:3px; cursor:pointer; }
+.equipment-evidence-link:hover,.equipment-evidence-link:focus-visible { color:#e0f2fe; }
+.equipment-evidence-backdrop { position:fixed; inset:0; z-index:2100; display:grid; place-items:center; padding:20px; background:rgba(2,6,23,.76); }
+.equipment-evidence-dialog { display:flex; flex-direction:column; width:min(640px,100%); max-height:min(80vh,720px); border:1px solid rgba(148,163,184,.3); border-radius:16px; background:#0b1b2a; box-shadow:0 24px 64px rgba(2,6,23,.6); }
+.equipment-evidence-dialog header { display:flex; align-items:center; justify-content:space-between; gap:1rem; padding:1rem 1.2rem; border-bottom:1px solid rgba(148,163,184,.2); }
+.equipment-evidence-dialog h2 { margin:0; color:#e8edf7; font-size:1.1rem; }
+.equipment-evidence-close { padding:.45rem .8rem; border:1px solid rgba(148,163,184,.35); border-radius:8px; background:rgba(148,163,184,.15); color:#f8fafc; font:inherit; font-weight:700; cursor:pointer; }
+.equipment-evidence-close:hover,.equipment-evidence-close:focus-visible { background:rgba(148,163,184,.28); }
+.equipment-evidence-scroll { min-height:0; overflow-y:auto; padding:1.2rem; }
+.equipment-evidence-scroll .metadata-evidence { overflow-wrap:anywhere; }
+@media (max-width:640px) { .equipment-evidence-backdrop { padding:10px; } .equipment-evidence-dialog { max-height:90vh; } }
 .equipment-metadata-compact { margin:.35rem 0; padding:1rem; }
 .equipment-metadata-compact .case-kicker { display:none; }
 .equipment-metadata-compact h3 { font-size:1rem; }

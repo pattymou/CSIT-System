@@ -54,13 +54,34 @@
             <section><h4>衝突</h4>@if (_view.Result.Conflicts.Count == 0) { <span class="metadata-empty">KM 未回報跨文件衝突。</span> } else { <ul>@foreach (var x in _view.Result.Conflicts) { <li><strong>@x.Field：</strong>@x.Description <small>（@string.Join("、", x.EvidenceIds)）</small></li> }</ul> }</section>
             <section><h4>來源證據</h4>
                 @if (_view.Result.Evidence.Count == 0) { <span class="metadata-empty">KM 未提供來源證據，因此不會形成正式建議。</span> }
-                else { <div class="metadata-evidence-list">@foreach (var x in _view.Result.Evidence) { <div class="metadata-evidence"><strong>@x.EvidenceId</strong><span>@x.Description</span>@if (x.Location is not null) { <small>@x.Location</small> }<small>FileId：@x.FileId</small></div> }</div> }
+                else { <button type="button" class="equipment-evidence-link" @ref="_evidenceTrigger" @onclick="OpenEvidence">查看來源證據（@_view.Result.Evidence.Count）</button> }
             </section>
             @if (_view.Result.Warnings.Count > 0) { <section><h4>KM 警告</h4><ul>@foreach (var x in _view.Result.Warnings) { <li>@x</li> }</ul></section> }
             <small class="metadata-note">僅呈現 KM 對有效文件集合回傳的快照；不會自動覆寫設備主檔或預約資源能力。</small>
         }
     }
 </div>
+
+@if (_showEvidence && _view?.Status == "Completed" && !_view.IsStale && _view.Result is not null)
+{
+    <div class="equipment-evidence-backdrop" @onclick="CloseEvidence">
+        <section class="equipment-evidence-dialog" role="dialog" aria-modal="true" aria-labelledby="equipment-evidence-title"
+                 @onclick:stopPropagation="true" @onkeydown="HandleEvidenceKeyDown">
+            <header>
+                <h2 id="equipment-evidence-title">來源證據（@_view.Result.Evidence.Count）</h2>
+                <button type="button" class="equipment-evidence-close" @ref="_evidenceClose" @onclick="CloseEvidence" aria-label="關閉來源證據視窗">關閉</button>
+            </header>
+            <div class="equipment-evidence-scroll">
+                <div class="metadata-evidence-list">
+                    @foreach (var x in _view.Result.Evidence)
+                    {
+                        <div class="metadata-evidence"><strong>@x.EvidenceId</strong><span>@x.Description</span>@if (x.Location is not null) { <small>@x.Location</small> }<small>FileId：@x.FileId</small></div>
+                    }
+                </div>
+            </div>
+        </section>
+    </div>
+}
 
 @code {
     [Parameter, EditorRequired] public string ApparatusId { get; set; } = string.Empty;
@@ -74,6 +95,8 @@
     private int _loadVersion;
     private CancellationTokenSource? _pollingCts;
     private bool _disposed;
+    private bool _showEvidence, _focusEvidenceClose, _focusEvidenceTrigger;
+    private ElementReference _evidenceTrigger, _evidenceClose;
     private bool IsBlank => HasFiles == false && _view?.Status != "NoEligibleDocuments" &&
         (_view is null || EquipmentAggregateAnalysisPresentation.IsBlank(_view, HasFiles));
     protected override async Task OnParametersSetAsync()
@@ -82,6 +105,7 @@
         if (_key == key) return;
         var loadVersion = ++_loadVersion;
         StopPolling();
+        _showEvidence = false;
         _key = key; _view = null; _error = null; _loading = true;
         await LoadAsync(loadVersion, true, CancellationToken.None);
         if (loadVersion == _loadVersion && ShouldPoll(_view)) StartPolling(loadVersion);
@@ -91,7 +115,13 @@
         try
         {
             var view = await Api.GetAsync<EquipmentAggregateAnalysisView>($"/api/equipment-aggregate-analysis?apparatusId={Uri.EscapeDataString(ApparatusId)}&moduleCode={Uri.EscapeDataString(ModuleCode)}", cancellationToken);
-            if (loadVersion == _loadVersion) { _view = view; _error = null; }
+            if (loadVersion == _loadVersion)
+            {
+                _view = view;
+                _error = null;
+                if (view.Status != "Completed" || view.IsStale || view.Result is null)
+                    _showEvidence = false;
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (BrowserApiException ex)
@@ -108,6 +138,34 @@
             if (loadVersion == _loadVersion) _error = "設備綜合分析暫時無法取得，請稍後重試。";
         }
         finally { if (initial && loadVersion == _loadVersion) _loading = false; }
+    }
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_focusEvidenceClose && _showEvidence)
+        {
+            _focusEvidenceClose = false;
+            await _evidenceClose.FocusAsync();
+        }
+        else if (_focusEvidenceTrigger && !_showEvidence)
+        {
+            _focusEvidenceTrigger = false;
+            if (_view?.Status == "Completed" && !_view.IsStale && _view.Result?.Evidence.Count > 0)
+                await _evidenceTrigger.FocusAsync();
+        }
+    }
+    private void OpenEvidence()
+    {
+        _showEvidence = true;
+        _focusEvidenceClose = true;
+    }
+    private void CloseEvidence()
+    {
+        _showEvidence = false;
+        _focusEvidenceTrigger = true;
+    }
+    private void HandleEvidenceKeyDown(KeyboardEventArgs args)
+    {
+        if (args.Key == "Escape") CloseEvidence();
     }
     private static bool ShouldPoll(EquipmentAggregateAnalysisView? view) =>
         view?.Status is "Stale" or "Pending" or "Deferred";

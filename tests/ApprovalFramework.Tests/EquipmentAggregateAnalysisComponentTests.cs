@@ -108,6 +108,27 @@ public sealed class EquipmentAggregateAnalysisComponentTests
     }
 
     [Fact]
+    public async Task CompletedEvidence_ShowsCountAndKeepsCardsInDialogUntilOpened()
+    {
+        var view = EmptyView() with
+        {
+            Status = "Completed", EligibleDocumentCount = 1,
+            Result = new EquipmentAggregateAnalysisResult("Overview", [], [], [], [],
+                [new EquipmentAggregateEvidence("E1", Guid.NewGuid(), Guid.NewGuid(), "Source description", "Page 3"),
+                 new EquipmentAggregateEvidence("E2", Guid.NewGuid(), Guid.NewGuid(), "Second source", null)], [])
+        };
+        var (html, _) = await RenderAsync(new BrowserApiResponse
+        {
+            StatusCode = 200, Body = JsonSerializer.Serialize(view, JsonSerializerOptions.Web)
+        }, true);
+
+        Assert.Contains("查看來源證據（2）", html);
+        Assert.DoesNotContain("Source description", html);
+        Assert.DoesNotContain("Second source", html);
+        Assert.DoesNotContain("equipment-evidence-backdrop", html);
+    }
+
+    [Fact]
     public async Task EmptyCompletedSnapshot_IsMarkedAsInsufficient()
     {
         var view = EmptyView() with
