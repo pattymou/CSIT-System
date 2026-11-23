@@ -69,6 +69,26 @@ public sealed class EquipmentAggregateAnalysisComponentTests
     }
 
     [Fact]
+    public async Task FailedReplacement_ShowsActualFailureWithoutWaitingBannerOrOldResult()
+    {
+        var view = EmptyView() with
+        {
+            Status = "Failed", IsStale = true, EligibleDocumentCount = 1,
+            FailureCode = "KM_AGGREGATE_ERROR", FailureMessage = "KM worker rejected the request",
+            Result = new EquipmentAggregateAnalysisResult("Old overview", [], [], [], [], [], [])
+        };
+        var (html, _) = await RenderAsync(new BrowserApiResponse
+        {
+            StatusCode = 200, Body = JsonSerializer.Serialize(view, JsonSerializerOptions.Web)
+        }, true);
+
+        Assert.Contains("KM_AGGREGATE_ERROR", html);
+        Assert.Contains("KM worker rejected the request", html);
+        Assert.DoesNotContain("正在等待目前有效文件", html);
+        Assert.DoesNotContain("Old overview", html);
+    }
+
+    [Fact]
     public async Task CompletedKmAnalysis_StillRendersResult()
     {
         var view = EmptyView() with

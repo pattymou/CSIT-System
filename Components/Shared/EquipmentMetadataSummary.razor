@@ -2,6 +2,7 @@
 @using SIT.DepartmentSystem.Web.Services.KmIntegration
 @inject BrowserApiClient Api
 @inject ILogger<EquipmentMetadataSummary> Logger
+@implements IAsyncDisposable
 
 <div class="form-card equipment-metadata-summary @(Compact ? "equipment-metadata-compact" : null)">
     <div class="case-card-head"><div><div class="case-kicker">KM / CONSOLIDATED ANALYSIS</div><h3>設備綜合分析</h3></div>
@@ -22,10 +23,14 @@
         {
             <div class="aggregate-pending-coverage"><strong>分析尚未涵蓋全部文件</strong><span>目前有 @_view.PendingDocumentCount 份文件仍在等待 KM 單檔分析；完成後將依新的文件集合更新綜合分析。</span></div>
         }
-        @if (_view.IsStale) { <div class="aggregate-stale"><strong>待更新</strong><span>文件集合已改變；先前分析已過期，正在等待目前有效文件的綜合分析。</span></div> }
+        @if (_view.IsStale && _view.Status is ("Stale" or "Pending")) { <div class="aggregate-stale"><strong>待更新</strong><span>文件集合已改變；先前分析已過期，正在等待目前有效文件的綜合分析。</span></div> }
         @if (_view.Status != "Completed" || _view.IsStale || _view.Result is null)
         {
             <div class="record-empty-box"><strong>@EmptyTitle(_view.Status)</strong><span>@EmptyDescription(_view.Status)</span></div>
+            @if (_view.Status == "Failed" && (!string.IsNullOrWhiteSpace(_view.FailureCode) || !string.IsNullOrWhiteSpace(_view.FailureMessage)))
+            {
+                <div class="record-empty-box"><strong>@_view.FailureCode</strong><span>@_view.FailureMessage</span></div>
+            }
         }
         else
         {
@@ -67,6 +72,8 @@
     private string? _key, _error;
     private bool _loading;
     private int _loadVersion;
+    private CancellationTokenSource? _pollingCts;
+    private bool _disposed;
     private bool IsBlank => HasFiles == false && _view?.Status != "NoEligibleDocuments" &&
         (_view is null || EquipmentAggregateAnalysisPresentation.IsBlank(_view, HasFiles));
     protected override async Task OnParametersSetAsync()
@@ -74,12 +81,19 @@
         var key = $"{ModuleCode}:{ApparatusId}:{RefreshKey}";
         if (_key == key) return;
         var loadVersion = ++_loadVersion;
+        StopPolling();
         _key = key; _view = null; _error = null; _loading = true;
+        await LoadAsync(loadVersion, true, CancellationToken.None);
+        if (loadVersion == _loadVersion && ShouldPoll(_view)) StartPolling(loadVersion);
+    }
+    private async Task LoadAsync(int loadVersion, bool initial, CancellationToken cancellationToken)
+    {
         try
         {
-            var view = await Api.GetAsync<EquipmentAggregateAnalysisView>($"/api/equipment-aggregate-analysis?apparatusId={Uri.EscapeDataString(ApparatusId)}&moduleCode={Uri.EscapeDataString(ModuleCode)}");
-            if (loadVersion == _loadVersion) _view = view;
+            var view = await Api.GetAsync<EquipmentAggregateAnalysisView>($"/api/equipment-aggregate-analysis?apparatusId={Uri.EscapeDataString(ApparatusId)}&moduleCode={Uri.EscapeDataString(ModuleCode)}", cancellationToken);
+            if (loadVersion == _loadVersion) { _view = view; _error = null; }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         catch (BrowserApiException ex)
         {
             Logger.LogWarning("Equipment aggregate analysis API failed. StatusCode={StatusCode} TraceId={TraceId} ApparatusId={ApparatusId} ModuleCode={ModuleCode}",
@@ -93,11 +107,61 @@
                 ex.GetType().Name, ApparatusId, ModuleCode);
             if (loadVersion == _loadVersion) _error = "設備綜合分析暫時無法取得，請稍後重試。";
         }
-        finally { if (loadVersion == _loadVersion) _loading = false; }
+        finally { if (initial && loadVersion == _loadVersion) _loading = false; }
+    }
+    private static bool ShouldPoll(EquipmentAggregateAnalysisView? view) =>
+        view?.Status is "Stale" or "Pending" or "Deferred";
+    private void StartPolling(int loadVersion)
+    {
+        var cts = new CancellationTokenSource();
+        _pollingCts = cts;
+        _ = PollAsync(loadVersion, cts);
+    }
+    private async Task PollAsync(int loadVersion, CancellationTokenSource cts)
+    {
+        try
+        {
+            using var timer = new PeriodicTimer(TimeSpan.FromSeconds(10));
+            while (await timer.WaitForNextTickAsync(cts.Token))
+            {
+                if (_disposed || loadVersion != _loadVersion) break;
+                await InvokeAsync(async () =>
+                {
+                    if (_disposed || loadVersion != _loadVersion) return;
+                    await LoadAsync(loadVersion, false, cts.Token);
+                    StateHasChanged();
+                });
+                if (!ShouldPoll(_view)) break;
+            }
+        }
+        catch (OperationCanceledException) when (cts.IsCancellationRequested) { }
+        catch (ObjectDisposedException) when (_disposed) { }
+        catch (Exception ex)
+        {
+            Logger.LogWarning("Equipment aggregate analysis polling stopped. FailureType={FailureType} ApparatusId={ApparatusId}",
+                ex.GetType().Name, ApparatusId);
+        }
+        finally
+        {
+            if (ReferenceEquals(_pollingCts, cts)) _pollingCts = null;
+            cts.Dispose();
+        }
+    }
+    private void StopPolling()
+    {
+        _pollingCts?.Cancel();
+        _pollingCts = null;
+    }
+    public ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        ++_loadVersion;
+        StopPolling();
+        return ValueTask.CompletedTask;
     }
     private static string StatusText(string status) => status switch { "Completed" => "分析完成", "Stale" => "待更新", "Pending" => "等待 KM", "Deferred" => "KM 暫停受理", "Failed" => "分析失敗", "NoEligibleDocuments" => "無有效文件", "FeatureDisabled" => "流程尚未啟用", _ => status };
     private static string EmptyTitle(string status) => status switch { "NoEligibleDocuments" => "目前沒有可用的設備綜合分析", "FeatureDisabled" => "KM 設備綜合分析流程尚未啟用", "Failed" => "本次 KM 設備綜合分析失敗", _ => "設備綜合分析尚未完成" };
-    private static string EmptyDescription(string status) => status switch { "FeatureDisabled" => "Feature Flag 保持關閉；CSIT 不會用單檔結果拼湊或產生假綜合分析。", "NoEligibleDocuments" => "只納入正式入庫、未進入刪除流程且具有有效 KM 單檔分析結果的文件。", _ => "完成後會顯示 KM 回傳快照；既有單檔 KM 工作不會重新派送。" };
+    private static string EmptyDescription(string status) => status switch { "FeatureDisabled" => "Feature Flag 保持關閉；CSIT 不會用單檔結果拼湊或產生假綜合分析。", "NoEligibleDocuments" => "只納入正式入庫、未進入刪除流程且具有有效 KM 單檔分析結果的文件。", "Failed" => "本次分析未完成；先前分析已過期。", _ => "完成後會顯示 KM 回傳快照；既有單檔 KM 工作不會重新派送。" };
     private static bool HasSubstantiveAnalysis(EquipmentAggregateAnalysisResult result) =>
         result.TechnicalSpecifications.Count > 0 || result.TestCapabilities.Count > 0 ||
         result.Limitations.Count > 0 || result.Conflicts.Count > 0;

@@ -69,9 +69,13 @@ public sealed class EquipmentAggregateAnalysisService(
             snapshot is not null ? "Completed" :
             requestStatus is "Failed" or "Deferred" ? requestStatus :
             stale ? "Stale" : requestStatus ?? "Pending";
+        var failureCode = status == "Failed" ? request?.Status == "Failed"
+            ? request.FailureCode : request?.DispatchLastErrorCode : null;
+        var failureMessage = status == "Failed" ? request?.Status == "Failed"
+            ? request.FailureMessage : request?.DispatchLastErrorMessage : null;
         return new(apparatusId, moduleCode, options.Enabled, manifest.Hash, manifest.Documents.Count,
             manifest.PendingDocumentCount, status, stale, snapshot?.Id, snapshot?.AnalyzedAt,
-            snapshot?.ReviewStatus, result);
+            snapshot?.ReviewStatus, result, failureCode, failureMessage);
     }
 
     public async Task EnsureCurrentRequestAsync(string apparatusId, string moduleCode,

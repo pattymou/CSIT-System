@@ -54,7 +54,8 @@ public sealed record EquipmentAggregateAnalysisView(
     string ApparatusId, string ModuleCode, bool FeatureEnabled, string ManifestHash,
     int EligibleDocumentCount, int PendingDocumentCount, string Status, bool IsStale,
     Guid? SnapshotId, DateTime? AnalyzedAt, string? ReviewStatus,
-    EquipmentAggregateAnalysisResult? Result);
+    EquipmentAggregateAnalysisResult? Result, string? FailureCode = null,
+    string? FailureMessage = null);
 
 public sealed record EquipmentAggregateAnalysisReviewRequest(string Decision, string? Note);
 
