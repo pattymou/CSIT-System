@@ -79,6 +79,26 @@ public sealed class CsitOidcSessionRevocationTests
         finally { Directory.Delete(root, recursive: true); }
     }
 
+    [Fact]
+    public void RevokeSucceedsWhileAnotherRequestReadsTheSession()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "csit-session-concurrent", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var store = new CsitOidcSessionStore(new ConfigurationBuilder().AddInMemoryCollection(
+                new Dictionary<string, string?> { ["SharedIdentity:SessionDirectory"] = root }).Build());
+            var principal = Principal();
+            var id = store.Create(principal, DateTimeOffset.UtcNow.AddHours(1));
+            principal.Identities.First().AddClaim(new Claim(CsitOidcSessionStore.ClaimType, id));
+            using var read = new FileStream(Path.Combine(root, id + ".session"), FileMode.Open,
+                FileAccess.Read, FileShare.Read | FileShare.Delete);
+            store.Revoke(principal);
+            Assert.False(store.IsActive(principal));
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     private static async Task<WebApplication> StartAsync(string root, FakeIdentity identity)
     {
         var builder = WebApplication.CreateBuilder();

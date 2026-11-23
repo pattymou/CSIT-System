@@ -38,7 +38,8 @@ public sealed class CsitOidcSessionStore(IConfiguration configuration)
         if (!IsValidId(id)) return false;
         try
         {
-            using var file = new FileStream(PathFor(id!), FileMode.Open, FileAccess.Read, FileShare.Read);
+            using var file = new FileStream(PathFor(id!), FileMode.Open, FileAccess.Read,
+                FileShare.Read | FileShare.Delete);
             var record = JsonSerializer.Deserialize<SessionRecord>(file);
             return record is not null && record.ExpiresUtc > DateTimeOffset.UtcNow &&
                    string.Equals(record.Subject, principal.FindFirstValue("identity_sub"), StringComparison.Ordinal);
@@ -64,7 +65,8 @@ public sealed class CsitOidcSessionStore(IConfiguration configuration)
         {
             try
             {
-                using (var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                using (var file = new FileStream(path, FileMode.Open, FileAccess.Read,
+                           FileShare.Read | FileShare.Delete))
                 {
                     var record = JsonSerializer.Deserialize<SessionRecord>(file);
                     if (record is not null && record.ExpiresUtc > DateTimeOffset.UtcNow) continue;
