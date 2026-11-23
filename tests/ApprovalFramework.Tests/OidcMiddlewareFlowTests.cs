@@ -42,13 +42,16 @@ public sealed class OidcMiddlewareFlowTests
             ["SharedIdentity:Authority"] = FakeIdentityProvider.Issuer,
             ["SharedIdentity:ClientId"] = "csit-test",
             ["SharedIdentity:ClientSecret"] = "isolated-test-only",
-            ["DevDeployment:Sha"] = new string('a', 40)
+            ["DevDeployment:Sha"] = new string('a', 40),
+            ["SharedIdentity:SessionDirectory"] = Path.Combine(Path.GetTempPath(),
+                "csit-oidc-tests", Guid.NewGuid().ToString("N"))
         });
         builder.Logging.AddProvider(logs);
         builder.Services.AddDbContextFactory<AppDbContext>(options =>
             options.UseInMemoryDatabase("oidc-" + Guid.NewGuid().ToString("N")));
         builder.Services.AddScoped<SharedIdentityClaimsAdapter>();
         builder.Services.AddScoped<SharedIdentityCookieEvents>();
+        builder.Services.AddSingleton<CsitOidcSessionStore>();
         builder.Services.AddHttpClient<SharedIdentitySessionValidator>()
             .ConfigurePrimaryHttpMessageHandler(() => provider);
         builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)

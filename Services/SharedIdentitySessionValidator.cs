@@ -50,8 +50,27 @@ public sealed class SharedIdentitySessionValidator(HttpClient httpClient, IConfi
     }
 }
 
-public sealed class SharedIdentityCookieEvents(SharedIdentitySessionValidator validator) : CookieAuthenticationEvents
+public sealed class SharedIdentityCookieEvents(
+    SharedIdentitySessionValidator validator, CsitOidcSessionStore sessions) : CookieAuthenticationEvents
 {
+    public override Task SigningIn(CookieSigningInContext context)
+    {
+        var principal = context.Principal ?? throw new InvalidOperationException("Missing CSIT principal.");
+        var identity = principal.Identities.FirstOrDefault(i => i.IsAuthenticated)
+            ?? throw new InvalidOperationException("Missing CSIT identity.");
+        var expiresUtc = context.Properties.ExpiresUtc ??
+            DateTimeOffset.UtcNow.Add(context.Options.ExpireTimeSpan);
+        identity.AddClaim(new Claim(CsitOidcSessionStore.ClaimType,
+            sessions.Create(principal, expiresUtc)));
+        return Task.CompletedTask;
+    }
+
+    public override Task SigningOut(CookieSigningOutContext context)
+    {
+        sessions.Revoke(context.HttpContext.User);
+        return Task.CompletedTask;
+    }
+
     public override Task SignedIn(CookieSignedInContext context)
     {
         OidcDiagnostics.Write(context.HttpContext, "CookieIssued", "Accepted",
@@ -64,6 +83,7 @@ public sealed class SharedIdentityCookieEvents(SharedIdentitySessionValidator va
         context.HttpContext.Items[OidcDiagnostics.RequestFlowKey] =
             OidcDiagnostics.Flow(context.Properties);
         var result = context.Principal is null ? new(false, "NoPrincipal") :
+            !sessions.IsActive(context.Principal) ? new(false, "SessionRevoked") :
             await validator.CheckAsync(context.Principal, context.HttpContext.RequestAborted);
         OidcDiagnostics.Write(context.HttpContext, "SessionValidation", result.Kind,
             OidcDiagnostics.Flow(context.Properties));

@@ -175,6 +175,7 @@ if (useSharedIdentity)
         throw new InvalidOperationException("Shared Identity DEV configuration is incomplete.");
     builder.Services.AddScoped<SharedIdentityClaimsAdapter>();
     builder.Services.AddScoped<SharedIdentityCookieEvents>();
+    builder.Services.AddSingleton<CsitOidcSessionStore>();
     builder.Services.AddHttpClient<SharedIdentitySessionValidator>(http => http.Timeout = TimeSpan.FromSeconds(5));
     authentication.AddOpenIdConnect("oidc", options =>
     {
