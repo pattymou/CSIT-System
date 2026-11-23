@@ -5,7 +5,7 @@
 @implements IAsyncDisposable
 
 <div class="form-card equipment-metadata-summary @(Compact ? "equipment-metadata-compact" : null)">
-    <div class="case-card-head"><div><div class="case-kicker">KM / CONSOLIDATED ANALYSIS</div><h3>設備綜合分析</h3></div>
+    <div class="case-card-head"><div><h3>設備綜合分析</h3></div>
         @if (_view is not null && !IsBlank) { <span class="record-status-pill">@(_view.Status == "Completed" && _view.Result is not null && !HasSubstantiveAnalysis(_view.Result) ? "資料不足" : StatusText(_view.Status))</span> }
     </div>
     @if (_loading) { if (HasFiles != false) { <div class="record-empty-box"><strong>讀取設備綜合分析中...</strong></div> } }
@@ -14,9 +14,8 @@
     else if (_view is null) { <div class="record-empty-box"><strong>尚無設備綜合分析</strong></div> }
     else
     {
-        <div class="metadata-inline-values"><span>有效來源：@_view.EligibleDocumentCount 份</span>
+        <div class="metadata-inline-values"><span>有效來源：@_view.EligibleDocumentCount 份文件</span>
             @if (_view.PendingDocumentCount > 0) { <span>其他待處理文件：@_view.PendingDocumentCount 份</span> }
-            <span>Manifest：@ShortHash(_view.ManifestHash)</span>
             @if (_view.Status == "Completed" && _view.AnalyzedAt.HasValue) { <span>分析時間：@_view.AnalyzedAt.Value.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</span> }
         </div>
         @if (_view.PendingDocumentCount > 0)
@@ -34,29 +33,104 @@
         }
         else
         {
+            var result = _view.Result;
             @if (!HasSubstantiveAnalysis(_view.Result))
             {
                 <div class="record-empty-box"><strong>資料不足／沒有可用分析</strong><span>KM 回傳內容沒有可驗證的技術規格、測試能力、限制、衝突或來源證據；警告訊息不視為完整分析。</span></div>
             }
-            <section><h4>設備概述</h4>
-                @if (string.IsNullOrWhiteSpace(_view.Result.Overview)) { <span class="metadata-empty">KM 未提供設備概述。</span> }
-                else { <p class="metadata-document-summary">@_view.Result.Overview</p> }
+            <div class="aggregate-facts" aria-label="設備綜合分析筆數">
+                <div><strong>@result.TechnicalSpecifications.Count</strong><span>技術規格</span></div>
+                <div><strong>@TestItems(result).Count</strong><span>測試能力</span></div>
+                <div><strong>@PendingCount(result)</strong><span>待釐清項目</span></div>
+            </div>
+            @if (BasicInfo(result).Count > 0)
+            {
+                <div class="aggregate-basic-info"><h4>文件中的設備資訊</h4>
+                    <dl>@foreach (var item in BasicInfo(result)) { <div><dt>@item.Label</dt><dd>@item.Value</dd></div> }</dl>
+                </div>
+            }
+            <section class="aggregate-overview"><h4>設備概述</h4>
+                @if (string.IsNullOrWhiteSpace(result.Overview)) { <span class="metadata-empty">KM 未提供設備概述。</span> }
+                else
+                {
+                    <p class="metadata-document-summary @(_overviewExpanded ? null : "is-collapsed")">@result.Overview</p>
+                    <button type="button" class="equipment-evidence-link" @onclick="() => _overviewExpanded = !_overviewExpanded">@(_overviewExpanded ? "收合" : "展開全文")</button>
+                }
             </section>
-            <section><h4>技術規格</h4>
-                @if (_view.Result.TechnicalSpecifications.Count == 0) { <span class="metadata-empty">KM 未提供技術規格。</span> }
-                else { <div class="metadata-spec-grid">@foreach (var x in _view.Result.TechnicalSpecifications) { <div><span>@x.Name</span><strong>@x.Value @x.Unit</strong><small>證據：@string.Join("、", x.EvidenceIds)</small></div> }</div> }
+            <div class="aggregate-tabs" role="tablist" aria-label="設備綜合分析內容">
+                <button type="button" role="tab" aria-selected="@(_activeTab == AnalysisTab.Specifications)" aria-controls="aggregate-specifications" class="@TabClass(AnalysisTab.Specifications)" @onclick="() => _activeTab = AnalysisTab.Specifications">技術規格（@result.TechnicalSpecifications.Count）</button>
+                <button type="button" role="tab" aria-selected="@(_activeTab == AnalysisTab.Capabilities)" aria-controls="aggregate-capabilities" class="@TabClass(AnalysisTab.Capabilities)" @onclick="() => _activeTab = AnalysisTab.Capabilities">測試能力（@TestItems(result).Count）</button>
+                <button type="button" role="tab" aria-selected="@(_activeTab == AnalysisTab.Pending)" aria-controls="aggregate-pending" class="@TabClass(AnalysisTab.Pending)" @onclick="() => _activeTab = AnalysisTab.Pending">待釐清（@PendingCount(result)）</button>
+            </div>
+            @if (_activeTab == AnalysisTab.Specifications)
+            {
+                <section id="aggregate-specifications" role="tabpanel" class="aggregate-panel">
+                    @if (result.TechnicalSpecifications.Count == 0) { <p class="metadata-empty">KM 未提供技術規格。</p> }
+                    @foreach (var category in SpecificationCategories)
+                    {
+                        var rows = result.TechnicalSpecifications.Where(x => SpecificationCategory(x.Name) == category).ToList();
+                        @if (rows.Count > 0)
+                        {
+                            <div class="aggregate-table-group"><h4>@category</h4>
+                                <div class="aggregate-table-scroll"><table><thead><tr><th scope="col">欄位</th><th scope="col">文件記載</th><th scope="col">狀態</th><th scope="col">來源</th></tr></thead>
+                                    <tbody>@foreach (var row in rows) { <tr><th scope="row">@DisplaySpecificationName(row.Name)</th><td>@row.Value @row.Unit</td><td><span class="aggregate-support-tag">@SupportState(row)</span></td><td>@if (HasEvidence(result, row.EvidenceIds)) { <button type="button" class="equipment-evidence-link" @onclick="() => OpenEvidence(row.EvidenceIds)">查看證據</button> }</td></tr> }</tbody>
+                                </table></div>
+                            </div>
+                        }
+                    }
+                </section>
+            }
+            else if (_activeTab == AnalysisTab.Capabilities)
+            {
+                <section id="aggregate-capabilities" role="tabpanel" class="aggregate-panel">
+                    <h4>KM 回報的測試項目</h4>
+                    @if (TestItems(result).Count == 0) { <p class="metadata-empty">目前沒有能從名稱明確辨識的測試項目。</p> }
+                    @foreach (var item in TestItems(result))
+                    {
+                        <div class="aggregate-capability-row"><strong>@item.Name</strong>
+                            @if (!string.IsNullOrWhiteSpace(item.Description))
+                            {
+                                @if (item.Description.Length > 160) { <details><summary>查看完整說明</summary><p>@item.Description</p></details> }
+                                else { <p>@item.Description</p> }
+                            }
+                            @if (HasEvidence(result, item.EvidenceIds)) { <button type="button" class="equipment-evidence-link" @onclick="() => OpenEvidence(item.EvidenceIds)">查看證據</button> }
+                        </div>
+                    }
+                    @if (OtherDescriptions(result).Count > 0)
+                    {
+                        <div class="aggregate-other-descriptions"><h4>其他文件描述（@OtherDescriptions(result).Count）</h4><p class="metadata-empty">名稱未明確指出測試項目，保留 KM 原文供查閱。</p>
+                            @foreach (var item in OtherDescriptions(result))
+                            {
+                                <div class="aggregate-capability-row"><strong>@item.Name</strong>
+                                    @if (!string.IsNullOrWhiteSpace(item.Description)) { <details><summary>查看文件描述</summary><p>@item.Description</p></details> }
+                                    @if (HasEvidence(result, item.EvidenceIds)) { <button type="button" class="equipment-evidence-link" @onclick="() => OpenEvidence(item.EvidenceIds)">查看證據</button> }
+                                </div>
+                            }
+                        </div>
+                    }
+                </section>
+            }
+            else
+            {
+                <section id="aggregate-pending" role="tabpanel" class="aggregate-panel">
+                    <p class="metadata-empty">此處整理 KM 回報的差異與注意事項，尚未判定每筆都是規格衝突。</p>
+                    @if (PendingCount(result) == 0) { <p class="metadata-empty">目前沒有待釐清項目。</p> }
+                    @foreach (var conflict in result.Conflicts)
+                    {
+                        <div class="aggregate-pending-item"><small>KM 回報差異</small><strong>@conflict.Field</strong>
+                            <ul>@foreach (var description in ConflictDescriptions(conflict.Description)) { <li>@description</li> }</ul>
+                            @if (HasEvidence(result, conflict.EvidenceIds)) { <button type="button" class="equipment-evidence-link" @onclick="() => OpenEvidence(conflict.EvidenceIds)">查看證據</button> }
+                        </div>
+                    }
+                    @foreach (var warning in result.Warnings) { <div class="aggregate-pending-item"><small>分析警告</small><p>@warning</p></div> }
+                    @foreach (var limit in result.Limitations) { <div class="aggregate-pending-item"><small>文件限制</small><p>@limit</p></div> }
+                    @foreach (var option in AttentionSpecifications(result)) { <div class="aggregate-pending-item"><small>@SupportState(option)</small><strong>@DisplaySpecificationName(option.Name)</strong><p>@option.Value @option.Unit</p>@if (HasEvidence(result, option.EvidenceIds)) { <button type="button" class="equipment-evidence-link" @onclick="() => OpenEvidence(option.EvidenceIds)">查看證據</button> }</div> }
+                </section>
+            }
+            <section class="aggregate-evidence-entry"><h4>來源證據</h4>
+                @if (result.Evidence.Count == 0) { <span class="metadata-empty">KM 未提供來源證據，因此不會形成正式建議。</span> }
+                else { <button type="button" class="equipment-evidence-link" @ref="_evidenceTrigger" @onclick="() => OpenEvidence(null)">查看來源證據（@result.Evidence.Count）</button> }
             </section>
-            <section><h4>測試能力</h4>
-                @if (_view.Result.TestCapabilities.Count == 0) { <span class="metadata-empty">KM 未提供測試能力。</span> }
-                else { <div class="metadata-spec-grid">@foreach (var x in _view.Result.TestCapabilities) { <div><strong>@x.Name</strong>@if (x.Description is not null) { <span>@x.Description</span> }<small>證據：@string.Join("、", x.EvidenceIds)</small></div> }</div> }
-            </section>
-            <section><h4>限制</h4>@if (_view.Result.Limitations.Count == 0) { <span class="metadata-empty">KM 未提供設備限制。</span> } else { <ul>@foreach (var x in _view.Result.Limitations) { <li>@x</li> }</ul> }</section>
-            <section><h4>衝突</h4>@if (_view.Result.Conflicts.Count == 0) { <span class="metadata-empty">KM 未回報跨文件衝突。</span> } else { <ul>@foreach (var x in _view.Result.Conflicts) { <li><strong>@x.Field：</strong>@x.Description <small>（@string.Join("、", x.EvidenceIds)）</small></li> }</ul> }</section>
-            <section><h4>來源證據</h4>
-                @if (_view.Result.Evidence.Count == 0) { <span class="metadata-empty">KM 未提供來源證據，因此不會形成正式建議。</span> }
-                else { <button type="button" class="equipment-evidence-link" @ref="_evidenceTrigger" @onclick="OpenEvidence">查看來源證據（@_view.Result.Evidence.Count）</button> }
-            </section>
-            @if (_view.Result.Warnings.Count > 0) { <section><h4>KM 警告</h4><ul>@foreach (var x in _view.Result.Warnings) { <li>@x</li> }</ul></section> }
             <small class="metadata-note">僅呈現 KM 對有效文件集合回傳的快照；不會自動覆寫設備主檔或預約資源能力。</small>
         }
     }
@@ -64,16 +138,18 @@
 
 @if (_showEvidence && _view?.Status == "Completed" && !_view.IsStale && _view.Result is not null)
 {
+    var evidence = VisibleEvidence(_view.Result);
     <div class="equipment-evidence-backdrop" @onclick="CloseEvidence">
         <section class="equipment-evidence-dialog" role="dialog" aria-modal="true" aria-labelledby="equipment-evidence-title"
                  @onclick:stopPropagation="true" @onkeydown="HandleEvidenceKeyDown">
             <header>
-                <h2 id="equipment-evidence-title">來源證據（@_view.Result.Evidence.Count）</h2>
+                <h2 id="equipment-evidence-title">@(_selectedEvidenceIds is null ? "來源證據" : "對應來源證據")（@evidence.Count）</h2>
                 <button type="button" class="equipment-evidence-close" @ref="_evidenceClose" @onclick="CloseEvidence" aria-label="關閉來源證據視窗">關閉</button>
             </header>
             <div class="equipment-evidence-scroll">
+                @if (_selectedEvidenceIds is not null) { <button type="button" class="equipment-evidence-link" @onclick="ShowAllEvidence">查看全部來源證據（@_view.Result.Evidence.Count）</button> }
                 <div class="metadata-evidence-list">
-                    @foreach (var x in _view.Result.Evidence)
+                    @foreach (var x in evidence)
                     {
                         <div class="metadata-evidence"><strong>@x.EvidenceId</strong><span>@x.Description</span>@if (x.Location is not null) { <small>@x.Location</small> }<small>FileId：@x.FileId</small></div>
                     }
@@ -95,7 +171,9 @@
     private int _loadVersion;
     private CancellationTokenSource? _pollingCts;
     private bool _disposed;
-    private bool _showEvidence, _focusEvidenceClose, _focusEvidenceTrigger;
+    private bool _showEvidence, _focusEvidenceClose, _focusEvidenceTrigger, _returnToEvidenceTrigger, _overviewExpanded;
+    private AnalysisTab _activeTab = AnalysisTab.Specifications;
+    private HashSet<string>? _selectedEvidenceIds;
     private ElementReference _evidenceTrigger, _evidenceClose;
     private bool IsBlank => HasFiles == false && _view?.Status != "NoEligibleDocuments" &&
         (_view is null || EquipmentAggregateAnalysisPresentation.IsBlank(_view, HasFiles));
@@ -106,6 +184,8 @@
         var loadVersion = ++_loadVersion;
         StopPolling();
         _showEvidence = false;
+        _selectedEvidenceIds = null;
+        _overviewExpanded = false;
         _key = key; _view = null; _error = null; _loading = true;
         await LoadAsync(loadVersion, true, CancellationToken.None);
         if (loadVersion == _loadVersion && ShouldPoll(_view)) StartPolling(loadVersion);
@@ -117,10 +197,18 @@
             var view = await Api.GetAsync<EquipmentAggregateAnalysisView>($"/api/equipment-aggregate-analysis?apparatusId={Uri.EscapeDataString(ApparatusId)}&moduleCode={Uri.EscapeDataString(ModuleCode)}", cancellationToken);
             if (loadVersion == _loadVersion)
             {
+                if (view.SnapshotId != _view?.SnapshotId)
+                {
+                    _overviewExpanded = false;
+                    _selectedEvidenceIds = null;
+                }
                 _view = view;
                 _error = null;
                 if (view.Status != "Completed" || view.IsStale || view.Result is null)
+                {
                     _showEvidence = false;
+                    _selectedEvidenceIds = null;
+                }
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
@@ -153,20 +241,111 @@
                 await _evidenceTrigger.FocusAsync();
         }
     }
-    private void OpenEvidence()
+    private void OpenEvidence(IReadOnlyList<string>? evidenceIds)
     {
+        _selectedEvidenceIds = evidenceIds?.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        _returnToEvidenceTrigger = evidenceIds is null;
         _showEvidence = true;
         _focusEvidenceClose = true;
     }
+    private void ShowAllEvidence() => _selectedEvidenceIds = null;
     private void CloseEvidence()
     {
         _showEvidence = false;
-        _focusEvidenceTrigger = true;
+        _focusEvidenceTrigger = _returnToEvidenceTrigger;
+        _selectedEvidenceIds = null;
     }
     private void HandleEvidenceKeyDown(KeyboardEventArgs args)
     {
         if (args.Key == "Escape") CloseEvidence();
     }
+    private enum AnalysisTab { Specifications, Capabilities, Pending }
+    private static readonly string[] SpecificationCategories =
+        ["產品／設備資訊", "RF、頻率及量測規格", "CA／MIMO／無線技術", "通訊標準", "其他擷取資訊"];
+    private string TabClass(AnalysisTab tab) => _activeTab == tab ? "is-active" : string.Empty;
+    private static bool ContainsAny(string value, params string[] terms) =>
+        terms.Any(term => value.Contains(term, StringComparison.OrdinalIgnoreCase));
+    private static string SpecificationCategory(string name)
+    {
+        if (name.Trim().ToUpperInvariant() is "LTE" or "5G NR" or "NR" or "GSM" or "UMTS" or "WCDMA")
+            return SpecificationCategories[3];
+        if (ContainsAny(name, "MIMO", "載波聚合", "carrier aggregation", "Wi-Fi", "WiFi", "Bluetooth", "藍牙", "無線", "CA 組合", "CA combination"))
+            return SpecificationCategories[2];
+        if (ContainsAny(name, "標準", "standard", "3GPP", "IEEE", "protocol", "協定", "規範"))
+            return SpecificationCategories[3];
+        if (ContainsAny(name, "RF", "射頻", "頻率", "frequency", "頻段", "band", "功率", "power", "靈敏度", "sensitivity", "量測", "測量", "measurement", "range", "範圍", "速度", "speed"))
+            return SpecificationCategories[1];
+        if (ContainsAny(name, "產品", "設備", "型號", "廠牌", "製造商", "product", "device", "equipment", "model", "manufacturer", "vendor", "brand"))
+            return SpecificationCategories[0];
+        return SpecificationCategories[4];
+    }
+    private static string DisplaySpecificationName(string name) => name.Trim().ToLowerInvariant() switch
+    {
+        "model" or "model name" or "model number" => "型號",
+        "manufacturer" or "vendor" or "brand" => "廠牌／製造商",
+        "product name" or "device name" or "equipment name" => "設備名稱",
+        "frequency" => "頻率",
+        "frequency range" => "頻率範圍",
+        _ => name
+    };
+    private static string SupportState(EquipmentAggregateSpecification row)
+    {
+        var text = $"{row.Name} {row.Value}";
+        if (ContainsAny(text, "not supported", "unsupported", "不支援", "未支援")) return "未支援";
+        if (ContainsAny(text, "optional", "option", "選配", "需另購") &&
+            ContainsAny(text, "future", "planned", "未來", "預計支援")) return "未來／選配";
+        if (ContainsAny(text, "optional", "option", "選配", "需另購")) return "選配／需確認";
+        if (ContainsAny(text, "future", "planned", "未來", "預計支援")) return "未來支援";
+        if (row.Value.Trim().Equals("supported", StringComparison.OrdinalIgnoreCase) ||
+            row.Value.Trim() is "支援" or "是") return "文件明示支援";
+        return "文件記載";
+    }
+    private static IReadOnlyList<EquipmentAggregateSpecification> AttentionSpecifications(EquipmentAggregateAnalysisResult result) =>
+        result.TechnicalSpecifications.Where(x => SupportState(x) is "選配／需確認" or "未來支援" or "未來／選配" or "未支援").ToList();
+    private static int PendingCount(EquipmentAggregateAnalysisResult result) =>
+        result.Conflicts.Count + result.Warnings.Count + result.Limitations.Count + AttentionSpecifications(result).Count;
+    private static IReadOnlyList<(string Label, string Value)> BasicInfo(EquipmentAggregateAnalysisResult result)
+    {
+        var fields = new (string Label, string[] Names)[]
+        {
+            ("設備名稱", ["設備名稱", "產品名稱", "equipment name", "device name", "product name"]),
+            ("型號", ["型號", "model", "model name", "model number"]),
+            ("廠牌／製造商", ["廠牌", "品牌", "製造商", "manufacturer", "vendor", "brand"])
+        };
+        var values = new List<(string Label, string Value)>();
+        foreach (var field in fields)
+        {
+            var rows = result.TechnicalSpecifications
+                .Where(x => field.Names.Contains(x.Name.Trim(), StringComparer.OrdinalIgnoreCase))
+                .Select(x => x.Value.Trim()).Where(x => x.Length > 0).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (rows.Count == 1 && !result.Conflicts.Any(x => field.Names.Contains(x.Field.Trim(), StringComparer.OrdinalIgnoreCase)) &&
+                !ContainsAny(rows[0], "、", ",", ";", "；", " 或 ", " or ", " and ", "/"))
+                values.Add((field.Label, rows[0]));
+        }
+        return values;
+    }
+    private sealed record CapabilityRow(string Name, string? Description, IReadOnlyList<string> EvidenceIds);
+    private static IReadOnlyList<CapabilityRow> CapabilityRows(EquipmentAggregateAnalysisResult result) =>
+        result.TestCapabilities.GroupBy(x => (x.Name.Trim(), Description: x.Description?.Trim() ?? string.Empty))
+            .Select(g => new CapabilityRow(g.Key.Item1, g.Key.Description,
+                g.SelectMany(x => x.EvidenceIds).Distinct(StringComparer.OrdinalIgnoreCase).ToList())).ToList();
+    private static bool IsTestItem(string name) =>
+        ContainsAny(name, "測試", "量測", "測量", "驗證", "校準", "test", "measurement", "measure", "verification", "calibration", "signal generation", "訊號產生", "spectrum analysis", "頻譜分析");
+    private static IReadOnlyList<CapabilityRow> TestItems(EquipmentAggregateAnalysisResult result) =>
+        CapabilityRows(result).Where(x => IsTestItem(x.Name)).ToList();
+    private static IReadOnlyList<CapabilityRow> OtherDescriptions(EquipmentAggregateAnalysisResult result) =>
+        CapabilityRows(result).Where(x => !IsTestItem(x.Name)).ToList();
+    private static IReadOnlyList<string> ConflictDescriptions(string description)
+    {
+        var parts = description.Split(["\r\n", "\n", "；", ";"], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length == 1 && description.Length > 200 && description.Split(", ").Length > 3)
+            parts = description.Split(", ", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        return parts.Length > 0 ? parts : [description];
+    }
+    private static bool HasEvidence(EquipmentAggregateAnalysisResult result, IReadOnlyList<string> ids) =>
+        result.Evidence.Any(x => ids.Contains(x.EvidenceId, StringComparer.OrdinalIgnoreCase));
+    private IReadOnlyList<EquipmentAggregateEvidence> VisibleEvidence(EquipmentAggregateAnalysisResult result) =>
+        _selectedEvidenceIds is null ? result.Evidence : result.Evidence.Where(x => _selectedEvidenceIds.Contains(x.EvidenceId)).ToList();
     private static bool ShouldPoll(EquipmentAggregateAnalysisView? view) =>
         view?.Status is "Stale" or "Pending" or "Deferred";
     private void StartPolling(int loadVersion)
@@ -223,5 +402,4 @@
     private static bool HasSubstantiveAnalysis(EquipmentAggregateAnalysisResult result) =>
         result.TechnicalSpecifications.Count > 0 || result.TestCapabilities.Count > 0 ||
         result.Limitations.Count > 0 || result.Conflicts.Count > 0;
-    private static string ShortHash(string hash) => hash.Length <= 12 ? hash : hash[..12];
 }

@@ -105,6 +105,9 @@ public sealed class EquipmentAggregateAnalysisComponentTests
 
         Assert.Contains("分析完成", html);
         Assert.Contains("Verified overview", html);
+        Assert.Contains("RF、頻率及量測規格", html);
+        Assert.Contains("速度", html);
+        Assert.Contains("1.2 m/s", html);
     }
 
     [Fact]
@@ -142,8 +145,38 @@ public sealed class EquipmentAggregateAnalysisComponentTests
         }, true);
 
         Assert.Contains("資料不足", html);
-        Assert.Contains("來源資訊不足", html);
+        Assert.Contains("待釐清（1）", html);
         Assert.DoesNotContain("record-status-pill\">分析完成", html);
+    }
+
+    [Fact]
+    public async Task Summary_DoesNotConfirmAmbiguousModel_AndCountsOptionAndDistinctTests()
+    {
+        var view = EmptyView() with
+        {
+            Status = "Completed", EligibleDocumentCount = 2,
+            Result = new EquipmentAggregateAnalysisResult("Overview",
+                [new EquipmentAggregateSpecification("Model", "Alpha", null, []),
+                 new EquipmentAggregateSpecification("Model", "Beta", null, []),
+                 new EquipmentAggregateSpecification("MIMO", "4x4 optional", null, []),
+                 new EquipmentAggregateSpecification("Unclassified", "keep this", null, [])],
+                [new EquipmentAggregateCapability("RF test", "Test description", []),
+                 new EquipmentAggregateCapability("RF test", "Test description", [])],
+                [], [], [], [])
+        };
+        var (html, _) = await RenderAsync(new BrowserApiResponse
+        {
+            StatusCode = 200, Body = JsonSerializer.Serialize(view, JsonSerializerOptions.Web)
+        }, true);
+
+        Assert.Contains("有效來源：2 份文件", html);
+        Assert.Contains("技術規格（4）", html);
+        Assert.Contains("測試能力（1）", html);
+        Assert.Contains("待釐清（1）", html);
+        Assert.Contains("選配／需確認", html);
+        Assert.Contains("其他擷取資訊", html);
+        Assert.Contains("keep this", html);
+        Assert.DoesNotContain("文件中的設備資訊", html);
     }
 
     [Theory]
