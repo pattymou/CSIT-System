@@ -149,12 +149,8 @@ public class AuthController(AdAuthenticationService ad, IConfiguration configura
     public async Task<IActionResult> Logout()
     {
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        return Redirect("/login?signedOut=1");
+        return Redirect("/signed-out?signedOut=1");
     }
-
-    [HttpGet("/signed-out")]
-    [AllowAnonymous]
-    public IActionResult SignedOut() => Redirect("/login?signedOut=1");
 
     [HttpGet("/access-denied")]
     [AllowAnonymous]

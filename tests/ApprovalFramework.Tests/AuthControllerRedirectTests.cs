@@ -51,9 +51,8 @@ public sealed class AuthControllerRedirectTests
         controller.HttpContext.RequestServices = new ServiceCollection()
             .AddSingleton<IAuthenticationService>(authentication).BuildServiceProvider();
 
-        Assert.Equal("/login?signedOut=1", Assert.IsType<RedirectResult>(await controller.Logout()).Url);
+        Assert.Equal("/signed-out?signedOut=1", Assert.IsType<RedirectResult>(await controller.Logout()).Url);
         Assert.Equal(CookieAuthenticationDefaults.AuthenticationScheme, authentication.SignedOutScheme);
-        Assert.Equal("/login?signedOut=1", Assert.IsType<RedirectResult>(controller.SignedOut()).Url);
         Assert.False(authentication.Challenged);
     }
 

@@ -1,4 +1,5 @@
 @page "/login"
+@page "/signed-out"
 @layout LoginLayout
 @inject NavigationManager Nav
 @inject IJSRuntime JS
@@ -50,7 +51,8 @@
     {
         var query = QueryHelpers.ParseQuery(Nav.ToAbsoluteUri(Nav.Uri).Query);
         _hasError = query.TryGetValue("error", out var error) && error == "1";
-        _signedOut = query.TryGetValue("signedOut", out var signedOut) && signedOut == "1";
+        _signedOut = (query.TryGetValue("signedOut", out var signedOut) && signedOut == "1") ||
+            Nav.ToAbsoluteUri(Nav.Uri).AbsolutePath.Equals("/signed-out", StringComparison.OrdinalIgnoreCase);
     }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
