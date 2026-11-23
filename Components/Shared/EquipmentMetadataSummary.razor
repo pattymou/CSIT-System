@@ -16,14 +16,14 @@
         <div class="metadata-inline-values"><span>有效來源：@_view.EligibleDocumentCount 份</span>
             @if (_view.PendingDocumentCount > 0) { <span>其他待處理文件：@_view.PendingDocumentCount 份</span> }
             <span>Manifest：@ShortHash(_view.ManifestHash)</span>
-            @if (_view.AnalyzedAt.HasValue) { <span>分析時間：@_view.AnalyzedAt.Value.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</span> }
+            @if (_view.Status == "Completed" && _view.AnalyzedAt.HasValue) { <span>分析時間：@_view.AnalyzedAt.Value.ToLocalTime().ToString("yyyy/MM/dd HH:mm")</span> }
         </div>
         @if (_view.PendingDocumentCount > 0)
         {
             <div class="aggregate-pending-coverage"><strong>分析尚未涵蓋全部文件</strong><span>目前有 @_view.PendingDocumentCount 份文件仍在等待 KM 單檔分析；完成後將依新的文件集合更新綜合分析。</span></div>
         }
-        @if (_view.IsStale) { <div class="aggregate-stale"><strong>待更新</strong><span>文件集合已改變；以下為上一版快照，不代表目前文件集合。</span></div> }
-        @if (_view.Result is null)
+        @if (_view.IsStale) { <div class="aggregate-stale"><strong>待更新</strong><span>文件集合已改變；先前分析已過期，正在等待目前有效文件的綜合分析。</span></div> }
+        @if (_view.Status != "Completed" || _view.IsStale || _view.Result is null)
         {
             <div class="record-empty-box"><strong>@EmptyTitle(_view.Status)</strong><span>@EmptyDescription(_view.Status)</span></div>
         }
@@ -67,7 +67,7 @@
     private string? _key, _error;
     private bool _loading;
     private int _loadVersion;
-    private bool IsBlank => HasFiles == false &&
+    private bool IsBlank => HasFiles == false && _view?.Status != "NoEligibleDocuments" &&
         (_view is null || EquipmentAggregateAnalysisPresentation.IsBlank(_view, HasFiles));
     protected override async Task OnParametersSetAsync()
     {
@@ -96,7 +96,7 @@
         finally { if (loadVersion == _loadVersion) _loading = false; }
     }
     private static string StatusText(string status) => status switch { "Completed" => "分析完成", "Stale" => "待更新", "Pending" => "等待 KM", "Deferred" => "KM 暫停受理", "Failed" => "分析失敗", "NoEligibleDocuments" => "無有效文件", "FeatureDisabled" => "流程尚未啟用", _ => status };
-    private static string EmptyTitle(string status) => status switch { "NoEligibleDocuments" => "目前沒有可供綜合分析的有效文件", "FeatureDisabled" => "KM 設備綜合分析流程尚未啟用", "Failed" => "本次 KM 設備綜合分析失敗", _ => "設備綜合分析尚未完成" };
+    private static string EmptyTitle(string status) => status switch { "NoEligibleDocuments" => "目前沒有可用的設備綜合分析", "FeatureDisabled" => "KM 設備綜合分析流程尚未啟用", "Failed" => "本次 KM 設備綜合分析失敗", _ => "設備綜合分析尚未完成" };
     private static string EmptyDescription(string status) => status switch { "FeatureDisabled" => "Feature Flag 保持關閉；CSIT 不會用單檔結果拼湊或產生假綜合分析。", "NoEligibleDocuments" => "只納入正式入庫、未進入刪除流程且具有有效 KM 單檔分析結果的文件。", _ => "完成後會顯示 KM 回傳快照；既有單檔 KM 工作不會重新派送。" };
     private static bool HasSubstantiveAnalysis(EquipmentAggregateAnalysisResult result) =>
         result.TechnicalSpecifications.Count > 0 || result.TestCapabilities.Count > 0 ||

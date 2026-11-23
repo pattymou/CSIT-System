@@ -44,17 +44,16 @@ public sealed class EquipmentAggregateAnalysisService(
 
         var snapshots = db.EquipmentAggregateAnalysisSnapshots.AsNoTracking()
             .Where(x => x.ApparatusId == apparatusId && x.ModuleCode == moduleCode);
-        var snapshot = await snapshots
+        var snapshot = manifest.Documents.Count == 0 ? null : await snapshots
             .Where(x => x.ManifestHash == manifest.Hash && x.AnalysisVersion == options.AnalysisVersion)
-            .OrderByDescending(x => x.ReceivedAt).FirstOrDefaultAsync(cancellationToken)
-            ?? await snapshots.OrderByDescending(x => x.ReceivedAt).FirstOrDefaultAsync(cancellationToken);
+            .OrderByDescending(x => x.ReceivedAt).FirstOrDefaultAsync(cancellationToken);
         var request = await db.EquipmentAggregateAnalysisRequests.AsNoTracking()
             .Where(x => x.ApparatusId == apparatusId && x.ModuleCode == moduleCode &&
                 x.ManifestHash == manifest.Hash && x.AnalysisVersion == options.AnalysisVersion)
             .OrderByDescending(x => x.RequestedAt).FirstOrDefaultAsync(cancellationToken);
 
-        var stale = snapshot is not null && (snapshot.ManifestHash != manifest.Hash ||
-            snapshot.AnalysisVersion != options.AnalysisVersion);
+        var stale = snapshot is null && manifest.Documents.Count > 0 &&
+            await snapshots.AnyAsync(cancellationToken);
         EquipmentAggregateAnalysisResult? result = null;
         if (snapshot is not null)
             result = JsonSerializer.Deserialize<EquipmentAggregateAnalysisResult>(snapshot.ResultJson, JsonOptions);
@@ -66,8 +65,10 @@ public sealed class EquipmentAggregateAnalysisService(
                 _ => "Pending"
             }
             : request?.Status;
-        var status = stale ? "Stale" : snapshot is not null ? "Completed" :
-            requestStatus ?? (manifest.Documents.Count == 0 ? "NoEligibleDocuments" : "Pending");
+        var status = manifest.Documents.Count == 0 ? "NoEligibleDocuments" :
+            snapshot is not null ? "Completed" :
+            requestStatus is "Failed" or "Deferred" ? requestStatus :
+            stale ? "Stale" : requestStatus ?? "Pending";
         return new(apparatusId, moduleCode, options.Enabled, manifest.Hash, manifest.Documents.Count,
             manifest.PendingDocumentCount, status, stale, snapshot?.Id, snapshot?.AnalyzedAt,
             snapshot?.ReviewStatus, result);

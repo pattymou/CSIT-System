@@ -51,6 +51,8 @@ public sealed class EquipmentAggregateAnalysisTests
         var changed = (await service.GetAsync("EQ-AGG-1", "equipment", default))!;
         Assert.True(changed.IsStale);
         Assert.Equal("Stale", changed.Status);
+        Assert.Null(changed.Result);
+        Assert.Null(changed.SnapshotId);
         Assert.NotEqual(request.ManifestHash, changed.ManifestHash);
         Assert.Equal(2, await db.EquipmentAggregateAnalysisRequests.CountAsync());
 
@@ -140,6 +142,64 @@ public sealed class EquipmentAggregateAnalysisTests
         Assert.Equal("Consolidated tester", firstRead.Result!.Overview);
         Assert.Equal(firstRead.ManifestHash, secondRead.ManifestHash);
         Assert.Single(await db.EquipmentAggregateAnalysisRequests.ToListAsync());
+    }
+
+    [Fact]
+    public async Task DeletingSources_HidesOldResultUntilRemainingFilesAreReanalyzed()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options;
+        await using var db = new AppDbContext(options);
+        var first = SeedDocument(db, "EQ-DELETE", "first.pdf", ShaA, "KM-1");
+        var second = SeedDocument(db, "EQ-DELETE", "second.pdf", ShaB, "KM-2");
+        await db.SaveChangesAsync();
+        var service = new EquipmentAggregateAnalysisService(db,
+            Options.Create(new EquipmentAggregateAnalysisOptions { Enabled = true }), TimeProvider.System);
+
+        await service.GetAsync("EQ-DELETE", "equipment", default);
+        var original = Assert.Single(await db.EquipmentAggregateAnalysisRequests.ToListAsync());
+        var originalResult = ResultForDocuments(await db.KmDocumentAnalysisResults.ToListAsync());
+        var originalCallback = new EquipmentAggregateAnalysisCallback("1.0", Guid.NewGuid(),
+            original.Id, "equipment", "EQ-DELETE", original.ManifestHash, "1.0", "Completed",
+            originalResult, null, DateTimeOffset.UtcNow);
+        await service.ApplyCallbackAsync(originalCallback,
+            Hash(JsonSerializer.Serialize(originalCallback)), default);
+
+        db.EquipmentFileDeletionJobs.Add(EquipmentFileDeletionJob.Create(first.File,
+            "admin", false, DateTime.UtcNow));
+        await db.SaveChangesAsync();
+        var stale = (await service.GetAsync("EQ-DELETE", "equipment", default))!;
+        Assert.Equal("Stale", stale.Status);
+        Assert.True(stale.IsStale);
+        Assert.Equal(1, stale.EligibleDocumentCount);
+        Assert.Null(stale.Result);
+        Assert.Null(stale.SnapshotId);
+        var replacement = await db.EquipmentAggregateAnalysisRequests.SingleAsync(x =>
+            x.ManifestHash == stale.ManifestHash);
+        var replacementCallback = originalCallback with
+        {
+            CallbackId = Guid.NewGuid(), RequestId = replacement.Id,
+            ManifestHash = replacement.ManifestHash,
+            Result = Result(second.File.Id, second.AnalysisResultId)
+        };
+        await service.ApplyCallbackAsync(replacementCallback,
+            Hash(JsonSerializer.Serialize(replacementCallback)), default);
+        var current = (await service.GetAsync("EQ-DELETE", "equipment", default))!;
+        Assert.Equal("Completed", current.Status);
+        Assert.False(current.IsStale);
+        Assert.Equal(second.File.Id, Assert.Single(current.Result!.Evidence).FileId);
+
+        db.EquipmentFileDeletionJobs.Add(EquipmentFileDeletionJob.Create(second.File,
+            "admin", false, DateTime.UtcNow));
+        await db.SaveChangesAsync();
+        var empty = (await service.GetAsync("EQ-DELETE", "equipment", default))!;
+        Assert.Equal("NoEligibleDocuments", empty.Status);
+        Assert.Equal(0, empty.EligibleDocumentCount);
+        Assert.Null(empty.Result);
+        Assert.Null(empty.SnapshotId);
+        Assert.Null(empty.AnalyzedAt);
+        Assert.Equal(2, await db.EquipmentAggregateAnalysisSnapshots.CountAsync());
+        Assert.Equal(2, await db.EquipmentAggregateAnalysisCallbacks.CountAsync());
     }
 
     [Fact]

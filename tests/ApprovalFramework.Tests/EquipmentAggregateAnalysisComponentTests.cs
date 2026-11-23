@@ -15,7 +15,7 @@ public sealed class EquipmentAggregateAnalysisComponentTests
     private const string Trace = "00-dfb97e695d4cfffa418c94d703e304a0-2070cca277fb3f7d-00";
 
     [Fact]
-    public async Task NoFilesAndNoAnalysis_RendersOnlyHeading()
+    public async Task NoFilesAndNoAnalysis_ShowsUnavailableMessage()
     {
         var view = EmptyView();
         var (html, _) = await RenderAsync(new BrowserApiResponse
@@ -24,10 +24,35 @@ public sealed class EquipmentAggregateAnalysisComponentTests
         }, false);
 
         Assert.Contains("設備綜合分析", html);
-        Assert.DoesNotContain("Manifest", html);
-        Assert.DoesNotContain("無有效文件", html);
+        Assert.Contains("目前沒有可用的設備綜合分析", html);
+        Assert.Contains("無有效文件", html);
         Assert.DoesNotContain("尚無設備綜合分析", html);
         Assert.DoesNotContain("讀取設備綜合分析中", html);
+    }
+
+    [Fact]
+    public async Task StaleSnapshot_DoesNotRenderHistoricalSpecificationsOrEvidence()
+    {
+        var view = EmptyView() with
+        {
+            Status = "Stale", IsStale = true, EligibleDocumentCount = 1,
+            SnapshotId = Guid.NewGuid(), AnalyzedAt = DateTime.UtcNow,
+            Result = new EquipmentAggregateAnalysisResult("Old overview",
+                [new EquipmentAggregateSpecification("Old specification", "42", null, ["E1"])],
+                [], [], [], [new EquipmentAggregateEvidence("E1", Guid.NewGuid(),
+                    Guid.NewGuid(), "Old evidence", null)], ["Old warning"])
+        };
+        var (html, _) = await RenderAsync(new BrowserApiResponse
+        {
+            StatusCode = 200, Body = JsonSerializer.Serialize(view, JsonSerializerOptions.Web)
+        }, true);
+
+        Assert.Contains("先前分析已過期", html);
+        Assert.DoesNotContain("Old overview", html);
+        Assert.DoesNotContain("Old specification", html);
+        Assert.DoesNotContain("Old evidence", html);
+        Assert.DoesNotContain("Old warning", html);
+        Assert.DoesNotContain("分析時間：", html);
     }
 
     [Fact]
