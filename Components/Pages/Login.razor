@@ -2,25 +2,56 @@
 @layout LoginLayout
 @inject NavigationManager Nav
 @inject IJSRuntime JS
+@inject IConfiguration Configuration
+@using Microsoft.AspNetCore.WebUtilities
 
-<PageTitle>Login</PageTitle>
+<PageTitle>CSIT System 登入</PageTitle>
 <div class="login-shell">
-    <form class="login-card" method="post" action="/auth/login">
-        <h1>CSIT System</h1>
-        <p>使用公司 AD 帳號登入</p>
-        <input name="username" placeholder="AD 帳號" />
-        <input name="password" type="password" placeholder="密碼" />
-        <button type="submit">登入</button>
-        @if (_hasError)
-        {
-            <div class="error-text">登入失敗，請確認 AD 帳密。</div>
-        }
-    </form>
+    @if (UseOidc)
+    {
+        <section class="login-card">
+            <h1>CSIT System</h1>
+            @if (_signedOut)
+            {
+                <p class="login-success" role="status">您已成功登出</p>
+            }
+            else
+            {
+                <p>使用 Shared Identity 登入</p>
+            }
+            <a class="login-primary-action" href="/signin" data-enhance-nav="false">@(_signedOut ? "重新登入" : "登入")</a>
+        </section>
+    }
+    else
+    {
+        <form class="login-card" method="post" action="/auth/login">
+            <h1>CSIT System</h1>
+            @if (_signedOut)
+            {
+                <p class="login-success" role="status">您已成功登出</p>
+            }
+            <p>使用公司 AD 帳號登入</p>
+            <input name="username" placeholder="AD 帳號" />
+            <input name="password" type="password" placeholder="密碼" />
+            <button type="submit">登入</button>
+            @if (_hasError)
+            {
+                <div class="error-text">登入失敗，請確認 AD 帳密。</div>
+            }
+        </form>
+    }
 </div>
 @code {
     bool _hasError;
+    bool _signedOut;
+    bool UseOidc => Configuration["AuthenticationMode"] == "Oidc";
 
-    protected override void OnInitialized() => _hasError = Nav.ToAbsoluteUri(Nav.Uri).Query.Contains("error=1");
+    protected override void OnInitialized()
+    {
+        var query = QueryHelpers.ParseQuery(Nav.ToAbsoluteUri(Nav.Uri).Query);
+        _hasError = query.TryGetValue("error", out var error) && error == "1";
+        _signedOut = query.TryGetValue("signedOut", out var signedOut) && signedOut == "1";
+    }
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {

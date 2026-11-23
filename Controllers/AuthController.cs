@@ -149,12 +149,12 @@ public class AuthController(AdAuthenticationService ad, IConfiguration configura
     public async Task<IActionResult> Logout()
     {
         await HttpContext.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
-        return Redirect(UseOidc ? "/signed-out" : "/signin");
+        return Redirect("/login?signedOut=1");
     }
 
     [HttpGet("/signed-out")]
     [AllowAnonymous]
-    public IActionResult SignedOut() => Content("已登出 CSIT。Shared Identity 登入狀態仍可能有效。", "text/plain; charset=utf-8");
+    public IActionResult SignedOut() => Redirect("/login?signedOut=1");
 
     [HttpGet("/access-denied")]
     [AllowAnonymous]

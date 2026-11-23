@@ -16,7 +16,7 @@ public sealed class DevPublicWebIngressTests
     [InlineData("/_framework/debug", false)]
     [InlineData("/_vs/browserLink", false)]
     [InlineData("/counter", false)]
-    [InlineData("/login", false)]
+    [InlineData("/login", true)]
     public void PublicPortAllowsWebsiteButBlocksSwagger(string path, bool expected)
     {
         var context = new DefaultHttpContext();

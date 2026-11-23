@@ -16,7 +16,6 @@ public static class DevPublicWebIngress
         return !context.Request.Path.StartsWithSegments("/swagger", StringComparison.OrdinalIgnoreCase) &&
                !context.Request.Path.StartsWithSegments("/_framework/debug", StringComparison.OrdinalIgnoreCase) &&
                !context.Request.Path.StartsWithSegments("/_vs", StringComparison.OrdinalIgnoreCase) &&
-               !context.Request.Path.StartsWithSegments("/counter", StringComparison.OrdinalIgnoreCase) &&
-               !context.Request.Path.StartsWithSegments("/login", StringComparison.OrdinalIgnoreCase);
+               !context.Request.Path.StartsWithSegments("/counter", StringComparison.OrdinalIgnoreCase);
     }
 }

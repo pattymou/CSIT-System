@@ -410,6 +410,27 @@ button:hover,.primary-btn:hover{
   box-shadow:0 24px 60px rgba(2,6,23,.52), 0 0 0 1px rgba(56,189,248,.06) inset;
 }
 
+.login-success{
+  color:#99f6e4;
+  font-weight:600;
+}
+
+.login-primary-action{
+  display:block;
+  padding:12px 16px;
+  border-radius:12px;
+  background:linear-gradient(135deg, #0f766e, #0ea5a4);
+  color:#fff;
+  text-align:center;
+  text-decoration:none;
+  font-weight:700;
+}
+
+.login-primary-action:hover,.login-primary-action:focus-visible{
+  color:#fff;
+  background:linear-gradient(135deg, #115e59, #0f766e);
+}
+
 .error-text{color:#fca5a5}
 .hint-text{color:var(--muted);font-size:.85rem}
 
