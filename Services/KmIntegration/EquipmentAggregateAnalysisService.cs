@@ -257,10 +257,12 @@ public sealed class EquipmentAggregateAnalysisService(
     private async Task LockApparatusAsync(string apparatusId, string moduleCode,
         CancellationToken cancellationToken)
     {
-        var apparatus = await db.Apparatuses.FromSqlInterpolated(
-                $"SELECT * FROM apparatus WHERE \"Id\" = {apparatusId} AND \"ModuleCode\" = {moduleCode} FOR UPDATE")
-            .AsNoTracking().SingleOrDefaultAsync(cancellationToken);
-        if (apparatus is null)
+        // Materializing Apparatus from a raw subquery asks EF for its xmin column,
+        // which PostgreSQL does not expose through SELECT * on that subquery.
+        var lockedId = await db.Database.SqlQuery<string>(
+                $"SELECT \"Id\" AS \"Value\" FROM apparatus WHERE \"Id\" = {apparatusId} AND \"ModuleCode\" = {moduleCode} FOR UPDATE")
+            .SingleOrDefaultAsync(cancellationToken);
+        if (lockedId is null)
             throw new EquipmentAggregateAnalysisException(404, "apparatus_not_found");
     }
 
