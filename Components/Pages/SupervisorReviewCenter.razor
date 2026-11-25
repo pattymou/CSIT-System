@@ -36,12 +36,12 @@ else
                 <button type="button" role="tab" class="approval-source-tab @(source.Code == _selectedCode ? "active" : "")"
                         aria-selected="@(source.Code == _selectedCode)" aria-controls="approval-review-panel"
                         @onclick="() => SelectSourceAsync(source.Code)">
-                    <span>@source.Title</span><span class="approval-source-count">@_sourceCounts.GetValueOrDefault(source.Code)</span>
+                    <span>@DisplaySourceTitle(source)</span><span class="approval-source-count">@_sourceCounts.GetValueOrDefault(source.Code)</span>
                 </button>
             }
         </nav>
         <section id="approval-review-panel" role="tabpanel" class="surface-card approval-review-results">
-            <div class="case-card-head"><h2>@_sources.First(x => x.Code == _selectedCode).Title</h2>
+            <div class="case-card-head"><h2>@DisplaySourceTitle(_sources.First(x => x.Code == _selectedCode))</h2>
                 <button type="button" class="table-chip-btn" @onclick="RefreshAsync">重新整理狀態</button></div>
             @if (_selectedCode == VerificationSourceCode)
             {
@@ -165,7 +165,14 @@ else
 }
 
 @code {
+    private const string ValidationReportSourceCode = "validation_request_applications";
     private const string VerificationSourceCode = "verification-applications";
+    private static string DisplaySourceTitle(ApprovalSourceDto source) => source.Code switch
+    {
+        ValidationReportSourceCode => "驗證測試報告審核",
+        VerificationSourceCode => "驗證申請單審核",
+        _ => source.Title
+    };
     private List<ApprovalSourceDto> _sources = [];
     private List<ApprovalSubmissionDto> _items = [];
     private List<VerificationApplicationDto> _verificationItems = [];
