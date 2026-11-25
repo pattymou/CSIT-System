@@ -44,16 +44,19 @@ public sealed class EquipmentAggregateAnalysisService(
 
         var snapshots = db.EquipmentAggregateAnalysisSnapshots.AsNoTracking()
             .Where(x => x.ApparatusId == apparatusId && x.ModuleCode == moduleCode);
-        var snapshot = manifest.Documents.Count == 0 ? null : await snapshots
-            .Where(x => x.ManifestHash == manifest.Hash && x.AnalysisVersion == options.AnalysisVersion)
-            .OrderByDescending(x => x.ReceivedAt).FirstOrDefaultAsync(cancellationToken);
         var request = await db.EquipmentAggregateAnalysisRequests.AsNoTracking()
             .Where(x => x.ApparatusId == apparatusId && x.ModuleCode == moduleCode &&
                 x.ManifestHash == manifest.Hash && x.AnalysisVersion == options.AnalysisVersion)
-            .OrderByDescending(x => x.RequestedAt).FirstOrDefaultAsync(cancellationToken);
+            .OrderByDescending(x => x.AttemptNumber).ThenByDescending(x => x.RequestedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+        // A prior snapshot for the same manifest is history while a new attempt is active.
+        var snapshot = request?.Status == EquipmentAggregateAnalysisStatuses.Completed
+            ? await snapshots.SingleOrDefaultAsync(x => x.RequestId == request.Id, cancellationToken)
+            : null;
 
         var stale = snapshot is null && manifest.Documents.Count > 0 &&
-            await snapshots.AnyAsync(cancellationToken);
+            await snapshots.AnyAsync(x => x.ManifestHash != manifest.Hash ||
+                x.AnalysisVersion != options.AnalysisVersion, cancellationToken);
         EquipmentAggregateAnalysisResult? result = null;
         if (snapshot is not null)
             result = JsonSerializer.Deserialize<EquipmentAggregateAnalysisResult>(snapshot.ResultJson, JsonOptions);
@@ -90,6 +93,60 @@ public sealed class EquipmentAggregateAnalysisService(
                 now, cancellationToken);
         else
             await SupersedePendingRequestsAsync(apparatusId, moduleCode, now, cancellationToken);
+    }
+
+    public async Task<Guid> RequestReanalysisAsync(string apparatusId, string moduleCode,
+        Guid requestId, string expectedManifestHash, string actor, CancellationToken cancellationToken)
+    {
+        if (!configured.Value.Enabled)
+            throw new EquipmentAggregateAnalysisException(409, "feature_disabled");
+        if (requestId == Guid.Empty || !IsSha256(expectedManifestHash) ||
+            string.IsNullOrWhiteSpace(actor) || actor.Length > 100)
+            throw new EquipmentAggregateAnalysisException(400, "invalid_reanalysis_request");
+
+        IDbContextTransaction? transaction = null;
+        if (db.Database.IsNpgsql())
+        {
+            transaction = await db.Database.BeginTransactionAsync(IsolationLevel.ReadCommitted,
+                cancellationToken);
+            await LockApparatusAsync(apparatusId, moduleCode, cancellationToken);
+        }
+        await using var transactionScope = transaction;
+
+        var manifest = await BuildManifestAsync(apparatusId, moduleCode, cancellationToken);
+        if (manifest.Hash != expectedManifestHash || manifest.Documents.Count == 0 ||
+            manifest.PendingDocumentCount != 0)
+            throw new EquipmentAggregateAnalysisException(409, "manifest_changed_or_incomplete");
+        var options = configured.Value;
+        var existingId = await db.EquipmentAggregateAnalysisRequests.SingleOrDefaultAsync(
+            x => x.Id == requestId, cancellationToken);
+        if (existingId is not null)
+        {
+            if (existingId.ApparatusId != apparatusId || existingId.ModuleCode != moduleCode ||
+                existingId.ManifestHash != manifest.Hash ||
+                existingId.AnalysisVersion != options.AnalysisVersion || existingId.AttemptNumber < 2)
+                throw new EquipmentAggregateAnalysisException(409, "request_id_conflict");
+            if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+            return existingId.Id;
+        }
+        var attempts = await db.EquipmentAggregateAnalysisRequests.Where(x =>
+            x.ApparatusId == apparatusId && x.ModuleCode == moduleCode &&
+            x.ManifestHash == manifest.Hash && x.AnalysisVersion == options.AnalysisVersion)
+            .OrderByDescending(x => x.AttemptNumber).ToListAsync(cancellationToken);
+        if (attempts.Count == 0 || attempts[0].Status == EquipmentAggregateAnalysisStatuses.Pending ||
+            await db.EquipmentAggregateAnalysisRequests.AnyAsync(x =>
+                x.ApparatusId == apparatusId && x.ModuleCode == moduleCode &&
+                x.Status == EquipmentAggregateAnalysisStatuses.Pending, cancellationToken))
+            throw new EquipmentAggregateAnalysisException(409, "analysis_not_ready_for_reanalysis");
+
+        var request = EquipmentAggregateAnalysisRequest.Create(requestId, apparatusId, moduleCode,
+            manifest.Hash, options.AnalysisVersion,
+            JsonSerializer.Serialize(manifest.Documents, JsonOptions), clock.GetUtcNow().UtcDateTime,
+            checked(attempts[0].AttemptNumber + 1), actor);
+        db.EquipmentAggregateAnalysisRequests.Add(request);
+        await db.SaveChangesAsync(cancellationToken);
+        if (transaction is not null) await transaction.CommitAsync(cancellationToken);
+        return request.Id;
     }
 
     public async Task ApplyCallbackAsync(EquipmentAggregateAnalysisCallback callback,
@@ -221,10 +278,10 @@ public sealed class EquipmentAggregateAnalysisService(
         }
         await using var transactionScope = transaction;
 
-        var existing = await db.EquipmentAggregateAnalysisRequests.SingleOrDefaultAsync(x =>
+        var existing = await db.EquipmentAggregateAnalysisRequests.AnyAsync(x =>
             x.ApparatusId == apparatusId && x.ModuleCode == moduleCode &&
             x.ManifestHash == manifest.Hash && x.AnalysisVersion == analysisVersion, cancellationToken);
-        if (existing is not null)
+        if (existing)
         {
             if (transaction is not null) await transaction.CommitAsync(cancellationToken);
             return;

@@ -16,6 +16,7 @@ public static class EquipmentAggregateAnalysisModelConfiguration
                 table.HasCheckConstraint("ck_equipment_aggregate_dispatch_status",
                     "dispatch_status IN ('Pending','Dispatching','Accepted','RetryWaiting','Deferred','Failed','Superseded')");
                 table.HasCheckConstraint("ck_equipment_aggregate_request_manifest", "length(manifest_hash) = 64");
+                table.HasCheckConstraint("ck_equipment_aggregate_request_attempt", "attempt_number >= 1");
                 table.HasCheckConstraint("ck_equipment_aggregate_dispatch_lease",
                     "(dispatch_status = 'Dispatching') = (dispatch_lease_token IS NOT NULL AND dispatch_lease_expires_at IS NOT NULL)");
                 table.HasCheckConstraint("ck_equipment_aggregate_dispatch_job",
@@ -27,6 +28,8 @@ public static class EquipmentAggregateAnalysisModelConfiguration
             entity.Property(x => x.ModuleCode).HasColumnName("module_code").HasMaxLength(50).IsRequired();
             entity.Property(x => x.ManifestHash).HasColumnName("manifest_hash").HasMaxLength(64).IsRequired();
             entity.Property(x => x.AnalysisVersion).HasColumnName("analysis_version").HasMaxLength(30).IsRequired();
+            entity.Property(x => x.AttemptNumber).HasColumnName("attempt_number").HasDefaultValue(1);
+            entity.Property(x => x.RequestedBy).HasColumnName("requested_by").HasMaxLength(100);
             entity.Property(x => x.SourceDocumentsJson).HasColumnName("source_documents_json").HasColumnType("jsonb").IsRequired();
             entity.Property(x => x.Status).HasColumnName("status").HasMaxLength(30).IsRequired();
             entity.Property(x => x.RequestedAt).HasColumnName("requested_at");
@@ -45,7 +48,7 @@ public static class EquipmentAggregateAnalysisModelConfiguration
             entity.Property(x => x.DispatchLeaseToken).HasColumnName("dispatch_lease_token");
             entity.Property(x => x.DispatchLeaseExpiresAt).HasColumnName("dispatch_lease_expires_at");
             entity.Property(x => x.DispatchedAt).HasColumnName("dispatched_at");
-            entity.HasIndex(x => new { x.ApparatusId, x.ModuleCode, x.ManifestHash, x.AnalysisVersion }).IsUnique();
+            entity.HasIndex(x => new { x.ApparatusId, x.ModuleCode, x.ManifestHash, x.AnalysisVersion, x.AttemptNumber }).IsUnique();
             entity.HasIndex(x => new { x.Status, x.UpdatedAt });
             entity.HasIndex(x => new { x.Status, x.DispatchStatus, x.DispatchNextRetryAt });
             entity.HasIndex(x => x.DispatchLeaseExpiresAt);

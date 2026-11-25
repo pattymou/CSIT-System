@@ -59,6 +59,9 @@ public sealed record EquipmentAggregateAnalysisView(
 
 public sealed record EquipmentAggregateAnalysisReviewRequest(string Decision, string? Note);
 
+public sealed record EquipmentAggregateReanalysisRequest(
+    Guid RequestId, string ApparatusId, string ModuleCode, string ExpectedManifestHash);
+
 public sealed class EquipmentAggregateAnalysisOptions
 {
     public const string SectionName = "KmEquipmentAggregateAnalysis";

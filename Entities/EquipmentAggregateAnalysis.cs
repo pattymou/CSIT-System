@@ -26,6 +26,8 @@ public sealed class EquipmentAggregateAnalysisRequest
     public string ModuleCode { get; private set; } = string.Empty;
     public string ManifestHash { get; private set; } = string.Empty;
     public string AnalysisVersion { get; private set; } = string.Empty;
+    public int AttemptNumber { get; private set; } = 1;
+    public string? RequestedBy { get; private set; }
     public string SourceDocumentsJson { get; private set; } = "[]";
     public string Status { get; private set; } = EquipmentAggregateAnalysisStatuses.Pending;
     public DateTime RequestedAt { get; private set; }
@@ -47,17 +49,21 @@ public sealed class EquipmentAggregateAnalysisRequest
     private EquipmentAggregateAnalysisRequest() { }
 
     public static EquipmentAggregateAnalysisRequest Create(Guid requestId, string apparatusId,
-        string moduleCode, string manifestHash, string analysisVersion, string documentsJson, DateTime now)
+        string moduleCode, string manifestHash, string analysisVersion, string documentsJson, DateTime now,
+        int attemptNumber = 1, string? requestedBy = null)
     {
         if (requestId == Guid.Empty || string.IsNullOrWhiteSpace(apparatusId) ||
             string.IsNullOrWhiteSpace(moduleCode) || !IsSha256(manifestHash) ||
-            string.IsNullOrWhiteSpace(analysisVersion) || string.IsNullOrWhiteSpace(documentsJson))
+            string.IsNullOrWhiteSpace(analysisVersion) || string.IsNullOrWhiteSpace(documentsJson) ||
+            attemptNumber < 1)
             throw new InvalidOperationException("Invalid equipment aggregate analysis request.");
         return new()
         {
             Id = requestId, ApparatusId = apparatusId.Trim(), ModuleCode = moduleCode.Trim().ToLowerInvariant(),
             ManifestHash = manifestHash.ToLowerInvariant(), AnalysisVersion = analysisVersion.Trim(),
-            SourceDocumentsJson = documentsJson, RequestedAt = now, UpdatedAt = now
+            SourceDocumentsJson = documentsJson, AttemptNumber = attemptNumber,
+            RequestedBy = string.IsNullOrWhiteSpace(requestedBy) ? null : requestedBy.Trim(),
+            RequestedAt = now, UpdatedAt = now
         };
     }
 

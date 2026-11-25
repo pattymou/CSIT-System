@@ -36,6 +36,29 @@ public sealed class EquipmentAggregateAnalysisController(
         value.Length <= 64 && value.All(c => char.IsLetterOrDigit(c) || c is '-' or '_')
             ? value : "Invalid";
 
+    [HttpPost("reanalyze")]
+    [Authorize(Policy = SystemAuthorization.Policies.AdminOnly)]
+    [BusinessWrite]
+    public async Task<IActionResult> Reanalyze(
+        [FromBody] EquipmentAggregateReanalysisRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.ApparatusId) ||
+            string.IsNullOrWhiteSpace(request.ModuleCode)) return BadRequest();
+        var actor = User.Identity?.Name;
+        if (string.IsNullOrWhiteSpace(actor)) return Unauthorized();
+        try
+        {
+            var id = await service.RequestReanalysisAsync(request.ApparatusId.Trim(),
+                request.ModuleCode.Trim().ToLowerInvariant(), request.RequestId,
+                request.ExpectedManifestHash, actor, cancellationToken);
+            return Accepted(new { requestId = id });
+        }
+        catch (EquipmentAggregateAnalysisException ex)
+        {
+            return StatusCode(ex.StatusCode, new { error = ex.Error });
+        }
+    }
+
     [HttpPost("{snapshotId:guid}/reviews")]
     [Authorize(Policy = SystemAuthorization.Policies.AdminOnly)]
     [BusinessWrite]

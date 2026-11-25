@@ -959,6 +959,12 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("character varying(30)")
                         .HasColumnName("apparatus_id");
 
+                    b.Property<int>("AttemptNumber")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer")
+                        .HasDefaultValue(1)
+                        .HasColumnName("attempt_number");
+
                     b.Property<DateTime?>("CompletedAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("completed_at");
@@ -995,6 +1001,7 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.Property<string>("DispatchStatus")
                         .IsRequired()
+                        .ValueGeneratedOnAdd()
                         .HasMaxLength(30)
                         .HasColumnType("character varying(30)")
                         .HasDefaultValue("Pending")
@@ -1035,6 +1042,11 @@ namespace SIT.DepartmentSystem.Web.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("requested_at");
 
+                    b.Property<string>("RequestedBy")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("requested_by");
+
                     b.Property<string>("SourceDocumentsJson")
                         .IsRequired()
                         .HasColumnType("jsonb")
@@ -1062,7 +1074,7 @@ namespace SIT.DepartmentSystem.Web.Migrations
 
                     b.HasIndex("Status", "DispatchStatus", "DispatchNextRetryAt");
 
-                    b.HasIndex("ApparatusId", "ModuleCode", "ManifestHash", "AnalysisVersion")
+                    b.HasIndex("ApparatusId", "ModuleCode", "ManifestHash", "AnalysisVersion", "AttemptNumber")
                         .IsUnique();
 
                     b.ToTable("equipment_aggregate_analysis_requests", null, t =>
@@ -1074,6 +1086,7 @@ namespace SIT.DepartmentSystem.Web.Migrations
                             t.HasCheckConstraint("ck_equipment_aggregate_dispatch_status", "dispatch_status IN ('Pending','Dispatching','Accepted','RetryWaiting','Deferred','Failed','Superseded')");
 
                             t.HasCheckConstraint("ck_equipment_aggregate_request_manifest", "length(manifest_hash) = 64");
+                            t.HasCheckConstraint("ck_equipment_aggregate_request_attempt", "attempt_number >= 1");
 
                             t.HasCheckConstraint("ck_equipment_aggregate_request_status", "status IN ('Pending','Completed','Failed','Superseded')");
                         });

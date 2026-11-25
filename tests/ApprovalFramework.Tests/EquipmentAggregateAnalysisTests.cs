@@ -14,6 +14,85 @@ public sealed class EquipmentAggregateAnalysisTests
     private const string ShaB = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
     [Fact]
+    public async Task ManualReanalysis_PreservesHistoryAndShowsOnlyLatestAttempt()
+    {
+        var options = new DbContextOptionsBuilder<AppDbContext>()
+            .UseInMemoryDatabase(Guid.NewGuid().ToString("N")).Options;
+        await using var db = new AppDbContext(options);
+        var source = SeedDocument(db, "EQ-RERUN", "manual.pdf", ShaA, "KM-1");
+        await db.SaveChangesAsync();
+        var service = new EquipmentAggregateAnalysisService(db,
+            Options.Create(new EquipmentAggregateAnalysisOptions { Enabled = true }), TimeProvider.System);
+        var firstView = (await service.GetAsync("EQ-RERUN", "equipment", default))!;
+        var first = Assert.Single(await db.EquipmentAggregateAnalysisRequests.ToListAsync());
+        var firstResult = Result(source.File.Id, source.AnalysisResultId);
+        var firstCallback = new EquipmentAggregateAnalysisCallback("1.0", Guid.NewGuid(), first.Id,
+            "equipment", "EQ-RERUN", first.ManifestHash, "1.0", "Completed", firstResult, null,
+            DateTimeOffset.UtcNow);
+        await service.ApplyCallbackAsync(firstCallback, Hash(JsonSerializer.Serialize(firstCallback)), default);
+        var original = (await service.GetAsync("EQ-RERUN", "equipment", default))!;
+        Assert.Equal("Completed", original.Status);
+
+        var rerunId = Guid.NewGuid();
+        Assert.Equal(rerunId, await service.RequestReanalysisAsync("EQ-RERUN", "equipment", rerunId,
+            firstView.ManifestHash, "admin", default));
+        Assert.Equal(rerunId, await service.RequestReanalysisAsync("EQ-RERUN", "equipment", rerunId,
+            firstView.ManifestHash, "admin", default));
+        var pending = (await service.GetAsync("EQ-RERUN", "equipment", default))!;
+        Assert.Equal("Pending", pending.Status);
+        Assert.Null(pending.SnapshotId);
+        Assert.Null(pending.Result);
+        var conflict = await Assert.ThrowsAsync<EquipmentAggregateAnalysisException>(() =>
+            service.RequestReanalysisAsync("EQ-RERUN", "equipment", Guid.NewGuid(),
+                firstView.ManifestHash, "admin", default));
+        Assert.Equal(409, conflict.StatusCode);
+        var rerun = await db.EquipmentAggregateAnalysisRequests.SingleAsync(x => x.Id == rerunId);
+        Assert.Equal(2, rerun.AttemptNumber);
+        Assert.Equal("admin", rerun.RequestedBy);
+        Assert.NotNull(await service.GetPendingRequestAsync(rerunId, default));
+
+        var longValue = string.Concat(Enumerable.Repeat("多值規格與來源證據。", 60));
+        Assert.True(longValue.Length >= 500);
+        var latestResult = firstResult with
+        {
+            TechnicalSpecifications = [new("Frequency", longValue, null, ["E1"])]
+        };
+        var rerunCallback = firstCallback with
+        {
+            CallbackId = Guid.NewGuid(), RequestId = rerunId, Result = latestResult,
+            AnalyzedAt = DateTimeOffset.UtcNow.AddMinutes(1)
+        };
+        await service.ApplyCallbackAsync(rerunCallback,
+            Hash(JsonSerializer.Serialize(rerunCallback)), default);
+        var latest = (await service.GetAsync("EQ-RERUN", "equipment", default))!;
+        Assert.Equal("Completed", latest.Status);
+        Assert.Equal(longValue, Assert.Single(latest.Result!.TechnicalSpecifications).Value);
+        Assert.Single(latest.Result.Evidence);
+        Assert.NotEqual(original.SnapshotId, latest.SnapshotId);
+        Assert.Equal(2, await db.EquipmentAggregateAnalysisSnapshots.CountAsync());
+        Assert.Equal(2, await db.EquipmentAggregateAnalysisCallbacks.CountAsync());
+        Assert.Equal(2, await db.EquipmentAggregateAnalysisRequests.CountAsync());
+
+        var failedId = Guid.NewGuid();
+        await service.RequestReanalysisAsync("EQ-RERUN", "equipment", failedId,
+            firstView.ManifestHash, "admin", default);
+        var failedCallback = rerunCallback with
+        {
+            CallbackId = Guid.NewGuid(), RequestId = failedId, Status = "Failed", Result = null,
+            Error = new KmV2CallbackError("ANALYSIS_FAILED", "KM could not consolidate sources", false),
+            AnalyzedAt = null
+        };
+        await service.ApplyCallbackAsync(failedCallback,
+            Hash(JsonSerializer.Serialize(failedCallback)), default);
+        var failed = (await service.GetAsync("EQ-RERUN", "equipment", default))!;
+        Assert.Equal("Failed", failed.Status);
+        Assert.Equal("ANALYSIS_FAILED", failed.FailureCode);
+        Assert.Null(failed.Result);
+        Assert.Null(failed.SnapshotId);
+        Assert.Equal(2, await db.EquipmentAggregateAnalysisSnapshots.CountAsync());
+    }
+
+    [Fact]
     public async Task Manifest_CallbackAndChangedCollection_AreCorrelatedAndIdempotent()
     {
         var options = new DbContextOptionsBuilder<AppDbContext>()
