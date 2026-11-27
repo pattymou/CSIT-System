@@ -1,60 +1,21 @@
-﻿@using SIT.DepartmentSystem.Web.Models.Api
+@using SIT.DepartmentSystem.Web.Services.Manuals
 @using SIT.DepartmentSystem.Web.Services.Interfaces
 @using Microsoft.AspNetCore.Components.Authorization
-@using Microsoft.AspNetCore.Authorization
 @inject IMenuManagementService MenuService
 @inject AuthenticationStateProvider AuthProvider
 @inject IAuthorizationService AuthorizationService
 
-<div class="brand">
-    <div class="brand-title">CSIT System</div>
-</div>
-
+<div class="brand"><div class="brand-title">CSIT System</div></div>
 <div class="nav-scroll">
-    @if (_canAccessAdministration)
+    @foreach (var group in _groups)
     {
         <div class="nav-section">
-            <div class="nav-section-title">SUPERVISOR APPROVAL</div>
-            <NavLink class="nav-link-custom" href="/supervisor-review" Match="NavLinkMatch.Prefix">主管待審</NavLink>
-        </div>
-    }
-    @if (!_canAccessAdministration)
-    {
-        <div class="nav-section">
-            <div class="nav-section-title">我的項目</div>
-            <NavLink class="nav-link-custom" href="/my-submissions" Match="NavLinkMatch.Prefix">我的提交項目</NavLink>
-        </div>
-    }
-    @foreach (var block in _sections
-        .Where(CanDisplaySection)
-        .OrderBy(x => x.SortOrder))
-    {
-        <div class="nav-section">
-            <div class="nav-section-title">@block.Icon @block.Name</div>
-
-            @foreach (var item in _items
-                         .Where(x => x.SectionId == block.Id)
-                         .Where(x => x.IsEnabled)
-                         .Where(x => !x.AdminOnly || _isAdmin)
-                         .Where(x => !IsAdministrationSection(block) ||
-                             !string.Equals(x.RoutePath, "/system/menu-management", StringComparison.OrdinalIgnoreCase))
-                         .OrderBy(x => x.SortOrder)
-                         .ThenBy(x => x.Title))
+            <div class="nav-section-title">@group.Icon @group.Name</div>
+            @foreach (var item in group.Entries)
             {
-                <NavLink class="nav-link-custom" href="@DisplayRoute(item)" Match="NavLinkMatch.Prefix">
-                    <span class="nav-item-icon" aria-hidden="true">@item.Icon</span><span class="nav-item-label">@DisplayTitle(item)</span>
-                </NavLink>
-            }
-            @if (IsAdministrationSection(block) && _canAccessAdministration)
-            {
-                @if (_canReadKmQueue)
-                {
-                    <NavLink class="nav-link-custom" href="/administration/km-queue" Match="NavLinkMatch.Prefix">
-                        <span class="nav-item-icon" aria-hidden="true">⇄</span><span class="nav-item-label">KM 處理佇列</span>
-                    </NavLink>
-                }
-                <NavLink class="nav-link-custom" href="/administration/accounts" Match="NavLinkMatch.Prefix">
-                    <span class="nav-item-icon" aria-hidden="true">↪</span><span class="nav-item-label">帳號管理</span>
+                <NavLink class="nav-link-custom" href="@item.Route" Match="NavLinkMatch.Prefix">
+                    @if (item.Icon is not null) { <span class="nav-item-icon" aria-hidden="true">@item.Icon</span> }
+                    <span class="nav-item-label">@item.Title</span>
                 </NavLink>
             }
         </div>
@@ -62,68 +23,10 @@
 </div>
 
 @code {
-    private List<MenuSectionDto> _sections = [];
-    private List<MenuItemDto> _items = [];
-    private bool _isAdmin;
-    private bool _canAccessAdministration;
-    private bool _canReadKmQueue;
-
-    private bool CanDisplaySection(MenuSectionDto section) =>
-        !IsAdministrationSection(section) || _canAccessAdministration;
-
-    private static bool IsAdministrationSection(MenuSectionDto section) =>
-        string.Equals(section.Code, "administration", StringComparison.OrdinalIgnoreCase)
-        || string.Equals(section.Name, "ADMINISTRATION", StringComparison.OrdinalIgnoreCase);
-
-    private static string DisplayTitle(MenuItemDto item) =>
-        string.Equals(item.RoutePath, "/reservation-review", StringComparison.OrdinalIgnoreCase)
-            ? "設備預約管理"
-            : item.Title;
-
-    private static string DisplayRoute(MenuItemDto item) =>
-        string.Equals(item.RoutePath, "/reservation-review", StringComparison.OrdinalIgnoreCase)
-            ? "/staff/reservations"
-            : item.RoutePath;
-
+    private IReadOnlyList<SidebarGroup> _groups = [];
     protected override async Task OnInitializedAsync()
     {
         var auth = await AuthProvider.GetAuthenticationStateAsync();
-        _isAdmin = auth.User.IsInRole("Admin");
-        _canAccessAdministration = (await AuthorizationService.AuthorizeAsync(
-            auth.User,
-            SystemAuthorization.Policies.Administration)).Succeeded;
-        _canReadKmQueue = (await AuthorizationService.AuthorizeAsync(
-            auth.User, SystemAuthorization.Policies.KmQueueRead)).Succeeded;
-
-        _sections = (await MenuService.GetSectionsAsync())
-            .Where(x => x.IsEnabled)
-            .OrderBy(x => x.SortOrder)
-            .ToList();
-
-        foreach (var block in _sections)
-        {
-            var items = await MenuService.GetItemsBySectionAsync(block.Id);
-            _items.AddRange(items);
-        }
-        AddBuiltInAdministrationItems();
-    }
-
-    private void AddBuiltInAdministrationItems()
-    {
-        var section = _sections.FirstOrDefault(IsAdministrationSection);
-        if (section is null || _items.Any(x => string.Equals(x.RoutePath,
-                "/administration/km-metadata", StringComparison.OrdinalIgnoreCase))) return;
-        _items.Add(new MenuItemDto
-        {
-            Id = Guid.Parse("57a1b27c-36d1-4e33-9de8-fcb72e2f1eb2"),
-            SectionId = section.Id,
-            Code = "km-metadata",
-            Title = "KM 分析檢視",
-            RoutePath = "/administration/km-metadata",
-            Icon = "◇",
-            SortOrder = 900,
-            IsEnabled = true,
-            AdminOnly = true
-        });
+        _groups = await SidebarCatalog.LoadAsync(MenuService, AuthorizationService, auth.User);
     }
 }

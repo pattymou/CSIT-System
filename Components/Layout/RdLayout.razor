@@ -1,4 +1,5 @@
 @inherits LayoutComponentBase
+@using SIT.DepartmentSystem.Web.Services.Manuals
 
 <div class="obsidian-shell">
     <aside class="sidebar">
@@ -8,10 +9,11 @@
 
         <div class="nav-scroll">
             <div class="nav-section">
-                <div class="nav-section-title">RD 服務</div>
-                <NavLink class="nav-link-custom" href="/rd" Match="NavLinkMatch.All">首頁</NavLink>
-                <NavLink class="nav-link-custom" href="/verification-applications" Match="NavLinkMatch.Prefix">系統驗證申請單</NavLink>
-                <NavLink class="nav-link-custom" href="/reservations" Match="NavLinkMatch.Prefix">設備預約</NavLink>
+                <div class="nav-section-title">@SidebarCatalog.RdServices.Name</div>
+                @foreach (var entry in SidebarCatalog.RdServices.Entries)
+                {
+                    <NavLink class="nav-link-custom" href="@entry.Route" Match="@(entry.Route == "/rd" ? NavLinkMatch.All : NavLinkMatch.Prefix)">@entry.Title</NavLink>
+                }
             </div>
             <div class="nav-section">
                 <div class="nav-section-title">SYSTEM HELP</div>

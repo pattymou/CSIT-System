@@ -1,0 +1,50 @@
+@using SIT.DepartmentSystem.Web.Services.Manuals
+
+<article id="@Anchor" class="manual-section" aria-labelledby="@($"title-{Anchor}")">
+    <div class="manual-section-heading">
+        <span class="manual-section-number">@Number</span>
+        <div><h2 id="@($"title-{Anchor}")">@Title</h2><p>@Topic.Purpose</p></div>
+    </div>
+    <div class="manual-overview">
+        <div><h3>功能用途</h3><p>@Topic.Purpose</p></div>
+        <div><h3>適用對象與權限</h3><p>@Topic.Audience</p></div>
+        <div><h3>操作入口</h3><p>左側選單「@GroupName」→「@Title」</p></div>
+    </div>
+    <h3 class="manual-subheading">實際畫面與操作步驟</h3>
+    <ol class="manual-step-list">
+        @foreach (var step in Topic.Steps)
+        {
+            <li>
+                <h4>@step.Heading</h4><p>@step.Body</p>
+                @if (step.Image is not null)
+                {
+                    var source = $"/api/manual/assets/{step.Image}";
+                    <figure class="manual-figure">
+                        <a href="@source" target="_blank" rel="noopener noreferrer" title="開啟原尺寸圖片"><img src="@source" alt="@($"{Title}：{step.Heading}實際畫面")" loading="lazy" /></a>
+                        <figcaption>@(step.Caption ?? $"{Title}：{step.Heading}。點圖查看原尺寸。")</figcaption>
+                    </figure>
+                }
+            </li>
+        }
+    </ol>
+    <div class="manual-detail-grid">
+        <section class="manual-panel"><h3>重要欄位與按鈕</h3><ul>@foreach (var item in Topic.Fields) { <li>@item</li> }</ul></section>
+        <section class="manual-panel manual-rules"><h3>系統規則與限制</h3><ul>@foreach (var item in Topic.Rules) { <li>@item</li> }</ul></section>
+    </div>
+    <section class="manual-panel manual-state-panel"><h3>狀態及其意義</h3>
+        <table><thead><tr><th>狀態</th><th>意義</th></tr></thead><tbody>
+            @foreach (var state in Topic.States) { <tr><th scope="row">@state.State</th><td>@state.Meaning</td></tr> }
+        </tbody></table>
+    </section>
+    <section class="manual-panel manual-faq"><h3>常見問題與處理方式</h3>
+        @foreach (var question in Topic.Questions) { <p><strong>@question.Problem：</strong>@question.Answer</p> }
+    </section>
+</article>
+
+@code {
+    [Parameter, EditorRequired] public required string Anchor { get; set; }
+    [Parameter, EditorRequired] public required string Number { get; set; }
+    [Parameter, EditorRequired] public required string GroupName { get; set; }
+    [Parameter, EditorRequired] public required string Title { get; set; }
+    [Parameter, EditorRequired] public required ManualTopic Topic { get; set; }
+}

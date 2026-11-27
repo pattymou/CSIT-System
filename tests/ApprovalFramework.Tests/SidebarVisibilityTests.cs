@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using System.Net;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Authorization;
@@ -50,7 +51,7 @@ public sealed class SidebarVisibilityTests
 
         Assert.Equal(administrationAuthorized, html.Contains("href=\"/supervisor-review\""));
         Assert.Equal(!administrationAuthorized, html.Contains("href=\"/my-submissions\""));
-        Assert.Equal(!administrationAuthorized, html.Contains("我的項目"));
+        Assert.Equal(!administrationAuthorized, WebUtility.HtmlDecode(html).Contains("我的項目"));
     }
 
     private sealed class FixedAuthenticationStateProvider(ClaimsPrincipal user) : AuthenticationStateProvider
