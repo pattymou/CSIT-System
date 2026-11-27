@@ -28,6 +28,7 @@ public sealed class KmMetadataAdministrationUiTests
         var page = Read("Components", "Pages", "System", "KmMetadata.razor");
         var program = Read("Program.cs");
         var sidebar = Read("Components", "Layout", "DynamicSidebar.razor");
+        var catalog = Read("Services", "Manuals", "SidebarCatalog.cs");
 
         Assert.Contains("@page \"/administration/km-metadata\"", page);
         Assert.Contains("SystemAuthorization.Policies.AdminOnly", page);
@@ -41,8 +42,9 @@ public sealed class KmMetadataAdministrationUiTests
         Assert.DoesNotContain("<details class=\"kmm-raw\" open>", page);
         Assert.Contains("navigator.clipboard.writeText", page);
         Assert.Contains("RequireRole(\"Admin\")", program);
-        Assert.Contains("RoutePath = \"/administration/km-metadata\"", sidebar);
-        Assert.Contains("AdminOnly = true", sidebar);
+        Assert.Contains("SidebarCatalog.LoadAsync", sidebar);
+        Assert.Contains("RoutePath = \"/administration/km-metadata\"", catalog);
+        Assert.Contains("AdminOnly = true", catalog);
     }
 
     [Fact]
