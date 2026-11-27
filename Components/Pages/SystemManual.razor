@@ -4,6 +4,8 @@
 @using Microsoft.AspNetCore.Hosting
 @using Microsoft.AspNetCore.Components.Web
 @inject IWebHostEnvironment HostEnvironment
+@inject AuthenticationStateProvider AuthenticationStateProvider
+@inject IAuthorizationService AuthorizationService
 
 <PageTitle>CSIT 操作手冊</PageTitle>
 
@@ -18,6 +20,15 @@
         <div class="manual-hero-mark" aria-hidden="true">?</div>
     </section>
 
+    <section class="manual-status-guide" aria-label="文件與 KM 狀態比較">
+        <h2>先看清楚兩種完成</h2>
+        <table><thead><tr><th>畫面顯示</th><th>實際意義</th></tr></thead><tbody>
+            <tr><td>正式入庫完成</td><td>CSIT 正式歸檔與必要驗證已完成；KM 可能仍在排隊或處理。</td></tr>
+            <tr><td>KM 分析完成</td><td>這份文件的 KM 工作成功；AI 判讀仍需對照來源證據。</td></tr>
+            <tr><td>KM 分析失敗</td><td>分析工作失敗；不表示原檔消失或正式入庫失敗。</td></tr>
+        </tbody></table>
+    </section>
+
     <div class="manual-toolbar">
         <label class="manual-search">
             <span class="visually-hidden">搜尋操作說明</span>
@@ -28,7 +39,7 @@
                 <button type="button" class="manual-clear" @onclick="ClearSearch" aria-label="清除搜尋">×</button>
             }
         </label>
-        <div class="manual-result-count">顯示 @_visibleSections.Count / @_sections.Count 個章節</div>
+        <div class="manual-result-count">顯示 @_visibleSections.Count / @_accessibleSections.Count 個章節</div>
     </div>
 
     @if (_visibleSections.Count == 0)
@@ -74,7 +85,7 @@
                                     <p>一般 Engineer 在原 Project、Case、Task 或對應功能上傳需主管審核的檔案後，提交會進入待審核。主管在「主管待審」核准或退回；核准完成後，回到原功能頁查看正式檔案；退回後，Engineer 從「我的提交項目」查看原因並重新送審修正版。</p>
                                     <p>測試報告從既有 Task 上傳：尚無報告時在 FILE UPLOAD 點「上傳測試報告」，已有報告時從 TEST REPORT VERSIONS 點「上傳新版」。待審中的新版不會取代目前正式版本。</p>
                                     <div class="manual-workflow-figures">
-                                        @foreach (var figure in ReportReviewFigures.Take(2))
+                                        @foreach (var figure in ReportReviewFigures.Take(2).Where(figure => IsManualImageAvailable(figure.ImageUrl)))
                                         {
                                             <figure class="manual-figure manual-workflow-figure">
                                                 @if (IsManualImageAvailable(figure.ImageUrl))
@@ -100,7 +111,7 @@
                                         <li>主管尚未處理前，可在操作欄點「撤回」；撤回後，該項目不再等待主管審核。</li>
                                     </ol>
                                     <div class="manual-workflow-figures manual-workflow-figures-single">
-                                        @foreach (var figure in ReportReviewFigures.Skip(4).Take(1))
+                                        @foreach (var figure in ReportReviewFigures.Skip(4).Take(1).Where(figure => IsManualImageAvailable(figure.ImageUrl)))
                                         {
                                             <figure class="manual-figure manual-workflow-figure">
                                                 @if (IsManualImageAvailable(figure.ImageUrl))
@@ -122,7 +133,7 @@
                                         <li>點「移除」只會從本人目前待處理清單移除該項目，不會刪除正式資料。</li>
                                     </ol>
                                     <div class="manual-workflow-figures manual-workflow-figures-single">
-                                        @foreach (var figure in ReportReviewFigures.Skip(5).Take(1))
+                                        @foreach (var figure in ReportReviewFigures.Skip(5).Take(1).Where(figure => IsManualImageAvailable(figure.ImageUrl)))
                                         {
                                             <figure class="manual-figure manual-workflow-figure">
                                                 @if (IsManualImageAvailable(figure.ImageUrl))
@@ -143,7 +154,7 @@
                                         <li>選擇修正版檔案，點「重新送審」。可直接從此處重新提交，不必重新逐層尋找 Project、Case 或 Task。</li>
                                     </ol>
                                     <div class="manual-workflow-figures manual-workflow-figures-single">
-                                        @foreach (var figure in ReportReviewFigures.Skip(6).Take(1))
+                                        @foreach (var figure in ReportReviewFigures.Skip(6).Take(1).Where(figure => IsManualImageAvailable(figure.ImageUrl)))
                                         {
                                             <figure class="manual-figure manual-workflow-figure">
                                                 @if (IsManualImageAvailable(figure.ImageUrl))
@@ -167,7 +178,7 @@
                                         <li>點項目名稱可回原 Project、Case、Task 或對應功能頁；點檔名可查看或下載提交檔案。操作欄提供「核准」與「退回」。</li>
                                     </ol>
                                     <div class="manual-workflow-figures manual-workflow-supervisor-figures">
-                                        @foreach (var figure in ReportReviewFigures.Skip(2).Take(2).Reverse())
+                                        @foreach (var figure in ReportReviewFigures.Skip(2).Take(2).Reverse().Where(figure => IsManualImageAvailable(figure.ImageUrl)))
                                         {
                                             <figure class="manual-figure manual-workflow-figure">
                                                 @if (IsManualImageAvailable(figure.ImageUrl))
@@ -217,10 +228,10 @@
                             </section>
                         </div>
 
-                        @if (section.Figures.Count > 0)
+                        @if (section.Figures.Any(figure => IsManualImageAvailable(figure.ImageUrl)))
                         {
                             <div class="manual-figures">
-                                @foreach (var figure in section.Figures)
+                                @foreach (var figure in section.Figures.Where(figure => IsManualImageAvailable(figure.ImageUrl)))
                                 {
                                     var imageAvailable = IsManualImageAvailable(figure.ImageUrl);
                                     <figure class="manual-figure">
@@ -278,11 +289,23 @@
 
 @code {
     private string _searchText = string.Empty;
+    private bool _canAdministrate;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var user = (await AuthenticationStateProvider.GetAuthenticationStateAsync()).User;
+        _canAdministrate = (await AuthorizationService.AuthorizeAsync(
+            user, SystemAuthorization.Policies.Administration)).Succeeded;
+    }
+
+    private IReadOnlyList<ManualSection> _accessibleSections =>
+        _canAdministrate ? _sections : _sections.Where(section =>
+            section.Id is not ("settings-data" or "supervisor-center" or "administration")).ToList();
 
     private IReadOnlyList<ManualSection> _visibleSections =>
         string.IsNullOrWhiteSpace(_searchText)
-            ? _sections
-            : _sections.Where(MatchesSearch).ToList();
+            ? _accessibleSections
+            : _accessibleSections.Where(MatchesSearch).ToList();
 
     private readonly List<ManualSection> _sections =
     [
@@ -328,6 +351,7 @@
                 "Environment Reservation 的設備由群組 membership 決定，不能在 Reservation 表單中增減群組設備。",
                 "系統會依目前設備狀態、Reservation 期間與環境完整性顯示可用性或衝突提示。",
                 "Reservation 清單可依目前 UI 提供的狀態檢視草稿、待審核、已核准、借用中、已歸還、已拒絕或已取消等狀態。",
+                "目前 DEV 單次預約上限為 7 個連續曆日，按開始至結束的時間差計算，包含週末及假日；單次續借最多再延長 7 個連續曆日。系統未設定固定的提前預約天數上限，但須選未來時段並通過衝突及配額檢查。",
                 "申請人資料由登入身份保留；分機與代理聯絡人欄位依表單要求填寫。",
                 "設備預約審核是獨立頁面（/reservation-review），與測試報告的「主管待審」不同；逾期管理入口為 /reservation-overdue。",
                 "取消成功後預約狀態變為已取消（Cancelled）；借用中（Borrowed）的預約不提供此取消操作。",
@@ -547,6 +571,99 @@
                 "若沒有相應權限，請依畫面提示向管理者確認授權，不要共用他人帳號。"
             ],
             "角色 權限 帳號管理 Roles Permissions Account Management Shared Identity CSIT Account CSIT Role RdApplicant CsitStaff Admin Administration Policy BusinessWrite Policy ReadOnly Editor Data Access Permission Team Leader CsitStaff Department Team Account Status 啟用 停用 Enable Disable Password Reset Menu Management Module Management"),
+        new("validation-application", "9", "驗證申請單與案件結案", "從申請草稿、主管審核到已接受案件與測試項目 Close。",
+            [
+                "從「系統驗證申請單」進入本人清單，按「新增驗證申請」填寫發布中的驗證需求表單、產品類型、部門、Team 與測試項目。",
+                "儲存草稿後，可在明細繼續修改或上傳申請附件；確認必填欄位後按「送出申請」。",
+                "送出後由指派的 Team Leader 審核；授權 Admin 也可審核，但申請人不能審核自己的申請。",
+                "退回時先讀取主管原因，修改草稿與附件後再次送出；拒絕與退回是不同結果。",
+                "接受後建立既有驗證模組的主紀錄、Case 與測試 Task；授權內部人員從案件頁更新測項進度與狀態。",
+                "要將案件設為 Close，進入案件詳細頁檢查所有測試項目；至少一筆 Task 且每筆 Task 都為 Close 時，授權管理者才能儲存 Close。"
+            ],
+            [
+                "申請狀態依序可能為草稿 Draft、待審核 Submitted、已退回 Returned、已拒絕 Rejected、已接受 Accepted。只有 Draft／Returned 可由申請人修改並送出。",
+                "主管審核整張申請時，只有 Submitted 可審；退回與拒絕均須原因；接受須預計結束日期。有效 Team Leader 自行送單符合免審條件時也必須填預計結束日期。",
+                "Accepted 是申請單的審核結果；案件的 Open／Hold／Close 是另一個狀態。預計結束日期不是實際 Close。",
+                "案件 Close 的後端條件為至少一筆 Task 且所有 Task 都是 Close；有未完成測項時拒絕 Close。程式未以附件或 KM 完成作為此操作的額外條件，不能由此推論附件本身不重要。",
+                "案件狀態變更仍要求 CSIT Staff、BusinessWrite，且須為該申請的指派 Team Leader 或 Admin。"
+            ],
+            ["送出欄位驗證失敗時，依畫面定位到對應欄位補正。", "外部 RD 只處理自己的申請與附件；主管審核、Case／Task 管理及 Close 屬內部授權流程。"],
+            "驗證申請單 草稿 送出 主管 同意 退回 拒絕 Accepted Case Task 測試項目 Close 預計結束日期"),
+        new("supervisor-center", "10", "主管審核中心", "分辨整張驗證申請單審核與各類檔案正式入庫審核。",
+            [
+                "從左側「主管待審」進入審核中心，先看來源頁籤與各自待處理數；每個來源查詢自己的待審資料。",
+                "「驗證測試報告審核」對應內部 Task 報告附件；「驗證申請單審核」對應整張申請表。不要混用兩者的筆數。",
+                "設備管理、文件專區與廠商資訊管理附件各有獨立來源；點主資料名稱回來源頁，點檔名查看待審檔案。",
+                "驗證申請單審核頁籤的整列只提供進入申請明細，需在明細完成整張申請的審核；各附件來源頁籤可在清單直接按「核准」或「退回」，退回原因必填。",
+                "核准附件後若顯示寫入中，等待正式歸檔完成；寫入失敗時保留錯誤與紀錄，依該來源頁面提供的重試入口處理。"
+            ],
+            [
+                "來源頁籤筆數各自查詢該來源可由本人審核的紀錄，並受 Team／主管責任範圍影響；附件清單另列待審、正式寫入中與寫入失敗筆數，與整張驗證申請單的待審筆數不可相加比較。",
+                "一般員工上傳且來源啟用主管審核時先進待審；Admin 或有效 Team Leader 依既有免審條件直接進入正式提交流程。",
+                "整張驗證申請單只在 Submitted 可審，申請人不可自審；退回或拒絕必須填原因，接受需要預計結束日期。",
+                "附件的 Pending、Approved、Committed 與寫入失敗各表示不同階段；主管核准不等於 KM 分析完成。"
+            ],
+            ["項目不在列表時先確認來源頁籤、Team 範圍及目前狀態。", "附件內容與申請單正文分開審核；請從各自來源明細確認。"],
+            "主管審核 驗證測試報告 驗證申請單 設備 文件 廠商 待審 筆數 核准 退回 寫入失敗"),
+        new("km-status", "11", "KM 分析與設備綜合分析", "正式入庫、單檔 KM 分析與設備綜合分析是三個不同結果。",
+            [
+                "在正式文件所在的設備、報告或文件頁查看入庫與 KM 狀態；有權限者可開「KM 分析檢視」閱讀單檔摘要、技術資訊、規格、量測與警告。",
+                "授權管理者從「KM 處理佇列」查看寫入與刪除工作、錯誤碼、錯誤訊息、工作時間及人工重新分析資格。",
+                "設備頁的綜合分析按「技術規格」、「測試能力」、「待釐清」查看，點「查看證據」追溯來源文件。",
+                "來源文件新增或刪除後，舊綜合分析標示待更新且不作目前規格；等待背景請求、KM Callback 與新 Snapshot。"
+            ],
+            [
+                "正式入庫完成：CSIT 已完成正式歸檔與必要驗證，不表示 KM 已分析。KM 完成：相關工作成功，不保證 AI 判讀絕對正確。KM 失敗：分析或處理工作失敗，不表示原檔遺失或入庫失敗。",
+                "等待派送表示 CSIT 尚未送出；排隊中表示 KM 已接收待處理；處理中表示工作執行；分析完成與分析失敗以最新工作及回呼為準。",
+                "自動重試的 retryable 標記與管理者手動重新分析資格不同。手動操作仍檢查文件有效性、是否刪除、既有工作及格式；可再次失敗的錯誤應顯示實際原因。",
+                "單檔分析描述一份文件；設備綜合分析整合目前有效文件。選配、未來支援與已確認規格不能混寫；多值欄位不必然構成衝突，待釐清列出 KM 回傳的差異與警告。",
+                "沒有有效來源文件時，設備頁不顯示舊規格或來源證據；舊 Snapshot 留在歷史，新的有效 Snapshot 完成後再顯示。",
+                "目前 DEV 啟用的設備綜合分析可用；未啟用的 OCR 或文件權限功能不列為已開放操作。"
+            ],
+            ["KM 佇列無按鈕時，先檢查文件是否仍有效、是否已有進行中工作及帳號授權；不能因舊失敗紀錄自行重送檔案。", "技術規格須回看來源證據，資料不足時以警告為準。"],
+            "KM 正式入庫 等待派送 排隊中 處理中 完成 失敗 retryable 重新分析 OCR 綜合分析 Snapshot 證據 衝突"),
+        new("document-library", "12", "文件專區", "依三層資料夾查找、上傳、預覽、下載與管理正式文件。",
+            [
+                "從左側「文件專區」選第一、第二、第三層資料夾；第三層才顯示文件清單與可用上傳入口。",
+                "使用搜尋與資料夾選擇定位文件；圖片可預覽，其他檔案可依權限下載。",
+                "有 BusinessWrite 權限時，選有效第三層資料夾上傳；需要主管審核的文件先待審，核准後才進入正式入庫。",
+                "需刪除時點檔案旁「刪除」並確認；是否可刪由目前角色、檔案狀態及來源規則決定。"
+            ],
+            [
+                "資料夾層級與文件分類由目前管理設定決定，系統管理資料夾與一般資料夾可有不同上傳限制。",
+                "正式版本與待審新版分開；退回修正後重新送審，不覆蓋已正式入庫的歷史版本。",
+                "正式入庫與 KM 分析互不等同：KM 排隊或失敗時，正式檔案仍可能可下載。",
+                "文件頁為 CSIT Staff 功能；外部 RD 無權由直接網址、檔案 API 或圖片路徑取得內部文件。"
+            ],
+            ["找不到文件時確認資料夾層級、搜尋條件、待審狀態與本人權限。", "刪除中的文件不再當作目前有效 KM 來源。"],
+            "文件專區 三層資料夾 上傳 搜尋 預覽 下載 版本 刪除 正式入庫 KM"),
+        new("vendors", "13", "廠商資訊管理", "建立、編輯及查詢廠商，管理附件的審核、歸檔與 KM 狀態。",
+            [
+                "從左側「廠商資訊管理」搜尋廠商；具授權寫入權限者可按「新增」填名稱、類型及聯絡資料。",
+                "進入廠商詳細頁檢查既有資料與附件；編輯時不可建立重複的正規化廠商名稱。",
+                "上傳附件後依來源審核設定進入待審或正式歸檔；回原廠商頁查看版本、入庫與 KM 工作狀態。"
+            ],
+            [
+                "廠商資料的新增與編輯依 BusinessWrite 等既有授權；附件審核另依 Team Leader／Admin 責任與來源設定。",
+                "附件被主管核准後仍可能處於正式寫入中；正式入庫完成不代表 KM 分析完成。",
+                "KM 失敗保留原附件與錯誤紀錄；不得以刪除正式附件代替分析重試。"
+            ],
+            ["若廠商不可選，確認是否啟用；設備新增所需廠商須是有效廠商。", "外部 RD 不提供廠商管理或附件。"],
+            "廠商資訊管理 新增 編輯 查詢 附件 審核 正式入庫 KM"),
+        new("administration", "14", "系統設定與維護", "依授權管理驗證範本、參數、文件資料夾、帳號與 KM 工作。",
+            [
+                "從左側 Administration 進入「驗證申請單設定」維護發布中的欄位與測試項目；修改設定前確認現有申請使用的範本版本。",
+                "從「參數管理」維護部門、Team、客戶等選項；Team Leader routing 影響主管審核與可見範圍。",
+                "從「文件資料夾管理」維護三層目錄；從「帳號管理」查詢或管理 Shared Identity 對應的 CSIT 權限。",
+                "Admin 可進「KM 分析檢視」；具 KM 佇列讀取權限者可看「KM 處理佇列」，操作按鈕另依後端授權判定。"
+            ],
+            [
+                "設定頁是否顯示及可寫由 Admin、有效 Team Leader routing、Administration／BusinessWrite Policy 共同決定；ReadOnly 不可執行 Editor 寫入。",
+                "系統選單隱藏不是資料授權替代；即使直接輸入網址，後端仍檢查角色與權限。",
+                "帳號停用或授權版本變更後，既有 CSIT Session 應失效；登出會撤銷目前 Session，不等同一鍵撤銷所有其他系統 Session。"
+            ],
+            ["看不到某個管理頁時，先確認角色與有效 Team routing，不借用他人帳號。", "功能開關關閉時依頁面實際狀態顯示，不能將未啟用功能當作已開放。"],
+            "系統設定 驗證申請單設定 參數管理 文件資料夾 帳號管理 Team 部門 KM 分析檢視 處理佇列"),
     ];
 
     private bool MatchesSearch(ManualSection section)
@@ -570,11 +687,15 @@
 
     private bool IsManualImageAvailable(string imageUrl)
     {
-        if (string.IsNullOrWhiteSpace(imageUrl) || string.IsNullOrWhiteSpace(HostEnvironment.WebRootPath))
+        const string prefix = "/api/manual/assets/";
+        if (!imageUrl.StartsWith(prefix, StringComparison.Ordinal)
+            || string.IsNullOrWhiteSpace(HostEnvironment.ContentRootPath))
             return false;
-
-        var relativePath = imageUrl.TrimStart('/').Replace('/', Path.DirectorySeparatorChar);
-        return File.Exists(Path.Combine(HostEnvironment.WebRootPath, relativePath));
+        var parts = imageUrl[prefix.Length..].Split('/');
+        if (parts.Length != 2 || parts[0] is not ("shared" or "internal")
+            || !global::System.Text.RegularExpressions.Regex.IsMatch(parts[1], "^[a-z0-9-]+\\.png$"))
+            return false;
+        return File.Exists(Path.Combine(HostEnvironment.ContentRootPath, "ManualAssets", parts[0], parts[1]));
     }
 
     private void OpenFigure(ManualFigure figure)
@@ -599,68 +720,74 @@
 
     private static readonly IReadOnlyList<ManualFigure> ProjectCaseTaskFigures =
     [
-        new("/manual/images/project-list.png", "CSIT 專案管理 Project 清單", "Project 清單", "專案管理首頁顯示目前 Project 清單，可由此搜尋、查看或建立 Project。"),
-        new("/manual/images/project-detail.png", "CSIT Project 主單詳細頁", "Project 詳情資料", "Project 詳情頁顯示主單資料，並提供修改主單、新增 Case 與進入既有 Case 的操作入口。"),
-        new("/manual/images/project-edit.png", "CSIT Project 修改主單頁", "修改 Project", "修改 Project 時可檢視與調整主單相關資料；Project 的地點、Department family、Team 與日期範圍會影響後續 Task。"),
-        new("/manual/images/case-detail.png", "CSIT Case 詳情頁", "Case 詳情資料", "Case 隸屬於 Project；Case 詳情頁可查看 Case 資料、既有 Task，並建立新的 Task。"),
-        new("/manual/images/task-create.png", "CSIT 新增 Task 頁面", "新增 Task", "新增 Task 時填寫子任務名稱、指派工程師、日期、狀態、結果與進度；此頁不提供檔案上傳。"),
-        new("/manual/images/task-detail.png", "CSIT Task 子任務明細頁", "Task 明細", "Task 建立後可在明細頁查看 Task No、指派工程師、日期、狀態、Result 與進度。"),
-        new("/manual/images/task-file-upload.png", "CSIT Task 檔案上傳區", "Task 檔案上傳", "Task 正式建立後，於 Task 明細頁選擇檔案種類，再執行檔案上傳；啟用主管審核時先進入 Pending。")
+        new("/api/manual/assets/internal/project-list.png", "CSIT 專案管理 Project 清單", "Project 清單", "專案管理首頁顯示目前 Project 清單，可由此搜尋、查看或建立 Project。"),
+        new("/api/manual/assets/internal/project-detail.png", "CSIT Project 主單詳細頁", "Project 詳情資料", "Project 詳情頁顯示主單資料，並提供修改主單、新增 Case 與進入既有 Case 的操作入口。"),
+        new("/api/manual/assets/internal/project-edit.png", "CSIT Project 修改主單頁", "修改 Project", "修改 Project 時可檢視與調整主單相關資料；Project 的地點、Department family、Team 與日期範圍會影響後續 Task。"),
+        new("/api/manual/assets/internal/case-detail.png", "CSIT Case 詳情頁", "Case 詳情資料", "Case 隸屬於 Project；Case 詳情頁可查看 Case 資料、既有 Task，並建立新的 Task。"),
+        new("/api/manual/assets/internal/task-create.png", "CSIT 新增 Task 頁面", "新增 Task", "新增 Task 時填寫子任務名稱、指派工程師、日期、狀態、結果與進度；此頁不提供檔案上傳。"),
+        new("/api/manual/assets/internal/task-detail.png", "CSIT Task 子任務明細頁", "Task 明細", "Task 建立後可在明細頁查看 Task No、指派工程師、日期、狀態、Result 與進度。"),
+        new("/api/manual/assets/internal/task-file-upload.png", "CSIT Task 檔案上傳區", "Task 檔案上傳", "Task 正式建立後，於 Task 明細頁選擇檔案種類，再執行檔案上傳；啟用主管審核時先進入 Pending。")
+    ];
+
+    private static readonly IReadOnlyList<ManualFigure> SignInFigures =
+    [
+        new("/api/manual/assets/internal/identity-login.png", "Shared Identity DEV 登入畫面", "Shared Identity 登入", "DEV 實際登入畫面；請使用本人帳號，不要共用憑證。"),
+        new("/api/manual/assets/shared/signed-out.png", "CSIT DEV 已登出頁面", "CSIT 登出後", "已登出頁保留重新登入入口；重新登入由 Shared Identity 驗證。")
     ];
 
     private static readonly IReadOnlyList<ManualFigure> ReservationFigures =
     [
-        new("/manual/images/reservation-list.png", "CSIT 設備預約管理的我的預約畫面", "我的預約", "從側邊欄「設備預約管理」進入「我的預約」，查看目前預約清單、狀態及新增預約入口。"),
-        new("/manual/images/reservation-overview.png", "CSIT 設備預約總覽", "設備預約總覽", "設備預約總覽提供目前 UI 的查詢條件，依日期、設備、部門、狀態與借用人查詢 Reservation。"),
-        new("/manual/images/reservation-new-direct.png", "CSIT Direct Reservation 新增預約", "Direct Reservation", "自行選擇設備的預約方式；畫面依目前系統顯示可選設備、借用時間、用途與可用性／衝突提示。"),
-        new("/manual/images/reservation-new-environment.png", "CSIT Environment Reservation 新增預約", "Environment Reservation", "依負責 Team 選擇既有測試環境群組；畫面顯示環境設備組成、完整性與目前可預約狀態。"),
-        new("/manual/images/reservation-review-queue.png", "CSIT 設備預約審核清單", "設備預約審核", "從設備預約管理的「預約審核」查看本人保管設備或所負責 Team 的待審預約；目前沒有資料時顯示 Empty State。"),
-        new("/manual/images/reservation-overdue.png", "CSIT 設備預約逾期管理", "逾期管理", "逾期管理頁查看目前責任範圍內尚未完成歸還或後續處理的 Reservation；目前沒有資料時顯示 Empty State。")
+        new("/api/manual/assets/internal/reservation-list.png", "CSIT 設備預約管理的我的預約畫面", "我的預約", "從側邊欄「設備預約管理」進入「我的預約」，查看目前預約清單、狀態及新增預約入口。"),
+        new("/api/manual/assets/internal/reservation-overview.png", "CSIT 設備預約總覽", "設備預約總覽", "設備預約總覽提供目前 UI 的查詢條件，依日期、設備、部門、狀態與借用人查詢 Reservation。"),
+        new("/api/manual/assets/internal/reservation-new-direct.png", "CSIT Direct Reservation 新增預約", "Direct Reservation", "自行選擇設備的預約方式；畫面依目前系統顯示可選設備、借用時間、用途與可用性／衝突提示。"),
+        new("/api/manual/assets/internal/reservation-new-environment.png", "CSIT Environment Reservation 新增預約", "Environment Reservation", "依負責 Team 選擇既有測試環境群組；畫面顯示環境設備組成、完整性與目前可預約狀態。"),
+        new("/api/manual/assets/internal/reservation-review-queue.png", "CSIT 設備預約審核清單", "設備預約審核", "從設備預約管理的「預約審核」查看本人保管設備或所負責 Team 的待審預約；目前沒有資料時顯示 Empty State。"),
+        new("/api/manual/assets/internal/reservation-overdue.png", "CSIT 設備預約逾期管理", "逾期管理", "逾期管理頁查看目前責任範圍內尚未完成歸還或後續處理的 Reservation；目前沒有資料時顯示 Empty State。")
     ];
 
     private static readonly IReadOnlyList<ManualFigure> ReportReviewFigures =
     [
-        new("/manual/images/task-report-upload.png", "CSIT Task 測試報告上傳區", "Task 測試報告上傳", "Task 尚無報告時點「上傳測試報告」建立 v1；之後從唯一版本表點「上傳新版」。"),
-        new("/manual/images/task-report-versions.png", "CSIT Task 正式測試報告版本", "測試報告版本", "每個 Task 只有一條版本鏈，檔名可不同；正式版本依版本號由新到舊排列，不顯示狀態或 Final；待審與退回項目請至「我的提交項目」。"),
-        new("/manual/images/supervisor-review-center.png", "CSIT 主管審核中心依來源功能分類", "主管審核中心", "在表格上方的來源 Tabs 選擇功能並查看待處理數量；下方依操作、項目、檔案、提交者、提交時間與狀態處理。項目與檔案均可點擊，畫面中的測試資料內容已遮蔽。"),
-        new("/manual/images/approval-sidebar.png", "CSIT Team Leader／Admin 左側導覽的主管待審", "主管審核導覽", "Team Leader／Admin 從「主管待審」進入主管審核中心；一般 Engineer 的側邊欄則顯示「我的提交項目」。"),
-        new("/manual/images/my-submissions-pending.png", "CSIT Engineer 我的提交項目待審核畫面", "我的提交項目：待審核", "一般 Engineer 從側邊欄進入「我的提交項目」。待審核列表顯示來源、項目、檔案、提交時間與撤回；項目與檔名可直接點擊。"),
-        new("/manual/images/my-submissions-rejected.png", "CSIT Engineer 我的提交項目已退回畫面", "我的提交項目：已退回", "已退回列表顯示退回原因，提供重新上傳與移除；項目與檔名可直接點擊。"),
-        new("/manual/images/my-submissions-reupload.png", "CSIT Engineer 重新上傳修正版對話框", "重新上傳修正版", "畫面會帶出原項目與退回原因；選擇新檔案後即可重新送審，不必重新尋找原項目。")
+        new("/api/manual/assets/internal/task-report-upload.png", "CSIT Task 測試報告上傳區", "Task 測試報告上傳", "Task 尚無報告時點「上傳測試報告」建立 v1；之後從唯一版本表點「上傳新版」。"),
+        new("/api/manual/assets/internal/task-report-versions.png", "CSIT Task 正式測試報告版本", "測試報告版本", "每個 Task 只有一條版本鏈，檔名可不同；正式版本依版本號由新到舊排列，不顯示狀態或 Final；待審與退回項目請至「我的提交項目」。"),
+        new("/api/manual/assets/internal/supervisor-review-center.png", "CSIT 主管審核中心依來源功能分類", "主管審核中心", "在表格上方的來源 Tabs 選擇功能並查看待處理數量；下方依操作、項目、檔案、提交者、提交時間與狀態處理。項目與檔案均可點擊，畫面中的測試資料內容已遮蔽。"),
+        new("/api/manual/assets/internal/approval-sidebar.png", "CSIT Team Leader／Admin 左側導覽的主管待審", "主管審核導覽", "Team Leader／Admin 從「主管待審」進入主管審核中心；一般 Engineer 的側邊欄則顯示「我的提交項目」。"),
+        new("/api/manual/assets/internal/my-submissions-pending.png", "CSIT Engineer 我的提交項目待審核畫面", "我的提交項目：待審核", "一般 Engineer 從側邊欄進入「我的提交項目」。待審核列表顯示來源、項目、檔案、提交時間與撤回；項目與檔名可直接點擊。"),
+        new("/api/manual/assets/internal/my-submissions-rejected.png", "CSIT Engineer 我的提交項目已退回畫面", "我的提交項目：已退回", "已退回列表顯示退回原因，提供重新上傳與移除；項目與檔名可直接點擊。"),
+        new("/api/manual/assets/internal/my-submissions-reupload.png", "CSIT Engineer 重新上傳修正版對話框", "重新上傳修正版", "畫面會帶出原項目與退回原因；選擇新檔案後即可重新送審，不必重新尋找原項目。")
     ];
 
     private static readonly IReadOnlyList<ManualFigure> TestEnvironmentFigures =
     [
-        new("/manual/images/test-environment-settings.png", "CSIT 測試環境群組設定與空白清單", "Test Environment Settings", "群組設定頁提供管理 Team、Site 與 Status 欄位；清單沒有群組時顯示 Empty State，有既有群組時可從群組列進入設備管理。"),
-        new("/manual/images/test-environment-group-devices.png", "CSIT 既有測試環境的設備管理範例", "Group Devices / Readiness / Availability", "既有群組的 Group Devices 範例顯示 Group Owner Team、Readiness、時段 Availability、設備完整性與設備管理操作入口。")
+        new("/api/manual/assets/internal/test-environment-settings.png", "CSIT 測試環境群組設定與空白清單", "Test Environment Settings", "群組設定頁提供管理 Team、Site 與 Status 欄位；清單沒有群組時顯示 Empty State，有既有群組時可從群組列進入設備管理。"),
+        new("/api/manual/assets/internal/test-environment-group-devices.png", "CSIT 既有測試環境的設備管理範例", "Group Devices / Readiness / Availability", "既有群組的 Group Devices 範例顯示 Group Owner Team、Readiness、時段 Availability、設備完整性與設備管理操作入口。")
     ];
 
     private static readonly IReadOnlyList<ManualFigure> SystemOptionsFigures =
     [
-        new("/manual/images/system-options-department.png", "CSIT 參數設定的部門類別", "部門基礎資料", "在「參數設定」切換至「部門」，查看既有部門清單與目前畫面提供的管理欄位。"),
-        new("/manual/images/system-options-team.png", "CSIT 參數設定的 Team 類別", "Team 基礎資料", "在「參數設定」切換至「Team」，查看既有 Team 清單與目前畫面提供的管理欄位。"),
-        new("/manual/images/system-options-team-leader.png", "CSIT 參數設定的 Team Leader 類別", "Team Leader 設定", "在「參數設定」切換至「Team Leader」，查看 Team 與 Team Leader 關聯及目前畫面提供的狀態。"),
-        new("/manual/images/system-options-lookup.png", "CSIT 參數設定的客戶類別", "客戶基礎資料範例", "在「參數設定」切換至「客戶」，查看一般基礎資料的管理方式；其他類別依各自畫面為準。"),
-        new("/manual/images/menu-management-approval.png", "CSIT 子選單管理上傳需主管審核設定", "子選單主管審核設定", "上傳需主管審核與僅管理者可使用是不同設定；只有已支援主管審核的功能可啟用。")
+        new("/api/manual/assets/internal/system-options-department.png", "CSIT 參數設定的部門類別", "部門基礎資料", "在「參數設定」切換至「部門」，查看既有部門清單與目前畫面提供的管理欄位。"),
+        new("/api/manual/assets/internal/system-options-team.png", "CSIT 參數設定的 Team 類別", "Team 基礎資料", "在「參數設定」切換至「Team」，查看既有 Team 清單與目前畫面提供的管理欄位。"),
+        new("/api/manual/assets/internal/system-options-team-leader.png", "CSIT 參數設定的 Team Leader 類別", "Team Leader 設定", "在「參數設定」切換至「Team Leader」，查看 Team 與 Team Leader 關聯及目前畫面提供的狀態。"),
+        new("/api/manual/assets/internal/system-options-lookup.png", "CSIT 參數設定的客戶類別", "客戶基礎資料範例", "在「參數設定」切換至「客戶」，查看一般基礎資料的管理方式；其他類別依各自畫面為準。"),
+        new("/api/manual/assets/internal/menu-management-approval.png", "CSIT 子選單管理上傳需主管審核設定", "子選單主管審核設定", "上傳需主管審核與僅管理者可使用是不同設定；只有已支援主管審核的功能可啟用。")
     ];
 
     private static readonly IReadOnlyList<ManualFigure> AccountManagementFigures =
     [
-        new("/manual/images/account-management.png", "CSIT Account Management 帳號清單", "Account Management 清單", "帳號清單提供搜尋與編輯、重設密碼、刪除入口；可橫向捲動查看 Department、Team、CSIT Role、資料操作權限與狀態等欄位。圖中的帳號資料已遮蔽。"),
-        new("/manual/images/account-create.png", "CSIT 建立內部帳號", "建立 Account", "建立帳號表單顯示目前可設定的基本資料、Department、Team、CSIT Role 與 Data Access Permission。"),
-        new("/manual/images/account-edit.png", "CSIT 編輯帳號", "編輯 Account / Role / Data Access Permission", "編輯既有帳號時可查看 Department、Team、CSIT Role、資料操作權限與帳號狀態欄位；圖中的帳號識別資料已遮蔽，拍攝時未儲存變更。")
+        new("/api/manual/assets/internal/account-management.png", "CSIT Account Management 帳號清單", "Account Management 清單", "帳號清單提供搜尋與編輯、重設密碼、刪除入口；可橫向捲動查看 Department、Team、CSIT Role、資料操作權限與狀態等欄位。圖中的帳號資料已遮蔽。"),
+        new("/api/manual/assets/internal/account-create.png", "CSIT 建立內部帳號", "建立 Account", "建立帳號表單顯示目前可設定的基本資料、Department、Team、CSIT Role 與 Data Access Permission。"),
+        new("/api/manual/assets/internal/account-edit.png", "CSIT 編輯帳號", "編輯 Account / Role / Data Access Permission", "編輯既有帳號時可查看 Department、Team、CSIT Role、資料操作權限與帳號狀態欄位；圖中的帳號識別資料已遮蔽，拍攝時未儲存變更。")
     ];
 
     private static readonly IReadOnlyList<ManualFigure> EquipmentFigures =
     [
-        new("/manual/images/equipment-list.png", "設備管理清單", "設備管理清單", "從側邊欄「設備管理」查看搜尋／篩選欄位、名稱、類別、狀態、保管人、測試環境與新增入口。"),
-        new("/manual/images/equipment-create-basic.png", "新增設備基本資料畫面", "新增設備－基本資料", "新增設備時，先填寫設備名稱、類別、料號、廠商、廠牌、型號與序號等基本資料。"),
-        new("/manual/images/equipment-create-ownership.png", "新增設備的部門、設備所屬 Team 與保管人欄位", "部門 → 設備所屬 Team → 保管人", "依序選擇「部門」、「設備所屬 Team」與「保管人」；後續選項會依前一層選擇更新。"),
-        new("/manual/images/equipment-create-extra-fields.png", "設備 Feature Specification 備註欄位", "補充設備資訊", "可依需要補充 Feature、Specification 與備註，方便後續查詢與設備管理。"),
-        new("/manual/images/equipment-create-before-save.png", "設備建立前的預約資源能力畫面", "建立設備前", "設備尚未正式建立前，後續設定尚不可用；請先完成基本資料並按「確定」建立設備。"),
-        new("/manual/images/equipment-detail.png", "Equipment Detail", "Equipment 詳情／狀態／照片", "Equipment Detail 顯示目前設備基本資料、設備狀態與 APPARATUS PHOTOS／設備照片區域。"),
-        new("/manual/images/equipment-edit-after-save.png", "設備建立完成後的 Edit 畫面", "既有 Equipment 編輯", "既有 Equipment 建立完成後進入 Edit 頁；目前畫面可查看設備設定、Test Environment 區塊、Reservation Resource 與照片／檔案相關入口。"),
-        new("/manual/images/goods-list.png", "Goods 資產清單", "Goods 清單", "Goods 清單頁顯示目前 UI 提供的清單、搜尋／篩選與新增或查看入口；沒有既有資料時顯示 Empty State。")
+        new("/api/manual/assets/internal/equipment-list.png", "設備管理清單", "設備管理清單", "從側邊欄「設備管理」查看搜尋／篩選欄位、名稱、類別、狀態、保管人、測試環境與新增入口。"),
+        new("/api/manual/assets/internal/equipment-create-basic.png", "新增設備基本資料畫面", "新增設備－基本資料", "新增設備時，先填寫設備名稱、類別、料號、廠商、廠牌、型號與序號等基本資料。"),
+        new("/api/manual/assets/internal/equipment-create-ownership.png", "新增設備的部門、設備所屬 Team 與保管人欄位", "部門 → 設備所屬 Team → 保管人", "依序選擇「部門」、「設備所屬 Team」與「保管人」；後續選項會依前一層選擇更新。"),
+        new("/api/manual/assets/internal/equipment-create-extra-fields.png", "設備 Feature Specification 備註欄位", "補充設備資訊", "可依需要補充 Feature、Specification 與備註，方便後續查詢與設備管理。"),
+        new("/api/manual/assets/internal/equipment-create-before-save.png", "設備建立前的預約資源能力畫面", "建立設備前", "設備尚未正式建立前，後續設定尚不可用；請先完成基本資料並按「確定」建立設備。"),
+        new("/api/manual/assets/internal/equipment-detail.png", "Equipment Detail", "Equipment 詳情／狀態／照片", "Equipment Detail 顯示目前設備基本資料、設備狀態與 APPARATUS PHOTOS／設備照片區域。"),
+        new("/api/manual/assets/internal/equipment-edit-after-save.png", "設備建立完成後的 Edit 畫面", "既有 Equipment 編輯", "既有 Equipment 建立完成後進入 Edit 頁；目前畫面可查看設備設定、Test Environment 區塊、Reservation Resource 與照片／檔案相關入口。"),
+        new("/api/manual/assets/internal/goods-list.png", "Goods 資產清單", "Goods 清單", "Goods 清單頁顯示目前 UI 提供的清單、搜尋／篩選與新增或查看入口；沒有既有資料時顯示 Empty State。")
     ];
 
     private sealed record ManualSection(
@@ -675,6 +802,7 @@
     {
         public IReadOnlyList<ManualFigure> Figures => Id switch
         {
+            "sign-in" => SignInFigures,
             "reservation-application" => ReservationFigures,
             "project-case-task" => ProjectCaseTaskFigures,
             "test-report-versions" => ReportReviewFigures,

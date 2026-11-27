@@ -17,6 +17,7 @@
     <Content Remove=".manual-auth\**" />
     <None Remove=".manual-auth\**" />
     <Content Update="appsettings.Development.json" CopyToPublishDirectory="Never" />
+    <Content Include="ManualAssets\**\*.png" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.Cookies" Version="2.3.9" />
     <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.7" />
     <PackageReference Include="OpenIddict.AspNetCore" Version="7.7.0" />

@@ -1,0 +1,71 @@
+@page "/rd/help/manual"
+@layout RdLayout
+@rendermode InteractiveServer
+@attribute [Authorize(Policy = SystemAuthorization.Policies.RdApplicant)]
+@using Microsoft.AspNetCore.Authorization
+
+<PageTitle>RD 操作手冊｜CSIT</PageTitle>
+
+<div class="rd-manual">
+    <header class="rd-manual-hero">
+        <p>SYSTEM HELP / RD</p>
+        <h1>CSIT 外部 RD 操作手冊</h1>
+        <span>只說明目前外部 RD 可使用的申請與預約功能。操作以本人帳號與實際顯示的權限為準。</span>
+    </header>
+    <nav class="rd-manual-toc" aria-label="章節目錄">
+        <a href="#rd-login">登入與登出</a><a href="#rd-home">RD 服務入口</a>
+        <a href="#rd-list">我的驗證申請</a><a href="#rd-form">填寫與附件</a>
+        <a href="#rd-review">審核進度</a><a href="#rd-reservation">設備預約</a><a href="#rd-faq">常見問題</a>
+    </nav>
+
+    <article id="rd-login" class="rd-manual-section">
+        <h2>1. 登入與登出</h2>
+        <p><strong>入口與權限：</strong>由 CSIT 登入頁選「登入」，交由 Shared Identity 驗證。登入成功後，外部 RD 進入「RD 服務」；不會取得內部主管審核、文件專區或 KM 管理權限。</p>
+        <ol><li>使用本人帳號完成 Shared Identity 驗證。</li><li>從 RD 左側選單進入系統驗證申請單或設備預約。</li><li>工作結束時點右上角「登出」。</li></ol>
+        <figure class="rd-manual-figure"><img src="/api/manual/assets/shared/signed-out.png" alt="CSIT DEV 已登出頁面" loading="lazy"/><figcaption>DEV 實際畫面：登出後停留在 CSIT 頁面；按「重新登入」才再次進入身分驗證流程。</figcaption></figure>
+        <p>CSIT 會撤銷這個 CSIT Session。重新登入是否再次要求輸入密碼，仍受 Shared Identity 與上游登入狀態影響；已登入其他系統不等於其本地 Session 全部撤銷。</p>
+    </article>
+    <article id="rd-home" class="rd-manual-section">
+        <h2>2. RD 服務入口</h2>
+        <p><strong>路徑：</strong>左側「RD 服務 → 首頁」。首頁提供「系統驗證申請單」與「設備預約」兩個入口。看不到其他選單是權限範圍的正常結果；直接輸入內部網址仍會被授權檢查拒絕。</p>
+        <p><strong>操作：</strong>選「查看我的申請」進入驗證申請清單；選「進入設備預約」查看本人預約與設備可用性。若頁面顯示沒有權限，先確認目前登入帳號的 CSIT 存取角色。</p>
+    </article>
+    <article id="rd-list" class="rd-manual-section">
+        <h2>3. 我的驗證申請</h2>
+        <p><strong>路徑：</strong>左側「系統驗證申請單」。清單列出申請編號、Team、Model Name、狀態、送出與更新時間；點列查看詳細資料，點「新增驗證申請」進入表單。</p>
+        <p><strong>可見範圍：</strong>申請人清單依登入帳號過濾，不能查看他人的申請。清單狀態包括草稿、待審核、已退回、已拒絕、已接受。</p>
+        <table><caption>驗證申請狀態</caption><thead><tr><th>狀態</th><th>意義與可做的事</th></tr></thead><tbody>
+            <tr><td>草稿 Draft</td><td>尚未送審；可修改表單與附件，完成必填欄位後送出。</td></tr>
+            <tr><td>待審核 Submitted</td><td>已送主管審核；在明細查看等待狀態，不能當作已接受案件。</td></tr>
+            <tr><td>已退回 Returned</td><td>明細顯示退回原因；可修改並重新送出。</td></tr>
+            <tr><td>已拒絕 Rejected</td><td>明細顯示拒絕原因；目前沒有從此狀態直接重新送出的操作。</td></tr>
+            <tr><td>已接受 Accepted</td><td>主管接受並建立 CSIT 驗證案件；申請人可查看結果，後續 Case／Task 由授權內部人員處理。</td></tr>
+        </tbody></table>
+    </article>
+    <article id="rd-form" class="rd-manual-section">
+        <h2>4. 建立、修改與附件</h2>
+        <p><strong>路徑：</strong>從「我的驗證申請 → 新增驗證申請」進入動態驗證需求表單。實際欄位依目前發布的產品類型與範本顯示；必填、選項及測試項目以頁面提示為準。</p>
+        <ol><li>選擇產品類型，填入專案、部門、Team、產品與要求完成日期等必填資料。</li><li>依表單填寫驗證需求與測試項目；如有申請附件，從附件區選檔上傳。</li><li>先儲存草稿；在明細確認資料及附件後點「送出申請」。</li><li>若送出時跳回欄位，依系統標示補正再提交。</li></ol>
+        <p>草稿與已退回可修改。待審核與已接受不提供外部 RD 隨意修改。申請附件屬申請資料，與內部 Task 的測試報告及其正式入庫版本不同；上傳成功不代表測試報告已核准或 KM 已分析完成。</p>
+    </article>
+    <article id="rd-review" class="rd-manual-section">
+        <h2>5. 審核進度與退回處理</h2>
+        <p>從「系統驗證申請單」點申請編號查看狀態。待審核時會顯示等待 Team Leader 審核；已退回或已拒絕時顯示主管填寫的原因。</p>
+        <ol><li>遇到「已退回」先閱讀原因。</li><li>點「修改」回到申請表單，更正資料或附件並儲存。</li><li>回明細點「送出申請」重新排入主管審核。</li></ol>
+        <p>已接受的申請會建立內部案件，預計結束日期是規劃日期，不是案件已 Close 的證明。外部 RD 不在此頁執行主管審核或案件 Close。</p>
+    </article>
+    <article id="rd-reservation" class="rd-manual-section">
+        <h2>6. 設備預約</h2>
+        <p><strong>路徑：</strong>左側「設備預約」。可查看「我的預約」、新增預約及設備預約總覽；本人資料依登入帳號過濾。</p>
+        <ol><li>選可借用設備或既有測試環境，填開始與結束時間、用途及聯絡資訊。</li><li>檢查畫面中的設備可用性與時段衝突，儲存草稿後送審。</li><li>從我的預約查看待審核、已核准、借用中、已歸還等狀態。</li><li>已核准或借用中的本人預約可提出續借；續借要經審核才會改變結束時間。</li></ol>
+        <p>每次借用期間上限由 DEV 目前設定為 7 個連續曆日，按開始到結束的實際時間差計算，包含週末與假日。每次續借最多延長 7 個連續曆日；同筆預約有待審續借時不能重複申請。時間區間採「前一筆結束等於下一筆開始不衝突」；重疊時不能送出。待審或已核准可取消；借用中不能直接取消，需依歸還流程處理。</p>
+        <p>預約是否能提前多少天，程式沒有固定提前預約天數上限；仍須選未來時段並通過設備可用性及部門配額檢查。逾期表示已核准或借用中的結束時間已過，須由負責人處理歸還。</p>
+    </article>
+    <article id="rd-faq" class="rd-manual-section">
+        <h2>7. 常見問題</h2>
+        <dl><dt>為什麼看不到主管審核與 KM 管理？</dt><dd>外部 RD 帳號沒有內部管理權限，手冊也不提供其內容或截圖。</dd>
+        <dt>附件上傳成功，是否代表 KM 分析完成？</dt><dd>否。申請附件、正式歸檔與 KM 分析是不同階段；請以各頁面實際狀態判斷。</dd>
+        <dt>已退回與已拒絕有何差別？</dt><dd>已退回可修改並重新送出；已拒絕沒有同筆直接重新送出的流程。</dd>
+        <dt>登出後為何可能仍可快速登入？</dt><dd>CSIT Session 已撤銷；Shared Identity 或上游仍可能保有驗證狀態。</dd></dl>
+    </article>
+</div>
