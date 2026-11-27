@@ -29,6 +29,7 @@
         <h2>2. RD 服務入口</h2>
         <p><strong>路徑：</strong>左側「RD 服務 → 首頁」。首頁提供「系統驗證申請單」與「設備預約」兩個入口。看不到其他選單是權限範圍的正常結果；直接輸入內部網址仍會被授權檢查拒絕。</p>
         <p><strong>操作：</strong>選「查看我的申請」進入驗證申請清單；選「進入設備預約」查看本人預約與設備可用性。若頁面顯示沒有權限，先確認目前登入帳號的 CSIT 存取角色。</p>
+        <figure class="rd-manual-figure"><a href="/api/manual/assets/rd/home.png" target="_blank" rel="noopener"><img src="/api/manual/assets/rd/home.png" alt="DEV RD 服務入口與左側選單" loading="lazy"/></a><figcaption>DEV 實際畫面：RD 首頁只提供本人可用的申請與預約入口；點圖可查看原尺寸。</figcaption></figure>
     </article>
     <article id="rd-list" class="rd-manual-section">
         <h2>3. 我的驗證申請</h2>
@@ -41,18 +42,21 @@
             <tr><td>已拒絕 Rejected</td><td>明細顯示拒絕原因；目前沒有從此狀態直接重新送出的操作。</td></tr>
             <tr><td>已接受 Accepted</td><td>主管接受並建立 CSIT 驗證案件；申請人可查看結果，後續 Case／Task 由授權內部人員處理。</td></tr>
         </tbody></table>
+        <figure class="rd-manual-figure"><a href="/api/manual/assets/rd/applications.png" target="_blank" rel="noopener"><img src="/api/manual/assets/rd/applications.png" alt="DEV RD 我的驗證申請清單" loading="lazy"/></a><figcaption>DEV Demo 申請清單顯示申請編號、Team、型號、狀態與送出時間；點圖可查看原尺寸。</figcaption></figure>
     </article>
     <article id="rd-form" class="rd-manual-section">
         <h2>4. 建立、修改與附件</h2>
         <p><strong>路徑：</strong>從「我的驗證申請 → 新增驗證申請」進入動態驗證需求表單。實際欄位依目前發布的產品類型與範本顯示；必填、選項及測試項目以頁面提示為準。</p>
         <ol><li>選擇產品類型，填入專案、部門、Team、產品與要求完成日期等必填資料。</li><li>依表單填寫驗證需求與測試項目；如有申請附件，從附件區選檔上傳。</li><li>先儲存草稿；在明細確認資料及附件後點「送出申請」。</li><li>若送出時跳回欄位，依系統標示補正再提交。</li></ol>
         <p>草稿與已退回可修改。待審核與已接受不提供外部 RD 隨意修改。申請附件屬申請資料，與內部 Task 的測試報告及其正式入庫版本不同；上傳成功不代表測試報告已核准或 KM 已分析完成。</p>
+        <figure class="rd-manual-figure"><a href="/api/manual/assets/rd/application-new.png" target="_blank" rel="noopener"><img src="/api/manual/assets/rd/application-new.png" alt="DEV RD 新增驗證申請表單" loading="lazy"/></a><figcaption>DEV 實際表單：帶星號欄位為必填，依實際產品類型選項填寫；點圖可查看原尺寸。</figcaption></figure>
     </article>
     <article id="rd-review" class="rd-manual-section">
         <h2>5. 審核進度與退回處理</h2>
         <p>從「系統驗證申請單」點申請編號查看狀態。待審核時會顯示等待 Team Leader 審核；已退回或已拒絕時顯示主管填寫的原因。</p>
         <ol><li>遇到「已退回」先閱讀原因。</li><li>點「修改」回到申請表單，更正資料或附件並儲存。</li><li>回明細點「送出申請」重新排入主管審核。</li></ol>
         <p>已接受的申請會建立內部案件，預計結束日期是規劃日期，不是案件已 Close 的證明。外部 RD 不在此頁執行主管審核或案件 Close。</p>
+        <figure class="rd-manual-figure"><a href="/api/manual/assets/rd/applications.png" target="_blank" rel="noopener"><img src="/api/manual/assets/rd/applications.png" alt="DEV RD 申請審核進度與狀態" loading="lazy"/></a><figcaption>從「我的驗證申請」查看已接受與待審核狀態；退回時進入該筆明細閱讀原因。</figcaption></figure>
     </article>
     <article id="rd-reservation" class="rd-manual-section">
         <h2>6. 設備預約</h2>
@@ -60,6 +64,8 @@
         <ol><li>選可借用設備或既有測試環境，填開始與結束時間、用途及聯絡資訊。</li><li>檢查畫面中的設備可用性與時段衝突，儲存草稿後送審。</li><li>從我的預約查看待審核、已核准、借用中、已歸還等狀態。</li><li>已核准或借用中的本人預約可提出續借；續借要經審核才會改變結束時間。</li></ol>
         <p>每次借用期間上限由 DEV 目前設定為 7 個連續曆日，按開始到結束的實際時間差計算，包含週末與假日。每次續借最多延長 7 個連續曆日；同筆預約有待審續借時不能重複申請。時間區間採「前一筆結束等於下一筆開始不衝突」；重疊時不能送出。待審或已核准可取消；借用中不能直接取消，需依歸還流程處理。</p>
         <p>預約是否能提前多少天，程式沒有固定提前預約天數上限；仍須選未來時段並通過設備可用性及部門配額檢查。逾期表示已核准或借用中的結束時間已過，須由負責人處理歸還。</p>
+        <figure class="rd-manual-figure"><a href="/api/manual/assets/rd/reservations.png" target="_blank" rel="noopener"><img src="/api/manual/assets/rd/reservations.png" alt="DEV RD 我的設備預約清單" loading="lazy"/></a><figcaption>DEV Demo 預約清單顯示時段、設備、用途及審核狀態；點圖可查看原尺寸。</figcaption></figure>
+        <figure class="rd-manual-figure"><a href="/api/manual/assets/rd/reservation-new.png" target="_blank" rel="noopener"><img src="/api/manual/assets/rd/reservation-new.png" alt="DEV RD 新增設備預約畫面" loading="lazy"/></a><figcaption>新預約先選單一設備或既有測試環境，再填借用時段與用途。</figcaption></figure>
     </article>
     <article id="rd-faq" class="rd-manual-section">
         <h2>7. 常見問題</h2>

@@ -16,7 +16,7 @@
 .rd-manual-section th{color:#9bd8f5}
 .rd-manual-section dt{margin-top:13px;color:#9bd8f5;font-weight:700}
 .rd-manual-section dd{margin-left:0}
-.rd-manual-figure{max-width:760px;margin:18px 0;padding:12px;border:1px solid #34506c;border-radius:12px;background:#0a1728}
+.rd-manual-figure{width:100%;margin:18px 0;padding:12px;border:1px solid #34506c;border-radius:12px;background:#0a1728}
 .rd-manual-figure img{width:100%;display:block;border-radius:7px}
 .rd-manual-figure figcaption{color:#b7c9dd;font-size:.9rem;margin-top:9px}
 @media(max-width:650px){.rd-manual{padding:12px 10px 40px}.rd-manual-hero,.rd-manual-section{padding:20px}.rd-manual-section table{font-size:.85rem}}

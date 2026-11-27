@@ -19,8 +19,10 @@ public sealed class ManualAssetAccessTests
     {
         var root = Path.Combine(Path.GetTempPath(), "csit-manual-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(Path.Combine(root, "ManualAssets", "internal"));
+        Directory.CreateDirectory(Path.Combine(root, "ManualAssets", "rd"));
         Directory.CreateDirectory(Path.Combine(root, "ManualAssets", "shared"));
         await File.WriteAllBytesAsync(Path.Combine(root, "ManualAssets", "internal", "staff.png"), [137, 80, 78, 71]);
+        await File.WriteAllBytesAsync(Path.Combine(root, "ManualAssets", "rd", "home.png"), [137, 80, 78, 71]);
         await File.WriteAllBytesAsync(Path.Combine(root, "ManualAssets", "shared", "signed-out.png"), [137, 80, 78, 71]);
 
         try
@@ -59,6 +61,14 @@ public sealed class ManualAssetAccessTests
             Assert.Equal(HttpStatusCode.OK, sharedResponse.StatusCode);
             Assert.True(sharedResponse.Headers.CacheControl?.Private);
             Assert.True(sharedResponse.Headers.CacheControl?.NoStore);
+
+            using var rdImageRequest = new HttpRequestMessage(HttpMethod.Get, "/api/manual/assets/rd/home.png");
+            rdImageRequest.Headers.Add("X-Test-Access-Scope", SystemAuthorization.AccessScopes.RdApplicant);
+            using var rdImageResponse = await client.SendAsync(rdImageRequest);
+            Assert.Equal(HttpStatusCode.OK, rdImageResponse.StatusCode);
+
+            using var anonymousRdResponse = await client.GetAsync("/api/manual/assets/rd/home.png");
+            Assert.Equal(HttpStatusCode.Unauthorized, anonymousRdResponse.StatusCode);
 
             using var staffRequest = new HttpRequestMessage(HttpMethod.Get, "/api/manual/assets/internal/staff.png");
             staffRequest.Headers.Add("X-Test-Access-Scope", SystemAuthorization.AccessScopes.CsitStaff);

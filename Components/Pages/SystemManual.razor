@@ -759,7 +759,7 @@
         new("/api/manual/assets/internal/reservation-overview.png", "CSIT 設備預約總覽", "設備預約總覽", "設備預約總覽提供目前 UI 的查詢條件，依日期、設備、部門、狀態與借用人查詢 Reservation。"),
         new("/api/manual/assets/internal/reservation-new-direct.png", "CSIT Direct Reservation 新增預約", "Direct Reservation", "自行選擇設備的預約方式；畫面依目前系統顯示可選設備、借用時間、用途與可用性／衝突提示。"),
         new("/api/manual/assets/internal/reservation-new-environment.png", "CSIT Environment Reservation 新增預約", "Environment Reservation", "依負責 Team 選擇既有測試環境群組；畫面顯示環境設備組成、完整性與目前可預約狀態。"),
-        new("/api/manual/assets/internal/reservation-review-queue.png", "CSIT 設備預約審核清單", "設備預約審核", "從設備預約管理的「預約審核」查看本人保管設備或所負責 Team 的待審預約；目前沒有資料時顯示 Empty State。"),
+        new("/api/manual/assets/internal/reservation-review-queue.png", "CSIT 設備預約審核清單", "設備預約審核", "從設備預約管理的「預約審核」查看本人保管設備或所負責 Team 的待審預約；DEV 示範資料顯示保管設備的待審清單。"),
         new("/api/manual/assets/internal/reservation-overdue.png", "CSIT 設備預約逾期管理", "逾期管理", "逾期管理頁查看目前責任範圍內尚未完成歸還或後續處理的 Reservation；目前沒有資料時顯示 Empty State。")
     ];
 
@@ -805,7 +805,59 @@
         new("/api/manual/assets/internal/equipment-create-before-save.png", "設備建立前的預約資源能力畫面", "建立設備前", "設備尚未正式建立前，後續設定尚不可用；請先完成基本資料並按「確定」建立設備。"),
         new("/api/manual/assets/internal/equipment-detail.png", "Equipment Detail", "Equipment 詳情／狀態／照片", "Equipment Detail 顯示目前設備基本資料、設備狀態與 APPARATUS PHOTOS／設備照片區域。"),
         new("/api/manual/assets/internal/equipment-edit-after-save.png", "設備建立完成後的 Edit 畫面", "既有 Equipment 編輯", "既有 Equipment 建立完成後進入 Edit 頁；目前畫面可查看設備設定、Test Environment 區塊、Reservation Resource 與照片／檔案相關入口。"),
-        new("/api/manual/assets/internal/goods-list.png", "Goods 資產清單", "Goods 清單", "Goods 清單頁顯示目前 UI 提供的清單、搜尋／篩選與新增或查看入口；沒有既有資料時顯示 Empty State。")
+        new("/api/manual/assets/internal/goods-list.png", "Goods 資產清單", "Goods 清單", "Goods 清單頁顯示目前 UI 提供的清單、搜尋／篩選與新增或查看入口；沒有既有資料時顯示 Empty State。"),
+        new("/api/manual/assets/internal/equipment-aggregate.png", "設備 6666 的 DEV 綜合分析", "設備綜合分析", "有效文件完成綜合分析後，顯示技術規格、測試能力與待釐清項目的實際筆數及內容。"),
+        new("/api/manual/assets/internal/equipment-attachments.png", "設備文件正式入庫與 KM 狀態", "設備附件狀態", "同一份附件的「正式入庫完成」與「KM 完成」是不同狀態；畫面顯示 DEV 現有兩份文件。"),
+        new("/api/manual/assets/internal/equipment-evidence.png", "設備綜合分析來源證據視窗", "查看來源證據", "點擊來源證據可在原設備頁查看引用、檔案與來源位置；關閉後回到設備分析。")
+    ];
+
+    private static readonly IReadOnlyList<ManualFigure> ValidationApplicationFigures =
+    [
+        new("/api/manual/assets/internal/validation-request-form.png", "驗證測試申請單表單", "申請表單", "依產品類型填寫產品資訊與測試項目，先存草稿，資料完整後送審。"),
+        new("/api/manual/assets/internal/validation-application-form.png", "新增驗證申請", "新增驗證申請", "填寫部門、Team、專案、產品與要求日期等必填欄位。"),
+        new("/api/manual/assets/internal/validation-application-list.png", "驗證申請專區清單", "審核通過的申請", "DEV Demo 清單顯示已接受申請所建立的案件及目前狀態。"),
+        new("/api/manual/assets/internal/case-detail.png", "驗證案件資訊與結案狀態", "案件結案", "案件頁顯示整體狀態與測試項目；測試項目全數 Close 後，授權人員才能結案。")
+    ];
+
+    private static readonly IReadOnlyList<ManualFigure> SupervisorCenterFigures =
+    [
+        new("/api/manual/assets/internal/supervisor-review-center.png", "驗證測試報告審核頁籤", "測試報告審核", "此頁籤處理內部測試報告附件，筆數與整張驗證申請單不同。"),
+        new("/api/manual/assets/internal/supervisor-application-review.png", "驗證申請單審核頁籤", "驗證申請單審核", "此頁籤顯示需由主管審核的整張申請單及 Demo 待審項目。"),
+        new("/api/manual/assets/internal/reservation-review-queue.png", "設備預約審核清單", "設備預約審核", "設備預約由保管人及負責 Team 的權限範圍決定可見項目。")
+    ];
+
+    private static readonly IReadOnlyList<ManualFigure> KmStatusFigures =
+    [
+        new("/api/manual/assets/internal/equipment-attachments.png", "正式入庫與 KM 工作狀態", "兩種完成狀態", "正式歸檔與 KM 分析分開顯示；KM 尚未完成時不代表原始檔案遺失。"),
+        new("/api/manual/assets/internal/km-queue.png", "KM 處理佇列", "KM 處理佇列", "依最新工作查看等待、處理、失敗與完成；歷史工作仍保留。"),
+        new("/api/manual/assets/internal/km-metadata.png", "KM 分析檢視", "KM 分析檢視", "管理者依來源、檔名或 Job 查詢已儲存的單檔分析結果。"),
+        new("/api/manual/assets/internal/equipment-aggregate.png", "設備綜合分析", "設備綜合分析", "由目前有效文件整合技術規格、測試能力與待釐清項目。")
+    ];
+
+    private static readonly IReadOnlyList<ManualFigure> DocumentLibraryFigures =
+    [
+        new("/api/manual/assets/internal/document-library.png", "文件專區的三層資料夾", "查找文件", "從左側選擇第三層資料夾，再查詢、預覽或下載有權查看的文件。"),
+        new("/api/manual/assets/internal/document-folders.png", "文件資料夾管理", "管理資料夾", "管理者依 L1、L2、L3 三層結構維護資料夾；文件只放在 L3。")
+    ];
+
+    private static readonly IReadOnlyList<ManualFigure> VendorFigures =
+    [
+        new("/api/manual/assets/internal/vendor-list.png", "廠商資訊管理清單", "查詢廠商", "搜尋既有廠商、查看狀態與設備數量；新增及編輯依授權顯示。"),
+        new("/api/manual/assets/internal/vendor-create.png", "新增廠商表單", "新增廠商", "填寫廠商名稱、類型及聯絡資料，依頁面必填提示完成建立。")
+    ];
+
+    private static readonly IReadOnlyList<ManualFigure> AdministrationFigures =
+    [
+        new("/api/manual/assets/internal/validation-settings.png", "驗證申請單設定", "驗證申請單設定", "管理產品類型、表單欄位、測試項目與版本。"),
+        new("/api/manual/assets/internal/system-options-lookup.png", "參數設定", "參數設定", "依類別維護有效基礎資料與選項。"),
+        new("/api/manual/assets/internal/document-folders.png", "文件資料夾管理", "文件資料夾管理", "管理文件專區的三層目錄。"),
+        new("/api/manual/assets/internal/account-create.png", "帳號管理的內部帳號表單", "帳號與權限", "管理者依現有身分與授權流程設定 CSIT Role、Team 與資料操作權限。")
+    ];
+
+    private static readonly IReadOnlyList<ManualFigure> AttachmentFigures =
+    [
+        new("/api/manual/assets/internal/equipment-attachments.png", "設備附件歸檔與分析狀態", "附件歸檔與 KM", "正式入庫與 KM 分析獨立顯示；刪除及重傳仍保留歷史紀錄。"),
+        new("/api/manual/assets/internal/document-library.png", "文件專區", "正式文件查詢", "核准且完成正式入庫的文件，才進入正式文件查詢範圍。")
     ];
 
     private sealed record ManualSection(
@@ -828,6 +880,13 @@
             "test-environment" => TestEnvironmentFigures,
             "roles-permissions" => AccountManagementFigures,
             "asset-management" => EquipmentFigures,
+            "validation-application" => ValidationApplicationFigures,
+            "supervisor-center" => SupervisorCenterFigures,
+            "km-status" => KmStatusFigures,
+            "document-library" => DocumentLibraryFigures,
+            "vendors" => VendorFigures,
+            "administration" => AdministrationFigures,
+            "attachment-lifecycle" => AttachmentFigures,
             _ => []
         };
     }
